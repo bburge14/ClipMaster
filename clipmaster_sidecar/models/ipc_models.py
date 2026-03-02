@@ -20,6 +20,7 @@ class MessageType(str, Enum):
     analyze_script = "analyzeScript"
     query_stock_footage = "queryStockFootage"
     scout_trending = "scoutTrending"
+    generate_facts = "generateFacts"
     ffmpeg_render = "ffmpegRender"
 
     # Responses (Python -> Flutter)

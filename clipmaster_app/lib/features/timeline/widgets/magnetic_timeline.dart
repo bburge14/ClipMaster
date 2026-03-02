@@ -197,7 +197,7 @@ class _MagneticTimelineState extends State<MagneticTimeline> {
       child: Container(
         decoration: BoxDecoration(
           border: const Border(bottom: BorderSide(color: Colors.white10)),
-          color: color.withValues(alpha: 0.1),
+          color: color.withOpacity(0.1),
         ),
         child: const SizedBox.expand(),
       ),

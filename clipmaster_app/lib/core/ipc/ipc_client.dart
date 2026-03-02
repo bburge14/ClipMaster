@@ -39,13 +39,18 @@ class IpcClient {
 
   /// Start the Python sidecar and connect via WebSocket.
   Future<void> start({String? pythonPath, int port = defaultPort}) async {
-    final python = pythonPath ?? 'python';
+    final python = pythonPath ?? _resolveVenvPython() ?? 'python';
+    final workDir = _resolveSidecarDir().replaceAll(
+      Platform.isWindows ? '\\clipmaster_sidecar' : '/clipmaster_sidecar',
+      '',
+    );
     _log.i('Starting sidecar: $python -m clipmaster_sidecar --port $port');
+    _log.i('Working directory: $workDir');
 
     _sidecarProcess = await Process.start(
       python,
       ['-m', 'clipmaster_sidecar', '--port', '$port'],
-      workingDirectory: _resolveSidecarDir().replaceAll('/clipmaster_sidecar', ''),
+      workingDirectory: workDir,
     );
 
     // Pipe sidecar stdout/stderr to dev console logger.
@@ -57,7 +62,7 @@ class IpcClient {
         );
 
     // Give the server a moment to bind.
-    await Future.delayed(const Duration(seconds: 1));
+    await Future.delayed(const Duration(seconds: 2));
     await _connect(port);
   }
 
@@ -133,14 +138,44 @@ class IpcClient {
     return completer.future;
   }
 
-  /// Resolve the path to the python_sidecar directory relative to the app.
+  /// Resolve the path to the clipmaster_sidecar directory relative to the app.
   String _resolveSidecarDir() {
-    // In dev: adjacent directory. In production: bundled alongside the exe.
-    final exe = Platform.resolvedExecutable;
-    final appDir = File(exe).parent.path;
-    final devPath = '${Directory.current.path}/clipmaster_sidecar';
+    final sep = Platform.pathSeparator;
+    // In dev: adjacent directory.
+    final devPath = '${Directory.current.path}${sep}clipmaster_sidecar';
     if (Directory(devPath).existsSync()) return devPath;
-    return '$appDir/clipmaster_sidecar';
+
+    // In production: bundled alongside the executable.
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    return '$exeDir${sep}clipmaster_sidecar';
+  }
+
+  /// Find the Python executable inside the project's .venv.
+  /// Returns null if no venv exists (falls back to system PATH).
+  String? _resolveVenvPython() {
+    final sep = Platform.pathSeparator;
+
+    // Check relative to the project root (dev mode).
+    final devVenv = Platform.isWindows
+        ? '${Directory.current.path}${sep}.venv${sep}Scripts${sep}python.exe'
+        : '${Directory.current.path}${sep}.venv${sep}bin${sep}python';
+    if (File(devVenv).existsSync()) {
+      _log.i('Using venv Python: $devVenv');
+      return devVenv;
+    }
+
+    // Check relative to the executable (production).
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final prodVenv = Platform.isWindows
+        ? '$exeDir${sep}.venv${sep}Scripts${sep}python.exe'
+        : '$exeDir${sep}.venv${sep}bin${sep}python';
+    if (File(prodVenv).existsSync()) {
+      _log.i('Using venv Python: $prodVenv');
+      return prodVenv;
+    }
+
+    _log.w('No .venv found. Falling back to system Python.');
+    return null;
   }
 
   Future<void> dispose() async {

@@ -1,7 +1,8 @@
-# Bundled binaries (users must supply their own)
+# Bundled binaries (downloaded by setup)
 bundled_binaries/*.exe
 bundled_binaries/ffmpeg
 bundled_binaries/yt-dlp
+bundled_binaries/*.zip
 
 # Flutter
 clipmaster_app/.dart_tool/

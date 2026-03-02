@@ -127,10 +127,13 @@ jobs:
           $file = "installer\clipmaster.iss"
           (Get-Content $file) -replace '#define AppVersion ".*?"', '#define AppVersion "${{ steps.version.outputs.version }}"' | Set-Content $file
 
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
       - name: Build Inno Setup installer
-        uses: Minionguyjpro/Inno-Setup-Action@v1.2.4
-        with:
-          path: installer/clipmaster.iss
+        shell: cmd
+        run: iscc installer\clipmaster.iss
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

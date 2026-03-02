@@ -1,0 +1,27 @@
+[project]
+name = "clipmaster-sidecar"
+version = "1.0.0"
+description = "ClipMaster Pro Python Sidecar - AI & Video Processing Backend"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.25.0",
+    "websockets>=12.0",
+    "pydantic>=2.5.0",
+    "faster-whisper>=1.0.0",
+    "httpx>=0.26.0",
+    "yt-dlp>=2024.1.0",
+    "pillow>=10.2.0",
+    "numpy>=1.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.1.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

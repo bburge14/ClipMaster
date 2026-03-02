@@ -6,6 +6,7 @@ Handles all IPC communication with the Flutter frontend.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -39,6 +40,20 @@ def create_app() -> FastAPI:
                     msg = IpcMessage.model_validate_json(raw)
                 except Exception as exc:
                     logger.error("Invalid IPC message: %s", exc)
+                    # Still send an error response so Flutter doesn't hang.
+                    try:
+                        raw_data = json.loads(raw)
+                        msg_id = raw_data.get("id", "")
+                        if msg_id:
+                            err = IpcMessage.error(
+                                msg_id,
+                                f"Sidecar could not parse message: {exc}. "
+                                "You may need to rebuild the app so the sidecar "
+                                "and Flutter app versions match.",
+                            )
+                            await ws.send_text(err.to_json_str())
+                    except Exception:
+                        pass
                     continue
                 logger.info("Received [%s] id=%s", msg.type.value, msg.id)
 

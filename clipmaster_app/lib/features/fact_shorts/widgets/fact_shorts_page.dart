@@ -70,6 +70,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             'api_key': apiKey,
           },
         ),
+        // LLM calls can take 15-30s depending on provider.
+        timeout: const Duration(seconds: 90),
         onProgress: (progress) {
           if (mounted) {
             setState(() {

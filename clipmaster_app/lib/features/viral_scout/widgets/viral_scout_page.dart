@@ -47,6 +47,8 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
           type: MessageType.scoutTrending,
           payload: {'platform': _platform, 'limit': 20},
         ),
+        // yt-dlp can take a while to scrape trending videos.
+        timeout: const Duration(seconds: 120),
         onProgress: (progress) {
           setState(() {
             _progressStage =

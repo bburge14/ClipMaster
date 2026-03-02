@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -11,24 +12,28 @@ final _log = Logger(printer: PrettyPrinter(methodCount: 0));
 /// Metadata about an available update.
 class UpdateInfo {
   final String version;
-  final String downloadUrl;
+  final String? downloadUrl; // null if no installer asset found
   final String releaseNotes;
+  final String htmlUrl; // link to the release page on GitHub
   final int sizeBytes;
   final DateTime publishedAt;
 
   UpdateInfo({
     required this.version,
-    required this.downloadUrl,
+    this.downloadUrl,
     required this.releaseNotes,
-    required this.sizeBytes,
+    required this.htmlUrl,
+    this.sizeBytes = 0,
     required this.publishedAt,
   });
 
-  /// Compare version strings like "1.0.42" where the last number is the
-  /// auto-incrementing build number from GitHub Actions.
+  bool get hasInstaller => downloadUrl != null;
+
+  /// Compare version strings like "1.0.42".
+  /// Handles non-numeric suffixes gracefully (e.g. "1.0.0-beta" -> [1, 0, 0]).
   bool isNewerThan(String currentVersion) {
-    final current = currentVersion.split('.').map(int.parse).toList();
-    final remote = version.split('.').map(int.parse).toList();
+    final current = _parseVersion(currentVersion);
+    final remote = _parseVersion(version);
     for (var i = 0; i < 3; i++) {
       final c = i < current.length ? current[i] : 0;
       final r = i < remote.length ? remote[i] : 0;
@@ -36,6 +41,12 @@ class UpdateInfo {
       if (r < c) return false;
     }
     return false;
+  }
+
+  static List<int> _parseVersion(String v) {
+    // Strip everything after a hyphen: "1.0.3-beta" -> "1.0.3"
+    final clean = v.split('-').first;
+    return clean.split('.').map((s) => int.tryParse(s) ?? 0).toList();
   }
 }
 
@@ -94,28 +105,56 @@ class AutoUpdater {
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final tagName = (data['tag_name'] as String?) ?? '';
+      if (tagName.isEmpty) {
+        _log.w('Release has no tag_name');
+        return null;
+      }
+
       // Strip leading 'v': "v1.0.42" -> "1.0.42"
       final version =
           tagName.startsWith('v') ? tagName.substring(1) : tagName;
 
-      // Find the Setup .exe asset.
+      final htmlUrl = (data['html_url'] as String?) ??
+          'https://github.com/$_repoOwner/$_repoName/releases/latest';
+
+      // Try to find an installer asset. Check multiple patterns:
+      //   1. *Setup*.exe (Inno Setup convention)
+      //   2. *.exe (any Windows executable)
+      //   3. *.msi (Windows installer package)
       final assets = (data['assets'] as List<dynamic>?) ?? [];
-      final installerAsset =
-          assets.cast<Map<String, dynamic>>().where((a) {
+      final typedAssets = assets.cast<Map<String, dynamic>>();
+
+      Map<String, dynamic>? installerAsset;
+      // Priority 1: Setup exe
+      installerAsset ??= typedAssets.where((a) {
         final name = (a['name'] as String?) ?? '';
-        return name.endsWith('.exe') && name.contains('Setup');
+        return name.endsWith('.exe') && name.toLowerCase().contains('setup');
+      }).firstOrNull;
+      // Priority 2: Any exe
+      installerAsset ??= typedAssets.where((a) {
+        final name = (a['name'] as String?) ?? '';
+        return name.endsWith('.exe');
+      }).firstOrNull;
+      // Priority 3: Any msi
+      installerAsset ??= typedAssets.where((a) {
+        final name = (a['name'] as String?) ?? '';
+        return name.endsWith('.msi');
       }).firstOrNull;
 
-      if (installerAsset == null) {
-        _log.d('No installer asset found in release $version');
-        return null;
+      if (installerAsset != null) {
+        _log.d('Found installer asset: ${installerAsset['name']}');
+      } else {
+        _log.d('No installer asset in release $version (banner will link to GitHub)');
       }
 
       final info = UpdateInfo(
         version: version,
-        downloadUrl: installerAsset['browser_download_url'] as String,
+        downloadUrl: installerAsset != null
+            ? installerAsset['browser_download_url'] as String
+            : null,
         releaseNotes: (data['body'] as String?) ?? '',
-        sizeBytes: (installerAsset['size'] as int?) ?? 0,
+        htmlUrl: htmlUrl,
+        sizeBytes: (installerAsset?['size'] as int?) ?? 0,
         publishedAt: DateTime.parse(data['published_at'] as String),
       );
 
@@ -133,10 +172,19 @@ class AutoUpdater {
   }
 
   /// Download the installer and run it, then exit.
+  ///
+  /// Throws [StateError] if the release has no installer asset.
   Future<void> downloadAndInstall(
     UpdateInfo update, {
     void Function(int percent)? onProgress,
   }) async {
+    if (update.downloadUrl == null) {
+      throw StateError(
+        'This release has no installer. Visit the GitHub release page to '
+        'download manually: ${update.htmlUrl}',
+      );
+    }
+
     final tempDir = await getTemporaryDirectory();
     final installerPath =
         '${tempDir.path}${Platform.pathSeparator}ClipMasterPro-Setup-v${update.version}.exe';
@@ -144,7 +192,7 @@ class AutoUpdater {
 
     _log.i('Downloading update to $installerPath');
 
-    final request = http.Request('GET', Uri.parse(update.downloadUrl));
+    final request = http.Request('GET', Uri.parse(update.downloadUrl!));
     final response = await http.Client().send(request);
 
     final totalBytes = update.sizeBytes > 0 ? update.sizeBytes : 1;
@@ -176,7 +224,43 @@ class AutoUpdater {
 /// Riverpod providers.
 final autoUpdaterProvider = Provider<AutoUpdater>((ref) => AutoUpdater());
 
-final updateCheckProvider = FutureProvider<UpdateInfo?>((ref) async {
-  final updater = ref.read(autoUpdaterProvider);
-  return updater.checkForUpdate();
-});
+/// Holds the latest update check result. Refreshed periodically and on demand.
+final updateCheckProvider =
+    StateNotifierProvider<UpdateCheckNotifier, AsyncValue<UpdateInfo?>>(
+  (ref) => UpdateCheckNotifier(ref),
+);
+
+/// Periodically checks for updates (every 30 minutes) and exposes the result.
+class UpdateCheckNotifier extends StateNotifier<AsyncValue<UpdateInfo?>> {
+  final Ref _ref;
+  Timer? _timer;
+
+  static const _checkInterval = Duration(minutes: 30);
+
+  UpdateCheckNotifier(this._ref) : super(const AsyncValue.loading()) {
+    // Check immediately on startup.
+    check();
+    // Then check every 30 minutes.
+    _timer = Timer.periodic(_checkInterval, (_) => check());
+  }
+
+  /// Run an update check now. Called automatically on startup + periodically,
+  /// and also callable from the Settings page "Check Now" button.
+  Future<void> check() async {
+    // Don't reset to loading if we already have a result — keeps the banner
+    // visible while re-checking in the background.
+    try {
+      final updater = _ref.read(autoUpdaterProvider);
+      final result = await updater.checkForUpdate();
+      if (mounted) state = AsyncValue.data(result);
+    } catch (e, st) {
+      if (mounted) state = AsyncValue.error(e, st);
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+}

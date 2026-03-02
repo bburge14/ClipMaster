@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -10,6 +12,7 @@ import 'features/dev_console/widgets/dev_console_panel.dart';
 import 'features/fact_shorts/widgets/fact_shorts_page.dart';
 import 'features/timeline/widgets/magnetic_timeline.dart';
 import 'features/api_keys/widgets/api_key_settings.dart';
+import 'features/settings/widgets/settings_page.dart';
 import 'features/viral_scout/widgets/viral_scout_page.dart';
 
 Future<void> main() async {
@@ -152,6 +155,10 @@ class _MainShellState extends ConsumerState<MainShell> {
                       icon: Icon(Icons.key),
                       label: Text('API Keys'),
                     ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.settings),
+                      label: Text('Settings'),
+                    ),
                   ],
                 ),
                 const VerticalDivider(thickness: 1, width: 1),
@@ -179,6 +186,7 @@ class _MainShellState extends ConsumerState<MainShell> {
       1 => const FactShortsPage(),
       2 => const ViralScoutPage(),
       3 => const ApiKeySettings(),
+      4 => const SettingsPage(),
       _ => const SizedBox.shrink(),
     };
   }
@@ -196,6 +204,7 @@ class _UpdateBar extends ConsumerStatefulWidget {
 class _UpdateBarState extends ConsumerState<_UpdateBar> {
   bool _downloading = false;
   int _percent = 0;
+  String? _downloadError;
 
   @override
   Widget build(BuildContext context) {
@@ -209,10 +218,12 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              _downloading
-                  ? 'Downloading update v${widget.update.version}... $_percent%'
-                  : 'Update available: v${widget.update.version} '
-                      '(current: v${AutoUpdater.getInstalledVersion()})',
+              _downloadError != null
+                  ? 'Update failed: $_downloadError'
+                  : _downloading
+                      ? 'Downloading update v${widget.update.version}... $_percent%'
+                      : 'Update available: v${widget.update.version} '
+                          '(current: v${AutoUpdater.getInstalledVersion()})',
               style: const TextStyle(color: Colors.white, fontSize: 13),
             ),
           ),
@@ -225,7 +236,7 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
                 valueColor: const AlwaysStoppedAnimation(Colors.white),
               ),
             )
-          else
+          else if (widget.update.hasInstaller)
             TextButton(
               onPressed: _startUpdate,
               style: TextButton.styleFrom(
@@ -235,6 +246,17 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               ),
               child: const Text('Update Now'),
+            )
+          else
+            TextButton(
+              onPressed: () => _openUrl(widget.update.htmlUrl),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                backgroundColor: Colors.white24,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              ),
+              child: const Text('View on GitHub'),
             ),
         ],
       ),
@@ -242,12 +264,33 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
   }
 
   Future<void> _startUpdate() async {
-    setState(() => _downloading = true);
-    final updater = ref.read(autoUpdaterProvider);
-    await updater.downloadAndInstall(
-      widget.update,
-      onProgress: (p) => setState(() => _percent = p),
-    );
+    setState(() {
+      _downloading = true;
+      _downloadError = null;
+    });
+    try {
+      final updater = ref.read(autoUpdaterProvider);
+      await updater.downloadAndInstall(
+        widget.update,
+        onProgress: (p) => setState(() => _percent = p),
+      );
+    } catch (e) {
+      setState(() {
+        _downloading = false;
+        _downloadError = e.toString();
+      });
+    }
+  }
+
+  void _openUrl(String url) {
+    // Open the release page in the default browser.
+    if (Platform.isWindows) {
+      Process.run('start', [url], runInShell: true);
+    } else if (Platform.isMacOS) {
+      Process.run('open', [url]);
+    } else {
+      Process.run('xdg-open', [url]);
+    }
   }
 }
 

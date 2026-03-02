@@ -46,6 +46,12 @@ jobs:
           flutter create . --platforms=windows --project-name clipmaster_app --org com.clipmaster
           flutter pub get
 
+      - name: Patch Windows window title
+        shell: pwsh
+        run: |
+          $file = "clipmaster_app/windows/runner/main.cpp"
+          (Get-Content $file) -replace 'L"clipmaster_app"', 'L"ClipMaster Pro"' | Set-Content $file
+
       # Stamp the build number into the auto-updater so the running app
       # knows its own version without any hardcoded constant.
       - name: Stamp version into app

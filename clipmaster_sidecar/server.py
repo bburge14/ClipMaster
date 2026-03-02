@@ -31,7 +31,11 @@ def create_app() -> FastAPI:
         try:
             while True:
                 raw = await ws.receive_text()
-                msg = IpcMessage.model_validate_json(raw)
+                try:
+                    msg = IpcMessage.model_validate_json(raw)
+                except Exception as exc:
+                    logger.error("Invalid IPC message: %s", exc)
+                    continue
                 logger.info("Received [%s] id=%s", msg.type.value, msg.id)
 
                 # Dispatch to the correct handler.
@@ -75,6 +79,12 @@ async def _dispatch(
 
             case MessageType.ffmpeg_render:
                 await _handle_ffmpeg_render(ws, msg)
+
+            case MessageType.generate_tts:
+                await _handle_generate_tts(ws, msg)
+
+            case MessageType.query_stock_footage:
+                await _handle_query_stock_footage(ws, msg)
 
             case _:
                 await _send(
@@ -160,5 +170,27 @@ async def _handle_ffmpeg_render(ws: WebSocket, msg: IpcMessage) -> None:
         ws,
         IpcMessage.result(
             msg.id, {"status": "placeholder", "message": "FFmpeg render not yet wired."}
+        ),
+    )
+
+
+async def _handle_generate_tts(ws: WebSocket, msg: IpcMessage) -> None:
+    """Placeholder: text-to-speech generation."""
+    await _send(ws, IpcMessage.progress(msg.id, "Generating TTS", 0))
+    await _send(
+        ws,
+        IpcMessage.result(
+            msg.id, {"status": "placeholder", "message": "TTS generation not yet wired."}
+        ),
+    )
+
+
+async def _handle_query_stock_footage(ws: WebSocket, msg: IpcMessage) -> None:
+    """Placeholder: stock footage search via Pexels/Pixabay."""
+    await _send(ws, IpcMessage.progress(msg.id, "Searching stock footage", 0))
+    await _send(
+        ws,
+        IpcMessage.result(
+            msg.id, {"status": "placeholder", "message": "Stock footage search not yet wired."}
         ),
     )

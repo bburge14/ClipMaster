@@ -1,0 +1,40 @@
+# Bundled binaries (users must supply their own)
+bundled_binaries/*.exe
+bundled_binaries/ffmpeg
+bundled_binaries/yt-dlp
+
+# Flutter
+clipmaster_app/.dart_tool/
+clipmaster_app/build/
+clipmaster_app/.packages
+clipmaster_app/.flutter-plugins
+clipmaster_app/.flutter-plugins-dependencies
+clipmaster_app/.pub-cache/
+clipmaster_app/.pub/
+*.g.dart
+*.freezed.dart
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+venv/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Downloads and generated content
+downloads/
+output/
+proxies/

@@ -42,6 +42,7 @@ enum MessageType {
   analyzeScript,
   queryStockFootage,
   scoutTrending,
+  generateFacts,
   ffmpegRender,
 
   // -- Responses (Python -> Flutter) --

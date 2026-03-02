@@ -9,7 +9,10 @@ Returns a ranked list of "Recommended to Clip" videos for the Flutter UI.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -62,9 +65,8 @@ class ViralScout:
         engagement_density = (likes + comments) / max(views, 1)
         composite = (0.6 * normalized_velocity) + (0.4 * normalized_engagement)
 
-    In production, this integrates with:
-        - YouTube Data API v3 (or yt-dlp scraping as fallback)
-        - Twitch Helix API for live/VOD trending
+    Uses yt-dlp (bundled or on PATH) to scrape YouTube trending.
+    No API key required for YouTube.
     """
 
     # Weights for the composite score.
@@ -87,22 +89,175 @@ class ViralScout:
         """
         logger.info("Fetching trending from %s (limit=%d)", platform, limit)
 
-        # In production, this calls the real API.
-        # For now, return the structure that the Flutter UI expects.
         raw_videos = await self._fetch_raw(platform, limit)
         ranked = self._rank(raw_videos)
         return [v.to_dict() for v in ranked[:limit]]
 
     async def _fetch_raw(self, platform: str, limit: int) -> list[TrendingVideo]:
-        """Fetch raw video data from the platform.
+        """Fetch raw video data using yt-dlp."""
+        if platform == "youtube":
+            return await self._fetch_youtube_trending(limit)
+        elif platform == "twitch":
+            logger.info("Twitch trending requires Helix API key (not yet configured).")
+            return []
+        else:
+            logger.warning("Unknown platform: %s", platform)
+            return []
 
-        Production implementation would use:
-            - YouTube: yt-dlp with --flat-playlist on trending URL, or YouTube Data API
-            - Twitch: Helix API /videos?sort=trending
+    async def _fetch_youtube_trending(self, limit: int) -> list[TrendingVideo]:
+        """Fetch YouTube trending videos via yt-dlp.
+
+        Uses --flat-playlist to quickly grab video metadata from the
+        trending page, then fetches full metadata for each video to get
+        view counts, likes, and comments.
         """
-        # Placeholder: returns empty list until API integration is wired.
-        logger.info("_fetch_raw: platform=%s - awaiting API integration", platform)
-        return []
+        ytdlp = shutil.which("yt-dlp")
+        if not ytdlp:
+            logger.error("yt-dlp not found on PATH or in bundled_binaries/.")
+            return []
+
+        # Step 1: Get video IDs from the trending page.
+        cmd = [
+            ytdlp,
+            "--flat-playlist",
+            "-J",
+            "--playlist-end", str(limit),
+            "https://www.youtube.com/feed/trending",
+        ]
+
+        logger.info("Running: %s", " ".join(cmd))
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            logger.error("yt-dlp timed out fetching trending page")
+            return []
+        except Exception as exc:
+            logger.error("yt-dlp failed to start: %s", exc)
+            return []
+
+        if proc.returncode != 0:
+            logger.error("yt-dlp exited %d: %s", proc.returncode, stderr.decode()[:500])
+            return []
+
+        try:
+            data = json.loads(stdout.decode())
+        except json.JSONDecodeError:
+            logger.error("Failed to parse yt-dlp JSON output")
+            return []
+
+        entries = data.get("entries", [])
+        if not entries:
+            logger.warning("yt-dlp returned no entries from trending page")
+            return []
+
+        # Step 2: Get full metadata for each video (view count, likes, etc.).
+        # Use batch mode for efficiency.
+        video_ids = [e.get("id", "") for e in entries if e.get("id")][:limit]
+        if not video_ids:
+            return []
+
+        urls = [f"https://www.youtube.com/watch?v={vid}" for vid in video_ids]
+
+        batch_cmd = [
+            ytdlp,
+            "--skip-download",
+            "-J",
+            "--no-warnings",
+        ] + urls
+
+        try:
+            proc2 = await asyncio.create_subprocess_exec(
+                *batch_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout2, stderr2 = await asyncio.wait_for(proc2.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            logger.error("yt-dlp timed out fetching video metadata")
+            # Fall back to flat-playlist data only.
+            return self._parse_flat_entries(entries)
+        except Exception as exc:
+            logger.error("yt-dlp metadata fetch failed: %s", exc)
+            return self._parse_flat_entries(entries)
+
+        if proc2.returncode != 0:
+            logger.warning("yt-dlp metadata batch exited %d, using flat data", proc2.returncode)
+            return self._parse_flat_entries(entries)
+
+        # yt-dlp -J with multiple URLs outputs a JSON object with "entries" key.
+        try:
+            batch_data = json.loads(stdout2.decode())
+            video_entries = batch_data.get("entries", [batch_data])
+        except json.JSONDecodeError:
+            # Sometimes yt-dlp outputs one JSON per line for multiple URLs.
+            video_entries = []
+            for line in stdout2.decode().strip().split("\n"):
+                try:
+                    video_entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+        videos = []
+        now = datetime.now(timezone.utc)
+        for entry in video_entries:
+            if not entry.get("id"):
+                continue
+            uploaded = self._parse_upload_date(entry.get("upload_date"), now)
+            videos.append(
+                TrendingVideo(
+                    video_id=entry.get("id", ""),
+                    title=entry.get("title", "Unknown"),
+                    url=entry.get("webpage_url", f"https://www.youtube.com/watch?v={entry.get('id', '')}"),
+                    platform="youtube",
+                    channel=entry.get("uploader", entry.get("channel", "Unknown")),
+                    views=entry.get("view_count") or 0,
+                    likes=entry.get("like_count") or 0,
+                    comments=entry.get("comment_count") or 0,
+                    uploaded_at=uploaded,
+                    thumbnail_url=entry.get("thumbnail", ""),
+                )
+            )
+        return videos
+
+    def _parse_flat_entries(self, entries: list[dict]) -> list[TrendingVideo]:
+        """Parse flat-playlist entries (limited metadata) as a fallback."""
+        now = datetime.now(timezone.utc)
+        videos = []
+        for entry in entries:
+            if not entry.get("id"):
+                continue
+            uploaded = self._parse_upload_date(entry.get("upload_date"), now)
+            videos.append(
+                TrendingVideo(
+                    video_id=entry.get("id", ""),
+                    title=entry.get("title", "Unknown"),
+                    url=entry.get("url", f"https://www.youtube.com/watch?v={entry.get('id', '')}"),
+                    platform="youtube",
+                    channel=entry.get("uploader", entry.get("channel", "Unknown")),
+                    views=entry.get("view_count") or 0,
+                    likes=entry.get("like_count") or 0,
+                    comments=entry.get("comment_count") or 0,
+                    uploaded_at=uploaded,
+                    thumbnail_url=entry.get("thumbnail", ""),
+                )
+            )
+        return videos
+
+    @staticmethod
+    def _parse_upload_date(date_str: str | None, fallback: datetime) -> datetime:
+        """Parse yt-dlp upload_date (YYYYMMDD) into a datetime."""
+        if not date_str:
+            return fallback
+        try:
+            return datetime.strptime(date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return fallback
 
     def _rank(self, videos: list[TrendingVideo]) -> list[TrendingVideo]:
         """Score and rank videos by viral clip potential."""

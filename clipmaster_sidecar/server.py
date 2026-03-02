@@ -12,6 +12,8 @@ from typing import Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from .models.ipc_models import IpcMessage, MessageType
+from .services.fact_generator import FactGenerator
+from .services.llm_gateway import LlmGateway
 from .services.script_analyzer import ScriptAnalyzer
 from .services.viral_scout import ViralScout
 
@@ -22,6 +24,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title="ClipMaster Sidecar", version="1.0.0")
     script_analyzer = ScriptAnalyzer()
     viral_scout = ViralScout()
+    llm_gateway = LlmGateway()
+    fact_generator = FactGenerator(llm_gateway)
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket) -> None:
@@ -39,7 +43,9 @@ def create_app() -> FastAPI:
                 logger.info("Received [%s] id=%s", msg.type.value, msg.id)
 
                 # Dispatch to the correct handler.
-                asyncio.create_task(_dispatch(ws, msg, script_analyzer, viral_scout))
+                asyncio.create_task(
+                    _dispatch(ws, msg, script_analyzer, viral_scout, fact_generator)
+                )
         except WebSocketDisconnect:
             logger.info("Flutter client disconnected.")
 
@@ -55,6 +61,7 @@ async def _dispatch(
     msg: IpcMessage,
     script_analyzer: ScriptAnalyzer,
     viral_scout: ViralScout,
+    fact_generator: FactGenerator,
 ) -> None:
     """Route an incoming IPC message to the correct service handler."""
     try:
@@ -67,6 +74,9 @@ async def _dispatch(
 
             case MessageType.scout_trending:
                 await _handle_scout_trending(ws, msg, viral_scout)
+
+            case MessageType.generate_facts:
+                await _handle_generate_facts(ws, msg, fact_generator)
 
             case MessageType.download_video:
                 await _handle_download_video(ws, msg)
@@ -122,6 +132,29 @@ async def _handle_scout_trending(
     results = await scout.fetch_trending(platform=platform, limit=limit)
     await _send(ws, IpcMessage.progress(msg.id, "Scouting trending", 100))
     await _send(ws, IpcMessage.result(msg.id, {"videos": results}))
+
+
+async def _handle_generate_facts(
+    ws: WebSocket, msg: IpcMessage, generator: FactGenerator
+) -> None:
+    category = msg.payload.get("category", "science")
+    count = msg.payload.get("count", 5)
+    provider = msg.payload.get("provider", "openai")
+    api_key = msg.payload.get("api_key", "")
+
+    if not api_key:
+        await _send(
+            ws,
+            IpcMessage.error(msg.id, "No API key provided. Add one in API Key settings."),
+        )
+        return
+
+    await _send(ws, IpcMessage.progress(msg.id, "Generating facts", 10))
+    facts = await generator.generate(
+        category=category, count=count, provider=provider, api_key=api_key
+    )
+    await _send(ws, IpcMessage.progress(msg.id, "Generating facts", 100))
+    await _send(ws, IpcMessage.result(msg.id, {"facts": facts}))
 
 
 async def _handle_download_video(ws: WebSocket, msg: IpcMessage) -> None:

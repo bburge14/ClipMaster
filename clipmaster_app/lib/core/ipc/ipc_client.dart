@@ -119,12 +119,28 @@ class IpcClient {
     await _connect(port);
   }
 
+  /// Whether the WebSocket channel is currently connected.
+  bool get isConnected => _channel != null && !_disposed;
+
   /// Send a request and get a [Future] for the one-shot response.
   /// Returns a [Stream] of progress messages via [onProgress].
+  ///
+  /// Throws [StateError] immediately if the sidecar is not connected.
+  /// Times out after [timeout] (default 60 s) so the UI never hangs.
   Future<IpcMessage> send(
     IpcMessage request, {
     void Function(IpcMessage progress)? onProgress,
+    Duration timeout = const Duration(seconds: 60),
   }) {
+    if (_channel == null || _disposed) {
+      return Future.error(
+        StateError(
+          'Sidecar is not connected. '
+          'Check the Dev Console for startup errors.',
+        ),
+      );
+    }
+
     final completer = Completer<IpcMessage>();
     _pendingRequests[request.id] = completer;
 
@@ -135,7 +151,15 @@ class IpcClient {
     }
 
     _channel?.sink.add(request.toJson());
-    return completer.future;
+
+    return completer.future.timeout(timeout, onTimeout: () {
+      _pendingRequests.remove(request.id);
+      _progressStreams.remove(request.id)?.close();
+      throw TimeoutException(
+        'Sidecar did not respond within ${timeout.inSeconds}s. '
+        'Is the Python sidecar running?',
+      );
+    });
   }
 
   /// Resolve the path to the clipmaster_sidecar directory relative to the app.

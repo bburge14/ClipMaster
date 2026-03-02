@@ -1,12 +1,12 @@
 name: Build & Release ClipMaster Pro
 
-# Build on every push to main — no tags needed.
-# Every merge/push automatically creates a new GitHub Release
-# with a downloadable installer .exe.
+# Builds automatically on every push to main.
+# Can also be triggered manually from the Actions tab ("Run workflow").
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: write

@@ -7,8 +7,10 @@ import 'core/services/api_key_service.dart';
 import 'core/services/auto_updater.dart';
 import 'core/utils/binary_paths.dart';
 import 'features/dev_console/widgets/dev_console_panel.dart';
+import 'features/fact_shorts/widgets/fact_shorts_page.dart';
 import 'features/timeline/widgets/magnetic_timeline.dart';
 import 'features/api_keys/widgets/api_key_settings.dart';
+import 'features/viral_scout/widgets/viral_scout_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -174,8 +176,8 @@ class _MainShellState extends ConsumerState<MainShell> {
   Widget _buildPage() {
     return switch (_selectedIndex) {
       0 => const MagneticTimeline(),
-      1 => const _FactShortsPlaceholder(),
-      2 => const _ViralScoutPlaceholder(),
+      1 => const FactShortsPage(),
+      2 => const ViralScoutPage(),
       3 => const ApiKeySettings(),
       _ => const SizedBox.shrink(),
     };
@@ -249,48 +251,3 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
   }
 }
 
-// Placeholder widgets until full feature UIs are built.
-
-class _FactShortsPlaceholder extends StatelessWidget {
-  const _FactShortsPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.auto_awesome, size: 64, color: Colors.white24),
-          SizedBox(height: 16),
-          Text('Fact-Shorts Generator',
-              style: TextStyle(fontSize: 24, color: Colors.white38)),
-          SizedBox(height: 8),
-          Text('Select a category to generate engagement-optimized shorts.',
-              style: TextStyle(color: Colors.white24)),
-        ],
-      ),
-    );
-  }
-}
-
-class _ViralScoutPlaceholder extends StatelessWidget {
-  const _ViralScoutPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.trending_up, size: 64, color: Colors.white24),
-          SizedBox(height: 16),
-          Text('Viral Scout',
-              style: TextStyle(fontSize: 24, color: Colors.white38)),
-          SizedBox(height: 8),
-          Text('Trending video discovery and analysis.',
-              style: TextStyle(color: Colors.white24)),
-        ],
-      ),
-    );
-  }
-}

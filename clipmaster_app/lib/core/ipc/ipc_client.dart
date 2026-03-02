@@ -150,12 +150,24 @@ class IpcClient {
     return '$exeDir${sep}clipmaster_sidecar';
   }
 
-  /// Find the Python executable inside the project's .venv.
-  /// Returns null if no venv exists (falls back to system PATH).
+  /// Find the Python executable.
+  /// Search order:
+  ///   1. Embedded python_runtime/ (installed .exe distribution)
+  ///   2. .venv/ (dev mode via setup.bat/setup.sh)
+  ///   3. null (falls back to system PATH 'python')
   String? _resolveVenvPython() {
     final sep = Platform.pathSeparator;
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
 
-    // Check relative to the project root (dev mode).
+    // 1. Embedded Python runtime (from the installer build).
+    //    This is what end-users have — no Python install needed.
+    final embeddedPython = '$exeDir${sep}python_runtime${sep}python.exe';
+    if (File(embeddedPython).existsSync()) {
+      _log.i('Using embedded Python: $embeddedPython');
+      return embeddedPython;
+    }
+
+    // 2. Dev .venv relative to project root.
     final devVenv = Platform.isWindows
         ? '${Directory.current.path}${sep}.venv${sep}Scripts${sep}python.exe'
         : '${Directory.current.path}${sep}.venv${sep}bin${sep}python';
@@ -164,8 +176,7 @@ class IpcClient {
       return devVenv;
     }
 
-    // Check relative to the executable (production).
-    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    // 3. Production .venv next to the executable.
     final prodVenv = Platform.isWindows
         ? '$exeDir${sep}.venv${sep}Scripts${sep}python.exe'
         : '$exeDir${sep}.venv${sep}bin${sep}python';
@@ -174,7 +185,7 @@ class IpcClient {
       return prodVenv;
     }
 
-    _log.w('No .venv found. Falling back to system Python.');
+    _log.w('No bundled Python found. Falling back to system Python.');
     return null;
   }
 

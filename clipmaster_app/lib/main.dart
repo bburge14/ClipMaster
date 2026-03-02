@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/ipc/ipc_client.dart';
 import 'core/logging/dev_console.dart';
 import 'core/services/api_key_service.dart';
+import 'core/services/auto_updater.dart';
 import 'core/utils/binary_paths.dart';
 import 'features/dev_console/widgets/dev_console_panel.dart';
 import 'features/timeline/widgets/magnetic_timeline.dart';
@@ -80,9 +81,20 @@ class _MainShellState extends ConsumerState<MainShell> {
 
   @override
   Widget build(BuildContext context) {
+    final updateCheck = ref.watch(updateCheckProvider);
+
     return Scaffold(
       body: Column(
         children: [
+          // Update notification bar
+          updateCheck.when(
+            data: (update) {
+              if (update == null) return const SizedBox.shrink();
+              return _UpdateBar(update: update);
+            },
+            loading: () => const SizedBox.shrink(),
+            error: (_, __) => const SizedBox.shrink(),
+          ),
           Expanded(
             child: Row(
               children: [
@@ -167,6 +179,73 @@ class _MainShellState extends ConsumerState<MainShell> {
       3 => const ApiKeySettings(),
       _ => const SizedBox.shrink(),
     };
+  }
+}
+
+/// Banner that appears when an update is available.
+class _UpdateBar extends ConsumerStatefulWidget {
+  final UpdateInfo update;
+  const _UpdateBar({required this.update});
+
+  @override
+  ConsumerState<_UpdateBar> createState() => _UpdateBarState();
+}
+
+class _UpdateBarState extends ConsumerState<_UpdateBar> {
+  bool _downloading = false;
+  int _percent = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: const Color(0xFF6C5CE7),
+      child: Row(
+        children: [
+          const Icon(Icons.system_update, size: 18, color: Colors.white),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _downloading
+                  ? 'Downloading update v${widget.update.version}... $_percent%'
+                  : 'Update available: v${widget.update.version} '
+                      '(current: v${AutoUpdater.currentVersion})',
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+            ),
+          ),
+          if (_downloading)
+            SizedBox(
+              width: 120,
+              child: LinearProgressIndicator(
+                value: _percent / 100,
+                backgroundColor: Colors.white24,
+                valueColor: const AlwaysStoppedAnimation(Colors.white),
+              ),
+            )
+          else
+            TextButton(
+              onPressed: _startUpdate,
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                backgroundColor: Colors.white24,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              ),
+              child: const Text('Update Now'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _startUpdate() async {
+    setState(() => _downloading = true);
+    final updater = ref.read(autoUpdaterProvider);
+    await updater.downloadAndInstall(
+      widget.update,
+      onProgress: (p) => setState(() => _percent = p),
+    );
   }
 }
 

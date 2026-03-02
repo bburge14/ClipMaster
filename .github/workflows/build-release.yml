@@ -1,0 +1,121 @@
+name: Build & Release ClipMaster Pro
+
+# Trigger: push a version tag like "v1.0.0"
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Allow the workflow to create releases.
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Flutter - Generate scaffolding & get deps
+        working-directory: clipmaster_app
+        run: |
+          flutter create . --platforms=windows --project-name clipmaster_app --org com.clipmaster
+          flutter pub get
+
+      - name: Flutter - Build Windows release
+        working-directory: clipmaster_app
+        run: flutter build windows --release
+
+      - name: Prepare distribution folder
+        shell: pwsh
+        run: |
+          $dist = "dist\ClipMasterPro"
+          $buildOut = "clipmaster_app\build\windows\x64\runner\Release"
+
+          # Copy Flutter build
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item -Path "$buildOut\*" -Destination $dist -Recurse -Force
+
+          # Download embedded Python
+          $pyVersion = "3.12.8"
+          $pyUrl = "https://www.python.org/ftp/python/$pyVersion/python-$pyVersion-embed-amd64.zip"
+          Invoke-WebRequest -Uri $pyUrl -OutFile "dist\python-embed.zip"
+
+          $pyRuntime = "$dist\python_runtime"
+          Expand-Archive -Path "dist\python-embed.zip" -DestinationPath $pyRuntime -Force
+
+          # Enable pip in embedded Python
+          $pthFile = Get-ChildItem -Path $pyRuntime -Filter "python*._pth" | Select-Object -First 1
+          (Get-Content $pthFile.FullName) -replace '#import site', 'import site' | Set-Content $pthFile.FullName
+          Add-Content -Path $pthFile.FullName -Value "Lib\site-packages"
+
+          # Install pip
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "$pyRuntime\get-pip.py"
+          & "$pyRuntime\python.exe" "$pyRuntime\get-pip.py" --no-warn-script-location 2>&1 | Out-Null
+          Remove-Item "$pyRuntime\get-pip.py"
+
+          # Install sidecar dependencies
+          & "$pyRuntime\python.exe" -m pip install --quiet --no-warn-script-location -r "clipmaster_sidecar\requirements.txt"
+
+          # Copy sidecar (without tests)
+          Copy-Item -Path "clipmaster_sidecar" -Destination "$dist\clipmaster_sidecar" -Recurse -Force
+          Remove-Item -Path "$dist\clipmaster_sidecar\tests" -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Path "$dist\clipmaster_sidecar" -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
+
+          # Download yt-dlp
+          New-Item -ItemType Directory -Force -Path "$dist\bundled_binaries" | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile "$dist\bundled_binaries\yt-dlp.exe"
+
+          # Download ffmpeg
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "dist\ffmpeg.zip"
+          Expand-Archive -Path "dist\ffmpeg.zip" -DestinationPath "dist\ffmpeg-temp" -Force
+          $ffmpeg = Get-ChildItem -Path "dist\ffmpeg-temp" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+          $ffprobe = Get-ChildItem -Path "dist\ffmpeg-temp" -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
+          if ($ffmpeg) { Copy-Item $ffmpeg.FullName "$dist\bundled_binaries\ffmpeg.exe" }
+          if ($ffprobe) { Copy-Item $ffprobe.FullName "$dist\bundled_binaries\ffprobe.exe" }
+          Remove-Item "dist\ffmpeg-temp" -Recurse -Force
+          Remove-Item "dist\ffmpeg.zip"
+
+          # Create silent launcher (VBS - no console window)
+          @'
+          Set WshShell = CreateObject("WScript.Shell")
+          appDir = Replace(WScript.ScriptFullName, WScript.ScriptName, "")
+          WshShell.Run """" & appDir & "python_runtime\python.exe"" -m clipmaster_sidecar --port 9120", 0, False
+          WScript.Sleep 2000
+          WshShell.Run """" & appDir & "clipmaster_app.exe""", 1, False
+          '@ | Set-Content "$dist\ClipMaster Pro.vbs"
+
+      - name: Build Inno Setup installer
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.4
+        with:
+          path: installer/clipmaster.iss
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "ClipMaster Pro ${{ github.ref_name }}"
+          body: |
+            ## ClipMaster Pro ${{ github.ref_name }}
+
+            ### Installation
+            1. Download `ClipMasterPro-Setup-${{ github.ref_name }}.exe` below
+            2. Run the installer
+            3. Launch from Start Menu or Desktop shortcut
+
+            No Python, Flutter, or any other software required.
+          files: |
+            dist/ClipMasterPro-Setup-*.exe
+          draft: false
+          prerelease: false

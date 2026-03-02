@@ -210,7 +210,7 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
               _downloading
                   ? 'Downloading update v${widget.update.version}... $_percent%'
                   : 'Update available: v${widget.update.version} '
-                      '(current: v${AutoUpdater.currentVersion})',
+                      '(current: v${AutoUpdater.getInstalledVersion()})',
               style: const TextStyle(color: Colors.white, fontSize: 13),
             ),
           ),

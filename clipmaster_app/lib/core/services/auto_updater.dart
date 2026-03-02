@@ -24,7 +24,8 @@ class UpdateInfo {
     required this.publishedAt,
   });
 
-  /// Compare version strings like "1.2.3".
+  /// Compare version strings like "1.0.42" where the last number is the
+  /// auto-incrementing build number from GitHub Actions.
   bool isNewerThan(String currentVersion) {
     final current = currentVersion.split('.').map(int.parse).toList();
     final remote = version.split('.').map(int.parse).toList();
@@ -40,25 +41,50 @@ class UpdateInfo {
 
 /// Auto-update service that checks GitHub Releases for new versions.
 ///
-/// Flow:
-///   1. On app launch, checks the GitHub Releases API for the latest release.
-///   2. If a newer version exists, shows a notification in the UI.
-///   3. User clicks "Update" -> downloads the installer .exe to temp.
-///   4. Launches the installer and exits the current app.
+/// How it works:
+///   - Every push to main triggers GitHub Actions, which builds a new
+///     installer and publishes it as a GitHub Release (v1.0.1, v1.0.2, ...).
+///   - On app launch, this service hits the GitHub Releases API and compares
+///     the latest release version to [currentVersion].
+///   - If newer, a purple banner appears. Click "Update Now" to download
+///     and install the new version automatically.
+///
+/// [currentVersion] is stamped by CI at build time — you never edit it manually.
 class AutoUpdater {
+  // CI overwrites this line at build time with the real build number.
+  // e.g. "1.0.42" where 42 is the GitHub Actions run_number.
   static const String currentVersion = '1.0.0';
+
   static const String _repoOwner = 'bburge14';
   static const String _repoName = 'ClipMaster';
+
+  /// Read the version baked into this build.
+  /// Prefers version.txt (written by CI) if present next to the exe,
+  /// falls back to the hardcoded [currentVersion].
+  static String getInstalledVersion() {
+    try {
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      final versionFile =
+          File('$exeDir${Platform.pathSeparator}version.txt');
+      if (versionFile.existsSync()) {
+        return versionFile.readAsStringSync().trim();
+      }
+    } catch (_) {}
+    return currentVersion;
+  }
 
   /// Check GitHub Releases for a newer version.
   Future<UpdateInfo?> checkForUpdate() async {
     try {
+      final installedVersion = getInstalledVersion();
+      _log.i('Checking for updates (installed: $installedVersion)...');
+
       final uri = Uri.parse(
         'https://api.github.com/repos/$_repoOwner/$_repoName/releases/latest',
       );
       final response = await http.get(uri, headers: {
         'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'ClipMasterPro/$currentVersion',
+        'User-Agent': 'ClipMasterPro/$installedVersion',
       });
 
       if (response.statusCode != 200) {
@@ -68,17 +94,17 @@ class AutoUpdater {
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final tagName = (data['tag_name'] as String?) ?? '';
-      // Strip leading 'v' from tag: "v1.2.3" -> "1.2.3"
-      final version = tagName.startsWith('v') ? tagName.substring(1) : tagName;
+      // Strip leading 'v': "v1.0.42" -> "1.0.42"
+      final version =
+          tagName.startsWith('v') ? tagName.substring(1) : tagName;
 
-      // Find the .exe installer asset.
+      // Find the Setup .exe asset.
       final assets = (data['assets'] as List<dynamic>?) ?? [];
-      final installerAsset = assets.cast<Map<String, dynamic>>().where(
-        (a) {
-          final name = (a['name'] as String?) ?? '';
-          return name.endsWith('.exe') && name.contains('Setup');
-        },
-      ).firstOrNull;
+      final installerAsset =
+          assets.cast<Map<String, dynamic>>().where((a) {
+        final name = (a['name'] as String?) ?? '';
+        return name.endsWith('.exe') && name.contains('Setup');
+      }).firstOrNull;
 
       if (installerAsset == null) {
         _log.d('No installer asset found in release $version');
@@ -93,12 +119,12 @@ class AutoUpdater {
         publishedAt: DateTime.parse(data['published_at'] as String),
       );
 
-      if (info.isNewerThan(currentVersion)) {
-        _log.i('Update available: $currentVersion -> ${info.version}');
+      if (info.isNewerThan(installedVersion)) {
+        _log.i('Update available: $installedVersion -> ${info.version}');
         return info;
       }
 
-      _log.d('Already on latest version ($currentVersion).');
+      _log.d('Already on latest ($installedVersion).');
       return null;
     } catch (e) {
       _log.e('Update check error: $e');
@@ -106,7 +132,7 @@ class AutoUpdater {
     }
   }
 
-  /// Download the installer and launch it.
+  /// Download the installer and run it, then exit.
   Future<void> downloadAndInstall(
     UpdateInfo update, {
     void Function(int percent)? onProgress,
@@ -118,7 +144,6 @@ class AutoUpdater {
 
     _log.i('Downloading update to $installerPath');
 
-    // Stream download with progress.
     final request = http.Request('GET', Uri.parse(update.downloadUrl));
     final response = await http.Client().send(request);
 
@@ -129,23 +154,28 @@ class AutoUpdater {
     await for (final chunk in response.stream) {
       sink.add(chunk);
       receivedBytes += chunk.length;
-      final percent = ((receivedBytes / totalBytes) * 100).clamp(0, 100).toInt();
+      final percent =
+          ((receivedBytes / totalBytes) * 100).clamp(0, 100).toInt();
       onProgress?.call(percent);
     }
     await sink.close();
 
     _log.i('Download complete. Launching installer...');
 
-    // Launch the installer and exit.
-    await Process.start(installerPath, ['/SILENT'], mode: ProcessStartMode.detached);
+    // /SILENT runs the installer without a wizard but shows a progress bar.
+    // It upgrades in-place to the same directory.
+    await Process.start(
+      installerPath,
+      ['/SILENT'],
+      mode: ProcessStartMode.detached,
+    );
     exit(0);
   }
 }
 
-/// Riverpod provider for the auto-updater.
+/// Riverpod providers.
 final autoUpdaterProvider = Provider<AutoUpdater>((ref) => AutoUpdater());
 
-/// Riverpod provider that checks for updates on read.
 final updateCheckProvider = FutureProvider<UpdateInfo?>((ref) async {
   final updater = ref.read(autoUpdaterProvider);
   return updater.checkForUpdate();

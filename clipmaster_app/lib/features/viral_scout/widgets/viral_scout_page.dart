@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/api_key_service.dart';
+import '../../../core/utils/env_config.dart';
 
 class ViralScoutPage extends ConsumerStatefulWidget {
   const ViralScoutPage({super.key});
@@ -24,6 +25,13 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
   String? _error;
 
   final _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-fetch trending on page load.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _fetchTrending());
+  }
 
   @override
   void dispose() {
@@ -56,6 +64,18 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
       }
       if (_searchQuery.isNotEmpty) {
         payload['query'] = _searchQuery;
+      }
+
+      // Pass Twitch credentials for Helix API access.
+      if (_platform == 'twitch') {
+        final twitchClientId = EnvConfig.get('TWITCH_CLIENT_ID') ?? '';
+        final twitchClientSecret = EnvConfig.get('TWITCH_CLIENT_SECRET') ?? '';
+        if (twitchClientId.isNotEmpty) {
+          payload['twitch_client_id'] = twitchClientId;
+        }
+        if (twitchClientSecret.isNotEmpty) {
+          payload['twitch_client_secret'] = twitchClientSecret;
+        }
       }
 
       final ipc = ref.read(ipcClientProvider);
@@ -131,7 +151,10 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                   DropdownMenuItem(value: 'youtube', child: Text('YouTube')),
                   DropdownMenuItem(value: 'twitch', child: Text('Twitch')),
                 ],
-                onChanged: (p) => setState(() => _platform = p!),
+                onChanged: (p) {
+                  setState(() => _platform = p!);
+                  _fetchTrending();
+                },
               ),
               const SizedBox(width: 12),
               SizedBox(
@@ -139,7 +162,7 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                 child: TextField(
                   controller: _searchController,
                   decoration: const InputDecoration(
-                    hintText: 'Search YouTube (or leave blank for trending)',
+                    hintText: 'Search (or leave blank for trending)',
                     prefixIcon: Icon(Icons.search, size: 20),
                     border: OutlineInputBorder(),
                     isDense: true,
@@ -214,15 +237,21 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
             const Icon(Icons.trending_up, size: 64, color: Colors.white24),
             const SizedBox(height: 16),
             const Text(
-              'Click "Scout Trending" to discover viral videos.',
+              'No trending videos found.',
               style: TextStyle(color: Colors.white38, fontSize: 15),
             ),
             const SizedBox(height: 8),
             const Text(
-              'Requires a YouTube Data API key in Settings.\n'
-              'Videos are ranked by velocity and engagement density.',
+              'YouTube requires a YouTube Data API key in Settings.\n'
+              'Twitch requires TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET in .env.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.white24, fontSize: 12),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _fetchTrending,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
             ),
           ],
         ),

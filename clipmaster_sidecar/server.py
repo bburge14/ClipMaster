@@ -24,6 +24,7 @@ from .services.media_tools import (
 )
 from .services.script_analyzer import ScriptAnalyzer
 from .services.stock_footage import StockFootageService
+from .services.twitch_search import TwitchSearchService
 from .services.viral_scout import ViralScout
 from .services.youtube_search import YouTubeSearchService
 
@@ -38,6 +39,7 @@ def create_app() -> FastAPI:
     fact_generator = FactGenerator(llm_gateway)
     stock_footage = StockFootageService()
     youtube_search = YouTubeSearchService()
+    twitch_search = TwitchSearchService()
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket) -> None:
@@ -70,7 +72,7 @@ def create_app() -> FastAPI:
                 asyncio.create_task(
                     _dispatch(
                         ws, msg, script_analyzer, viral_scout, fact_generator,
-                        stock_footage, youtube_search,
+                        stock_footage, youtube_search, twitch_search,
                     )
                 )
         except WebSocketDisconnect:
@@ -91,6 +93,7 @@ async def _dispatch(
     fact_generator: FactGenerator,
     stock_footage: StockFootageService,
     youtube_search: YouTubeSearchService,
+    twitch_search: TwitchSearchService,
 ) -> None:
     """Route an incoming IPC message to the correct service handler."""
     try:
@@ -102,7 +105,7 @@ async def _dispatch(
                 await _handle_analyze_script(ws, msg, script_analyzer)
 
             case MessageType.scout_trending:
-                await _handle_scout_trending(ws, msg, viral_scout, youtube_search)
+                await _handle_scout_trending(ws, msg, viral_scout, youtube_search, twitch_search)
 
             case MessageType.generate_facts:
                 await _handle_generate_facts(ws, msg, fact_generator)
@@ -167,14 +170,52 @@ async def _handle_scout_trending(
     msg: IpcMessage,
     scout: ViralScout,
     youtube_search: YouTubeSearchService,
+    twitch_search: TwitchSearchService,
 ) -> None:
     platform = msg.payload.get("platform", "youtube")
     limit = msg.payload.get("limit", 20)
     api_key = msg.payload.get("api_key", "")
     query = msg.payload.get("query", "")
+    twitch_client_id = msg.payload.get("twitch_client_id", "")
+    twitch_client_secret = msg.payload.get("twitch_client_secret", "")
 
+    # ── Twitch via Helix API ──
+    if platform == "twitch":
+        if not twitch_client_id or not twitch_client_secret:
+            await _send(
+                ws,
+                IpcMessage.error(
+                    msg.id,
+                    "Twitch Client ID and Secret are required for Twitch Scout. "
+                    "Add TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET to your .env file.",
+                ),
+            )
+            return
+
+        await _send(ws, IpcMessage.progress(msg.id, "Querying Twitch API", 10))
+        try:
+            if query:
+                results = await twitch_search.search_clips(
+                    client_id=twitch_client_id,
+                    client_secret=twitch_client_secret,
+                    query=query,
+                    limit=limit,
+                )
+            else:
+                results = await twitch_search.search_trending(
+                    client_id=twitch_client_id,
+                    client_secret=twitch_client_secret,
+                    limit=limit,
+                )
+            await _send(ws, IpcMessage.progress(msg.id, "Ranking results", 80))
+            await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
+            await _send(ws, IpcMessage.result(msg.id, {"videos": results}))
+        except ValueError as exc:
+            await _send(ws, IpcMessage.error(msg.id, str(exc)))
+        return
+
+    # ── YouTube via Data API ──
     if platform == "youtube" and api_key:
-        # Use YouTube Data API (reliable, structured data).
         await _send(ws, IpcMessage.progress(msg.id, "Querying YouTube API", 10))
         try:
             if query:
@@ -192,7 +233,7 @@ async def _handle_scout_trending(
             await _send(ws, IpcMessage.error(msg.id, str(exc)))
         return
 
-    # Fallback: yt-dlp scraping (unreliable but doesn't require API key).
+    # ── Fallback: yt-dlp scraping (YouTube only, no API key) ──
     await _send(ws, IpcMessage.progress(msg.id, "Finding yt-dlp", 5))
     ytdlp = scout._find_ytdlp()
     if not ytdlp:

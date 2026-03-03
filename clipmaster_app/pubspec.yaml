@@ -24,18 +24,10 @@ dependencies:
   # Security - API Key Storage
   flutter_secure_storage: ^9.0.0
 
-  # WebView for Viral Scout
-  webview_flutter: ^4.4.2
-
   # File & Path Management
   path_provider: ^2.1.1
   path: ^1.8.3
   file_picker: ^6.1.1
-
-  # Video Player for Preview
-  media_kit: ^1.1.10
-  media_kit_video: ^1.2.4
-  media_kit_libs_windows_video: ^1.0.9
 
   # Utilities
   uuid: ^4.2.1

@@ -22,6 +22,7 @@ class MessageType(str, Enum):
     scout_trending = "scoutTrending"
     generate_facts = "generateFacts"
     ffmpeg_render = "ffmpegRender"
+    create_short = "createShort"
 
     # Responses (Python -> Flutter)
     pong = "pong"

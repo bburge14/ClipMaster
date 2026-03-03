@@ -479,7 +479,7 @@ class _UpdateSection extends ConsumerWidget {
 
   void _openUrl(String url) {
     if (Platform.isWindows) {
-      Process.run('start', [url], runInShell: true);
+      Process.run('rundll32', ['url.dll,FileProtocolHandler', url]);
     } else if (Platform.isMacOS) {
       Process.run('open', [url]);
     } else {
@@ -500,22 +500,22 @@ class _ConnectedAccountsSection extends ConsumerStatefulWidget {
 
 class _ConnectedAccountsSectionState
     extends ConsumerState<_ConnectedAccountsSection> {
-  bool _connecting = false;
+  AccountProvider? _connectingProvider;
   String? _connectError;
 
   Future<void> _connect(AccountProvider provider) async {
     setState(() {
-      _connecting = true;
+      _connectingProvider = provider;
       _connectError = null;
     });
     try {
       final accountService = ref.read(accountServiceProvider);
       await accountService.connect(provider);
-      if (mounted) setState(() => _connecting = false);
+      if (mounted) setState(() => _connectingProvider = null);
     } catch (e) {
       if (mounted) {
         setState(() {
-          _connecting = false;
+          _connectingProvider = null;
           _connectError = e.toString();
         });
       }
@@ -669,7 +669,9 @@ class _ConnectedAccountsSectionState
           ),
           if (account != null)
             TextButton(
-              onPressed: _connecting ? null : () => _disconnect(provider),
+              onPressed: _connectingProvider != null
+                  ? null
+                  : () => _disconnect(provider),
               child: const Text(
                 'Disconnect',
                 style: TextStyle(color: Colors.redAccent, fontSize: 12),
@@ -677,14 +679,15 @@ class _ConnectedAccountsSectionState
             )
           else
             FilledButton(
-              onPressed:
-                  (!hasClientId || _connecting) ? null : () => _connect(provider),
+              onPressed: (!hasClientId || _connectingProvider != null)
+                  ? null
+                  : () => _connect(provider),
               style: FilledButton.styleFrom(
                 backgroundColor: color.withOpacity(0.8),
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               ),
-              child: _connecting
+              child: _connectingProvider == provider
                   ? const SizedBox(
                       width: 14,
                       height: 14,

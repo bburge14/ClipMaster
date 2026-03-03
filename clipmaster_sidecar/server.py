@@ -125,6 +125,9 @@ async def _dispatch(
             case MessageType.query_stock_footage:
                 await _handle_query_stock_footage(ws, msg, stock_footage)
 
+            case MessageType.create_short:
+                await _handle_create_short(ws, msg, stock_footage)
+
             case _:
                 await _send(
                     ws,
@@ -390,3 +393,225 @@ async def _handle_query_stock_footage(
     )
     await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
     await _send(ws, IpcMessage.result(msg.id, {"clips": results}))
+
+
+# ---------------------------------------------------------------------------
+# Create Short (Full Pipeline: TTS + Text Video + Merge)
+# ---------------------------------------------------------------------------
+
+async def _handle_create_short(
+    ws: WebSocket,
+    msg: IpcMessage,
+    stock_footage: StockFootageService,
+) -> None:
+    text = msg.payload.get("text", "")
+    title = msg.payload.get("title", "Untitled Fact")
+    api_key = msg.payload.get("api_key", "")
+    voice = msg.payload.get("voice", "onyx")
+    output_dir = msg.payload.get("output_dir", "")
+    visual_keywords = msg.payload.get("visual_keywords", [])
+    pexels_key = msg.payload.get("pexels_key")
+    pixabay_key = msg.payload.get("pixabay_key")
+
+    if not text:
+        await _send(ws, IpcMessage.error(msg.id, "No text provided."))
+        return
+    if not api_key:
+        await _send(ws, IpcMessage.error(
+            msg.id,
+            "No OpenAI API key provided. Add one in Settings.",
+        ))
+        return
+
+    ffmpeg = _find_ffmpeg()
+    if not ffmpeg:
+        await _send(ws, IpcMessage.error(
+            msg.id,
+            "FFmpeg not found. Install FFmpeg or place it in bundled_binaries/.",
+        ))
+        return
+
+    import os
+    import re
+    import tempfile
+
+    if not output_dir:
+        output_dir = os.path.join(tempfile.gettempdir(), "clipmaster_shorts")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Step 1: Generate TTS voiceover
+    await _send(ws, IpcMessage.progress(msg.id, "Generating voiceover", 10))
+    tts_result = await generate_tts(text, api_key, voice=voice)
+    audio_path = tts_result["audio_path"]
+    duration_est = tts_result["duration_estimate"]
+
+    # Get actual audio duration via ffprobe
+    duration = await _get_audio_duration(ffmpeg, audio_path)
+    if duration <= 0:
+        duration = max(duration_est, 5.0)
+
+    # Step 2: Try to get a stock footage background
+    await _send(ws, IpcMessage.progress(msg.id, "Searching for background footage", 30))
+    bg_video_path = None
+    if visual_keywords and (pexels_key or pixabay_key):
+        for kw in visual_keywords[:3]:
+            clips = await stock_footage.search(
+                kw, pexels_key=pexels_key, pixabay_key=pixabay_key, per_source=1,
+            )
+            if clips:
+                # Download the first clip
+                clip_url = clips[0].get("download_url", "")
+                if clip_url:
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient(timeout=30.0) as client:
+                            resp = await client.get(clip_url)
+                            resp.raise_for_status()
+                            bg_path = os.path.join(
+                                tempfile.gettempdir(),
+                                f"clipmaster_bg_{kw.replace(' ', '_')}.mp4",
+                            )
+                            with open(bg_path, "wb") as f:
+                                f.write(resp.content)
+                            bg_video_path = bg_path
+                            break
+                    except Exception as exc:
+                        logger.warning("Failed to download stock clip: %s", exc)
+
+    # Step 3: Build the video
+    await _send(ws, IpcMessage.progress(msg.id, "Rendering video", 50))
+
+    safe_name = re.sub(r"[^\w\s-]", "", title[:40]).strip().replace(" ", "_")
+    output_path = os.path.join(output_dir, f"short_{safe_name}.mp4")
+
+    # Escape text for FFmpeg drawtext filter
+    escaped_text = _escape_ffmpeg_text(text)
+    escaped_title = _escape_ffmpeg_text(title)
+
+    if bg_video_path and os.path.isfile(bg_video_path):
+        # Use stock footage as background, scaled to 9:16, with text overlay
+        cmd = [
+            ffmpeg, "-y",
+            "-stream_loop", "-1", "-i", bg_video_path,
+            "-i", audio_path,
+            "-vf", (
+                f"scale=1080:1920:force_original_aspect_ratio=increase,"
+                f"crop=1080:1920,"
+                f"drawtext=text='{escaped_title}':fontsize=56:fontcolor=white:"
+                f"x=(w-text_w)/2:y=200:borderw=3:bordercolor=black,"
+                f"drawtext=text='{escaped_text}':fontsize=36:fontcolor=white:"
+                f"x=(w-text_w)/2:y=(h-text_h)/2:borderw=2:bordercolor=black"
+            ),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "192k",
+            "-t", str(duration),
+            "-shortest",
+            "-pix_fmt", "yuv420p",
+            output_path,
+        ]
+    else:
+        # Solid gradient background with text overlay
+        cmd = [
+            ffmpeg, "-y",
+            "-f", "lavfi",
+            "-i", (
+                f"color=c=0x1a1a2e:s=1080x1920:d={duration},"
+                f"drawtext=text='{escaped_title}':fontsize=56:fontcolor=white:"
+                f"x=(w-text_w)/2:y=300:borderw=3:bordercolor=0x6C5CE7,"
+                f"drawtext=text='{escaped_text}':fontsize=36:fontcolor=white:"
+                f"x=(w-text_w)/2:y=(h-text_h)/2:borderw=2:bordercolor=black"
+            ),
+            "-i", audio_path,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "192k",
+            "-t", str(duration),
+            "-shortest",
+            "-pix_fmt", "yuv420p",
+            output_path,
+        ]
+
+    await _send(ws, IpcMessage.progress(msg.id, "Encoding video", 65))
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr_data = await proc.communicate()
+
+    if proc.returncode != 0:
+        err = stderr_data.decode("utf-8", errors="replace")[:500]
+        logger.error("FFmpeg create_short failed: %s", err)
+        await _send(ws, IpcMessage.error(msg.id, f"Video render failed: {err}"))
+        return
+
+    await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
+    await _send(ws, IpcMessage.result(msg.id, {
+        "output_path": output_path,
+        "audio_path": audio_path,
+        "duration": duration,
+        "has_stock_footage": bg_video_path is not None,
+    }))
+
+
+def _find_ffmpeg() -> str | None:
+    """Find FFmpeg binary."""
+    import os
+    import shutil
+    on_path = shutil.which("ffmpeg")
+    if on_path:
+        return on_path
+    sidecar_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    install_dir = os.path.dirname(sidecar_dir)
+    exe = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    bundled = os.path.join(install_dir, "bundled_binaries", exe)
+    if os.path.isfile(bundled):
+        return bundled
+    return None
+
+
+def _escape_ffmpeg_text(text: str) -> str:
+    """Escape text for FFmpeg drawtext filter."""
+    # FFmpeg drawtext requires escaping: ' : \ and newlines
+    text = text.replace("\\", "\\\\\\\\")
+    text = text.replace("'", "\u2019")  # Replace with typographic apostrophe
+    text = text.replace(":", "\\:")
+    text = text.replace("%", "%%")
+    # Wrap long text manually (approx 35 chars per line for 1080px @ fontsize 36)
+    words = text.split()
+    lines = []
+    current_line = ""
+    for word in words:
+        if len(current_line) + len(word) + 1 > 35:
+            lines.append(current_line)
+            current_line = word
+        else:
+            current_line = f"{current_line} {word}".strip()
+    if current_line:
+        lines.append(current_line)
+    return "\\n".join(lines)
+
+
+async def _get_audio_duration(ffmpeg: str, audio_path: str) -> float:
+    """Get audio duration using ffprobe."""
+    import os
+    import json
+    ffprobe = ffmpeg.replace("ffmpeg", "ffprobe")
+    if not os.path.isfile(ffprobe) and not os.path.isfile(ffprobe + ".exe"):
+        import shutil
+        ffprobe = shutil.which("ffprobe") or ffprobe
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ffprobe,
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "json",
+            audio_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        data = json.loads(stdout.decode())
+        return float(data.get("format", {}).get("duration", 0))
+    except Exception:
+        return 0.0

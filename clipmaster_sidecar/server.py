@@ -791,26 +791,34 @@ async def _handle_scout_clips(
 
 
 async def _handle_download_clip(ws: WebSocket, msg: IpcMessage) -> None:
-    """Download a partial clip from a video using stream seeking."""
+    """Download a clip — partial extraction if start/end provided, else full download."""
     url = msg.payload.get("url", "")
-    start_time = msg.payload.get("start_time", "")
-    end_time = msg.payload.get("end_time", "")
+    start_time = msg.payload.get("start_time")
+    end_time = msg.payload.get("end_time")
     output_name = msg.payload.get("output_name")
 
     if not url:
         await _send(ws, IpcMessage.error(msg.id, "No URL provided."))
         return
-    if not start_time or not end_time:
-        await _send(ws, IpcMessage.error(msg.id, "start_time and end_time required."))
-        return
 
     try:
-        result = await download_clip(
-            url, start_time, end_time,
-            output_name=output_name,
-            on_progress=lambda pct, stage: _send(
-                ws, IpcMessage.progress(msg.id, stage, pct)),
-        )
+        if start_time is not None and end_time is not None:
+            # Partial clip extraction via FFmpeg stream seeking.
+            result = await download_clip(
+                url, start_time, end_time,
+                output_name=output_name,
+                on_progress=lambda pct, stage: _send(
+                    ws, IpcMessage.progress(msg.id, stage, pct)),
+            )
+        else:
+            # Full video download via yt-dlp.
+            async def on_progress(pct: int, stage: str) -> None:
+                await _send(ws, IpcMessage.progress(msg.id, stage, pct))
+
+            result = await download_video(
+                url, output_name=output_name, on_progress=on_progress,
+            )
+
         await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
         await _send(ws, IpcMessage.result(msg.id, result))
     except Exception as exc:

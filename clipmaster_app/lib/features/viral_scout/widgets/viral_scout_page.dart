@@ -7,11 +7,16 @@ import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/activity_service.dart';
 import '../../../core/services/api_key_service.dart';
+import '../../../core/ui/video_player_overlay.dart';
 import '../../../core/utils/env_config.dart';
 
 /// Viral Scout — channel-first discovery engine.
 ///
-/// Flow:  Search channel → see VODs → see clips per VOD → download clips
+/// Modes:
+///   1. Trending — ranked list of trending videos (existing behavior)
+///   2. Video Search — search for videos by topic/keyword
+///   3. Channel Discovery — search channel → VOD grid → clip sidebar
+///
 /// All downloads run in the background via [ActivityNotifier].
 class ViralScoutPage extends ConsumerStatefulWidget {
   const ViralScoutPage({super.key});
@@ -20,7 +25,7 @@ class ViralScoutPage extends ConsumerStatefulWidget {
   ConsumerState<ViralScoutPage> createState() => _ViralScoutPageState();
 }
 
-enum _ScoutView { trending, channel, vods, clips }
+enum _ScoutView { trending, search, channel, vods, clips }
 
 class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
   String _platform = 'youtube';
@@ -32,6 +37,11 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
   int _progressPercent = 0;
   List<Map<String, dynamic>> _videos = [];
   String? _error;
+
+  // Search state
+  final _searchController = TextEditingController();
+  bool _isSearching = false;
+  List<Map<String, dynamic>> _searchResults = [];
 
   // Channel search state
   final _channelSearchController = TextEditingController();
@@ -45,20 +55,40 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
   // Clips state
   List<Map<String, dynamic>> _clips = [];
   bool _isLoadingClips = false;
-  String? _selectedVodId;
   String? _selectedVodTitle;
+
+  // Sidecar readiness
+  bool _sidecarReady = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _fetchTrending());
+    _waitForSidecar();
+  }
+
+  /// Wait until the IPC sidecar is connected before auto-fetching.
+  Future<void> _waitForSidecar() async {
+    final ipc = ref.read(ipcClientProvider);
+    // Poll until connected (up to ~10 seconds).
+    for (int i = 0; i < 20; i++) {
+      if (ipc.isConnected) break;
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+    if (!mounted) return;
+    setState(() => _sidecarReady = ipc.isConnected);
+    if (_sidecarReady) {
+      _fetchTrending();
+    }
   }
 
   @override
   void dispose() {
+    _searchController.dispose();
     _channelSearchController.dispose();
     super.dispose();
   }
+
+  // ── Credentials builder ──
 
   Map<String, dynamic> _buildCredentials() {
     final apiKeyService = ref.read(apiKeyServiceProvider);
@@ -77,9 +107,11 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
   // ── Trending ──
 
   Future<void> _fetchTrending() async {
+    if (!_sidecarReady) return;
     setState(() {
       _isLoading = true;
       _error = null;
+      _currentView = _ScoutView.trending;
       _progressStage = 'Starting';
       _progressPercent = 0;
     });
@@ -90,11 +122,16 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
       final response = await ipc.send(
         IpcMessage(type: MessageType.scoutTrending, payload: payload),
         timeout: const Duration(seconds: 120),
-        onProgress: (p) => setState(() {
-          _progressStage = p.payload['stage'] as String? ?? 'Scouting';
-          _progressPercent = p.payload['percent'] as int? ?? 0;
-        }),
+        onProgress: (p) {
+          if (mounted) {
+            setState(() {
+              _progressStage = p.payload['stage'] as String? ?? 'Scouting';
+              _progressPercent = p.payload['percent'] as int? ?? 0;
+            });
+          }
+        },
       );
+      if (!mounted) return;
       if (response.type == MessageType.error) {
         setState(() {
           _isLoading = false;
@@ -108,10 +145,65 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
         });
       }
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _error = e.toString();
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  // ── Video Search ──
+
+  Future<void> _searchVideos() async {
+    final query = _searchController.text.trim();
+    if (query.isEmpty) return;
+    if (!_sidecarReady) return;
+    setState(() {
+      _isSearching = true;
+      _error = null;
+      _currentView = _ScoutView.search;
+      _searchResults = [];
+    });
+    try {
+      final payload = _buildCredentials();
+      payload['query'] = query;
+      payload['limit'] = 20;
+      final ipc = ref.read(ipcClientProvider);
+      final response = await ipc.send(
+        IpcMessage(type: MessageType.scoutTrending, payload: payload),
+        timeout: const Duration(seconds: 60),
+        onProgress: (p) {
+          if (mounted) {
+            setState(() {
+              _progressStage = p.payload['stage'] as String? ?? 'Searching';
+              _progressPercent = p.payload['percent'] as int? ?? 0;
+            });
+          }
+        },
+      );
+      if (!mounted) return;
+      if (response.type == MessageType.error) {
+        setState(() {
+          _isSearching = false;
+          _error = response.payload['message'] as String?;
+        });
+      } else {
+        setState(() {
+          _isSearching = false;
+          _searchResults =
+              (response.payload['videos'] as List<dynamic>? ?? [])
+                  .cast<Map<String, dynamic>>();
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isSearching = false;
+          _error = e.toString();
+        });
+      }
     }
   }
 
@@ -120,6 +212,7 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
   Future<void> _searchChannel() async {
     final query = _channelSearchController.text.trim();
     if (query.isEmpty) return;
+    if (!_sidecarReady) return;
     setState(() {
       _isSearchingChannel = true;
       _channelInfo = null;
@@ -135,48 +228,62 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
         IpcMessage(type: MessageType.scoutChannel, payload: payload),
         timeout: const Duration(seconds: 30),
       );
+      if (!mounted) return;
       if (response.type == MessageType.error) {
         setState(() {
           _isSearchingChannel = false;
           _error = response.payload['message'] as String?;
         });
       } else {
+        // Server returns {"channel": {...}} — unwrap it.
+        final channelData =
+            response.payload['channel'] as Map<String, dynamic>?;
+        if (channelData == null) {
+          setState(() {
+            _isSearchingChannel = false;
+            _error = 'No channel data returned.';
+          });
+          return;
+        }
         setState(() {
           _isSearchingChannel = false;
-          _channelInfo = response.payload;
+          _channelInfo = channelData;
           _currentView = _ScoutView.channel;
         });
-        _fetchVods();
       }
     } catch (e) {
-      setState(() {
-        _isSearchingChannel = false;
-        _error = e.toString();
-      });
+      if (mounted) {
+        setState(() {
+          _isSearchingChannel = false;
+          _error = e.toString();
+        });
+      }
     }
   }
 
   // ── VODs ──
 
   Future<void> _fetchVods() async {
-    if (_channelInfo == null) return;
+    if (_channelInfo == null || !_sidecarReady) return;
     setState(() {
       _isLoadingVods = true;
       _error = null;
     });
     try {
       final payload = _buildCredentials();
-      final userId = _channelInfo!['user_id'] as String? ??
-          _channelInfo!['channel_id'] as String? ??
-          '';
-      payload['user_id'] = userId;
-      payload['channel_id'] = userId;
+      // YouTube uses 'channel_id', Twitch uses 'user_id'
+      if (_platform == 'twitch') {
+        payload['user_id'] = _channelInfo!['user_id'] as String? ?? '';
+      } else {
+        payload['channel_id'] = _channelInfo!['channel_id'] as String? ?? '';
+      }
       payload['limit'] = 20;
       final ipc = ref.read(ipcClientProvider);
       final response = await ipc.send(
         IpcMessage(type: MessageType.scoutVods, payload: payload),
         timeout: const Duration(seconds: 30),
       );
+      if (!mounted) return;
       if (response.type == MessageType.error) {
         setState(() {
           _isLoadingVods = false;
@@ -185,45 +292,49 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
       } else {
         setState(() {
           _isLoadingVods = false;
-          _vods = (response.payload['vods'] as List<dynamic>? ??
-                  response.payload['videos'] as List<dynamic>? ??
-                  [])
+          _vods = (response.payload['vods'] as List<dynamic>? ?? [])
               .cast<Map<String, dynamic>>();
           _currentView = _ScoutView.vods;
         });
       }
     } catch (e) {
-      setState(() {
-        _isLoadingVods = false;
-        _error = e.toString();
-      });
+      if (mounted) {
+        setState(() {
+          _isLoadingVods = false;
+          _error = e.toString();
+        });
+      }
     }
   }
 
   // ── Clips ──
 
   Future<void> _fetchClips(String vodId, String vodTitle) async {
+    if (!_sidecarReady) return;
     setState(() {
       _isLoadingClips = true;
-      _selectedVodId = vodId;
       _selectedVodTitle = vodTitle;
       _clips = [];
       _error = null;
     });
     try {
       final payload = _buildCredentials();
-      final broadcasterId = _channelInfo?['user_id'] as String? ??
-          _channelInfo?['channel_id'] as String? ??
-          '';
-      payload['broadcaster_id'] = broadcasterId;
-      payload['channel_id'] = broadcasterId;
-      payload['vod_id'] = vodId;
+      if (_platform == 'twitch') {
+        payload['broadcaster_id'] =
+            _channelInfo?['user_id'] as String? ?? '';
+        payload['vod_id'] = vodId;
+      } else {
+        payload['channel_id'] =
+            _channelInfo?['channel_id'] as String? ?? '';
+        payload['vod_id'] = vodId;
+      }
       payload['limit'] = 20;
       final ipc = ref.read(ipcClientProvider);
       final response = await ipc.send(
         IpcMessage(type: MessageType.scoutClips, payload: payload),
         timeout: const Duration(seconds: 30),
       );
+      if (!mounted) return;
       if (response.type == MessageType.error) {
         setState(() {
           _isLoadingClips = false;
@@ -238,10 +349,12 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
         });
       }
     } catch (e) {
-      setState(() {
-        _isLoadingClips = false;
-        _error = e.toString();
-      });
+      if (mounted) {
+        setState(() {
+          _isLoadingClips = false;
+          _error = e.toString();
+        });
+      }
     }
   }
 
@@ -254,7 +367,6 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
     final taskId =
         'dl_${DateTime.now().millisecondsSinceEpoch}_${url.hashCode}';
 
-    // Register in Activity tracker
     ref.read(activityProvider.notifier).addTask(
           id: taskId,
           category: TaskCategory.download,
@@ -263,12 +375,12 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
           metadata: video,
         );
 
-    // Fire-and-forget IPC download
     final ipc = ref.read(ipcClientProvider);
-    final payload = <String, dynamic>{'url': url};
     ipc
         .send(
-      IpcMessage(type: MessageType.downloadVideo, payload: payload),
+      IpcMessage(
+          type: MessageType.downloadClip,
+          payload: <String, dynamic>{'url': url}),
       timeout: const Duration(minutes: 15),
       onProgress: (p) {
         ref.read(activityProvider.notifier).updateProgress(
@@ -290,23 +402,18 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
               resultPath: response.payload['path'] as String?,
             );
       }
-    }).catchError((e) {
+    }).catchError((Object e) {
       ref.read(activityProvider.notifier).fail(taskId, e.toString());
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Downloading "$title" in background...'),
-        duration: const Duration(seconds: 2),
-        action: SnackBarAction(
-          label: 'Activity',
-          onPressed: () {
-            // Switch to Activity tab (index 3 after we add it)
-            // The main.dart will be updated to include Activity at index 3
-          },
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Downloading "$title" in background...'),
+          duration: const Duration(seconds: 2),
         ),
-      ),
-    );
+      );
+    }
   }
 
   void _downloadClip(Map<String, dynamic> clip) {
@@ -320,7 +427,8 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
           id: taskId,
           category: TaskCategory.download,
           title: title,
-          subtitle: 'Clip from ${_channelInfo?['display_name'] ?? _channelInfo?['title'] ?? 'channel'}',
+          subtitle:
+              'Clip from ${_channelInfo?['display_name'] ?? _channelInfo?['title'] ?? 'channel'}',
           metadata: clip,
         );
 
@@ -328,8 +436,7 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
     final payload = <String, dynamic>{'url': url};
     if (clip['vod_offset'] != null && clip['duration'] != null) {
       payload['start_time'] = clip['vod_offset'];
-      payload['end_time'] =
-          (clip['vod_offset'] as num).toDouble() +
+      payload['end_time'] = (clip['vod_offset'] as num).toDouble() +
           (clip['duration'] as num).toDouble();
     }
 
@@ -357,16 +464,27 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
               resultPath: response.payload['path'] as String?,
             );
       }
-    }).catchError((e) {
+    }).catchError((Object e) {
       ref.read(activityProvider.notifier).fail(taskId, e.toString());
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Downloading clip "$title" in background...'),
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Downloading clip "$title" in background...'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  // ── Video Preview ──
+
+  void _previewVideo(Map<String, dynamic> video) {
+    final url = video['url'] as String? ?? '';
+    if (url.isEmpty) return;
+    final title = video['title'] as String? ?? 'Video';
+    VideoPlayerOverlay.show(context, url: url, title: title);
   }
 
   // ── Navigation ──
@@ -384,6 +502,9 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
           _channelInfo = null;
           _vods = [];
           _clips = [];
+        case _ScoutView.search:
+          _currentView = _ScoutView.trending;
+          _searchResults = [];
         case _ScoutView.trending:
           break;
       }
@@ -394,6 +515,20 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    if (!_sidecarReady) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('Waiting for sidecar to connect...',
+                style: TextStyle(color: Colors.white38)),
+          ],
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -403,18 +538,25 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
           Row(
             children: [
               if (_currentView != _ScoutView.trending)
-                IconButton(
-                  icon: const Icon(Icons.arrow_back, size: 20),
-                  onPressed: _goBack,
-                  tooltip: 'Back',
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back, size: 20),
+                    onPressed: _goBack,
+                    tooltip: 'Back',
+                  ),
                 ),
               const Icon(
                   Icons.trending_up, size: 28, color: Color(0xFF6C5CE7)),
               const SizedBox(width: 12),
-              Text(
-                _headerTitle,
-                style: theme.textTheme.headlineMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
+              Expanded(
+                child: Text(
+                  _headerTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.headlineMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
               ),
             ],
           ),
@@ -438,12 +580,14 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
   String get _headerTitle {
     return switch (_currentView) {
       _ScoutView.trending => 'Viral Scout',
+      _ScoutView.search =>
+        'Search: "${_searchController.text.trim()}"',
       _ScoutView.channel =>
         _channelInfo?['display_name'] as String? ??
             _channelInfo?['title'] as String? ??
             'Channel',
       _ScoutView.vods =>
-        '${_channelInfo?['display_name'] ?? _channelInfo?['title'] ?? 'Channel'} — VODs',
+        '${_channelInfo?['display_name'] ?? _channelInfo?['title'] ?? 'Channel'} — Videos',
       _ScoutView.clips => _selectedVodTitle ?? 'Clips',
     };
   }
@@ -452,8 +596,11 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
     return switch (_currentView) {
       _ScoutView.trending =>
         'Discover trending videos ranked by viral clip potential.',
-      _ScoutView.channel => 'Search a channel to explore their content.',
-      _ScoutView.vods => 'Select a VOD to browse viewer-created clips.',
+      _ScoutView.search =>
+        '${_searchResults.length} results. Click thumbnail to preview, download icon to save.',
+      _ScoutView.channel => 'Channel found. Click "View Videos" to browse.',
+      _ScoutView.vods =>
+        '${_vods.length} videos. Click to preview or browse clips.',
       _ScoutView.clips =>
         '${_clips.length} clips found. Download to use in your projects.',
     };
@@ -470,25 +617,55 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
             DropdownMenuItem(value: 'twitch', child: Text('Twitch')),
           ],
           onChanged: (p) {
-            setState(() {
-              _platform = p!;
-              if (_currentView == _ScoutView.trending) {
-                _fetchTrending();
-              }
-            });
+            if (p == null) return;
+            setState(() => _platform = p);
           },
         ),
         const SizedBox(width: 12),
-        // Channel search
+        // Video search bar
         SizedBox(
-          width: 280,
+          width: 220,
+          child: TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              hintText: 'Search videos...',
+              prefixIcon: const Icon(Icons.search, size: 18),
+              border: const OutlineInputBorder(),
+              isDense: true,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              suffixIcon: _isSearching
+                  ? const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2)),
+                    )
+                  : null,
+            ),
+            onSubmitted: (_) => _searchVideos(),
+          ),
+        ),
+        const SizedBox(width: 4),
+        FilledButton(
+          onPressed: _isSearching ? null : _searchVideos,
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+          child: const Text('Search'),
+        ),
+        const SizedBox(width: 12),
+        Container(width: 1, height: 32, color: Colors.white12),
+        const SizedBox(width: 12),
+        // Channel search bar
+        SizedBox(
+          width: 200,
           child: TextField(
             controller: _channelSearchController,
             decoration: InputDecoration(
-              hintText: _platform == 'twitch'
-                  ? 'Search Twitch channel...'
-                  : 'Search YouTube channel...',
-              prefixIcon: const Icon(Icons.person_search, size: 20),
+              hintText: 'Channel name...',
+              prefixIcon: const Icon(Icons.person_search, size: 18),
               border: const OutlineInputBorder(),
               isDense: true,
               contentPadding:
@@ -497,25 +674,27 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                   ? const Padding(
                       padding: EdgeInsets.all(10),
                       child: SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2)),
                     )
                   : null,
             ),
             onSubmitted: (_) => _searchChannel(),
           ),
         ),
-        const SizedBox(width: 8),
-        FilledButton.icon(
+        const SizedBox(width: 4),
+        FilledButton(
           onPressed: _isSearchingChannel ? null : _searchChannel,
-          icon: const Icon(Icons.person_search, size: 18),
-          label: const Text('Find Channel'),
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            backgroundColor: Colors.white10,
+          ),
+          child: const Text('Find Channel'),
         ),
-        const SizedBox(width: 16),
+        const SizedBox(width: 12),
         Container(width: 1, height: 32, color: Colors.white12),
-        const SizedBox(width: 16),
+        const SizedBox(width: 12),
         FilledButton.icon(
           onPressed: _isLoading ? null : _fetchTrending,
           icon: const Icon(Icons.trending_up, size: 18),
@@ -527,7 +706,7 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
           ),
         ),
         const Spacer(),
-        if (_videos.isNotEmpty && _currentView == _ScoutView.trending)
+        if (_currentView == _ScoutView.trending && _videos.isNotEmpty)
           Text(
             '${_videos.length} videos',
             style: const TextStyle(fontSize: 12, color: Colors.white38),
@@ -538,13 +717,16 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
 
   Widget _buildContent(ThemeData theme) {
     if (_error != null &&
-        (_currentView == _ScoutView.trending && _videos.isEmpty ||
-            _currentView != _ScoutView.trending)) {
+        ((_currentView == _ScoutView.trending && _videos.isEmpty) ||
+            (_currentView == _ScoutView.search && _searchResults.isEmpty) ||
+            (_currentView != _ScoutView.trending &&
+                _currentView != _ScoutView.search))) {
       return _buildErrorState();
     }
 
     return switch (_currentView) {
       _ScoutView.trending => _buildTrendingView(theme),
+      _ScoutView.search => _buildSearchView(theme),
       _ScoutView.channel => _buildChannelView(theme),
       _ScoutView.vods => _buildVodsView(theme),
       _ScoutView.clips => _buildClipsView(theme),
@@ -558,7 +740,12 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
         children: [
           const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
           const SizedBox(height: 16),
-          Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+          SizedBox(
+            width: 400,
+            child: Text(_error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.redAccent)),
+          ),
           const SizedBox(height: 16),
           FilledButton.icon(
             onPressed: () {
@@ -590,40 +777,77 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
     }
 
     if (_videos.isEmpty) {
+      return _buildEmptyVideoState(
+        'No trending videos found.',
+        _platform == 'youtube'
+            ? 'Add a YouTube Data API key in Settings.'
+            : 'Add TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET in .env.',
+      );
+    }
+
+    return _buildVideoList(_videos);
+  }
+
+  // ── Search View ──
+
+  Widget _buildSearchView(ThemeData theme) {
+    if (_isSearching) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.trending_up, size: 64, color: Colors.white24),
+            const CircularProgressIndicator(),
             const SizedBox(height: 16),
-            const Text('No trending videos found.',
-                style: TextStyle(color: Colors.white38, fontSize: 15)),
-            const SizedBox(height: 8),
-            Text(
-              _platform == 'youtube'
-                  ? 'Add a YouTube Data API key in Settings.'
-                  : 'Add TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET in .env.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white24, fontSize: 12),
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: _fetchTrending,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Retry'),
-            ),
+            Text('$_progressStage... $_progressPercent%'),
           ],
         ),
       );
     }
 
+    if (_searchResults.isEmpty) {
+      return _buildEmptyVideoState(
+        'No results found.',
+        'Try a different search term or check your API key.',
+      );
+    }
+
+    return _buildVideoList(_searchResults);
+  }
+
+  Widget _buildEmptyVideoState(String title, String subtitle) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.video_library_outlined,
+              size: 64, color: Colors.white24),
+          const SizedBox(height: 16),
+          Text(title,
+              style: const TextStyle(color: Colors.white38, fontSize: 15)),
+          const SizedBox(height: 8),
+          Text(subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white24, fontSize: 12)),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _fetchTrending,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Refresh'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVideoList(List<Map<String, dynamic>> videos) {
     return ListView.builder(
-      itemCount: _videos.length,
+      itemCount: videos.length,
       itemBuilder: (context, index) {
-        return _TrendingVideoCard(
-          video: _videos[index],
+        return _VideoCard(
+          video: videos[index],
           rank: index + 1,
-          onDownload: () => _downloadVideo(_videos[index]),
+          onDownload: () => _downloadVideo(videos[index]),
+          onPreview: () => _previewVideo(videos[index]),
         );
       },
     );
@@ -642,15 +866,17 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
     final name = _channelInfo!['display_name'] as String? ??
         _channelInfo!['title'] as String? ??
         'Unknown';
-    final profileImg = _channelInfo!['profile_image_url'] as String? ?? '';
+    final profileImg = _channelInfo!['profile_image_url'] as String? ??
+        _channelInfo!['thumbnail_url'] as String? ??
+        '';
     final description = _channelInfo!['description'] as String? ?? '';
     final viewCount = _channelInfo!['view_count'] as int? ??
         _channelInfo!['subscriber_count'] as int? ??
         0;
+    final videoCount = _channelInfo!['video_count'] as int? ?? 0;
 
     return Column(
       children: [
-        // Channel info card
         Card(
           child: Padding(
             padding: const EdgeInsets.all(20),
@@ -660,9 +886,14 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(40),
                     child: Image.network(profileImg,
-                        width: 64, height: 64, fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) =>
-                            const Icon(Icons.person, size: 64)),
+                        width: 64,
+                        height: 64,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                            width: 64,
+                            height: 64,
+                            color: Colors.white10,
+                            child: const Icon(Icons.person, size: 32))),
                   ),
                 if (profileImg.isNotEmpty) const SizedBox(width: 16),
                 Expanded(
@@ -682,10 +913,24 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                                 fontSize: 13)),
                       ],
                       const SizedBox(height: 8),
-                      Text(
-                        '${_formatCount(viewCount)} total views  ·  $_platform',
-                        style: const TextStyle(
-                            color: Colors.white38, fontSize: 12),
+                      Row(
+                        children: [
+                          Text(
+                            '${_formatCount(viewCount)} ${_platform == 'twitch' ? 'total views' : 'subscribers'}',
+                            style: const TextStyle(
+                                color: Colors.white38, fontSize: 12),
+                          ),
+                          if (videoCount > 0) ...[
+                            const Text('  ·  ',
+                                style: TextStyle(color: Colors.white24)),
+                            Text('$videoCount videos',
+                                style: const TextStyle(
+                                    color: Colors.white38, fontSize: 12)),
+                          ],
+                          Text('  ·  $_platform',
+                              style: const TextStyle(
+                                  color: Colors.white24, fontSize: 12)),
+                        ],
                       ),
                     ],
                   ),
@@ -693,24 +938,21 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                 FilledButton.icon(
                   onPressed: _isLoadingVods ? null : _fetchVods,
                   icon: const Icon(Icons.video_library, size: 18),
-                  label: Text(_isLoadingVods ? 'Loading...' : 'View VODs'),
+                  label: Text(_isLoadingVods ? 'Loading...' : 'View Videos'),
                 ),
               ],
             ),
           ),
         ),
         const SizedBox(height: 16),
-        // VOD grid below
         if (_isLoadingVods)
-          const Expanded(
-            child: Center(child: CircularProgressIndicator()),
-          )
+          const Expanded(child: Center(child: CircularProgressIndicator()))
         else if (_vods.isNotEmpty)
           Expanded(child: _buildVodGrid(theme))
         else
           const Expanded(
             child: Center(
-              child: Text('Click "View VODs" to load content.',
+              child: Text('Click "View Videos" to load content.',
                   style: TextStyle(color: Colors.white38)),
             ),
           ),
@@ -726,7 +968,7 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
     }
     if (_vods.isEmpty) {
       return const Center(
-        child: Text('No VODs found for this channel.',
+        child: Text('No videos found for this channel.',
             style: TextStyle(color: Colors.white38)),
       );
     }
@@ -737,29 +979,38 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
     return GridView.builder(
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 340,
-        childAspectRatio: 16 / 11,
+        childAspectRatio: 16 / 12,
         crossAxisSpacing: 12,
         mainAxisSpacing: 12,
       ),
       itemCount: _vods.length,
       itemBuilder: (context, index) {
         final vod = _vods[index];
-        final vodId =
-            vod['vod_id'] as String? ?? vod['video_id'] as String? ?? '';
+        final vodId = vod['vod_id'] as String? ??
+            vod['video_id'] as String? ??
+            '';
         final title = vod['title'] as String? ?? 'Untitled';
         final thumbnail = vod['thumbnail_url'] as String? ?? '';
         final viewCount = vod['view_count'] as int? ?? 0;
         final duration = vod['duration'] as String? ?? '';
-        final createdAt = vod['created_at'] as String? ?? '';
+        final dateStr = vod['created_at'] as String? ??
+            vod['published_at'] as String? ??
+            '';
+        final url = vod['url'] as String? ?? '';
 
         return Card(
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            onTap: () => _fetchClips(vodId, title),
+            onTap: () {
+              if (_platform == 'twitch') {
+                _fetchClips(vodId, title);
+              } else if (url.isNotEmpty) {
+                VideoPlayerOverlay.show(context, url: url, title: title);
+              }
+            },
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Thumbnail
                 Expanded(
                   child: Stack(
                     fit: StackFit.expand,
@@ -776,7 +1027,6 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                           child: const Icon(Icons.video_library,
                               size: 32, color: Colors.white24),
                         ),
-                      // Duration badge
                       if (duration.isNotEmpty)
                         Positioned(
                           bottom: 6,
@@ -793,7 +1043,6 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                                     fontSize: 11, color: Colors.white)),
                           ),
                         ),
-                      // Play overlay
                       Center(
                         child: Container(
                           width: 40,
@@ -806,10 +1055,27 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                               size: 24, color: Colors.white70),
                         ),
                       ),
+                      if (url.isNotEmpty)
+                        Positioned(
+                          top: 6,
+                          right: 6,
+                          child: Material(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(16),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(16),
+                              onTap: () => _downloadVideo(vod),
+                              child: const Padding(
+                                padding: EdgeInsets.all(6),
+                                child: Icon(Icons.download,
+                                    size: 16, color: Colors.white70),
+                              ),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
-                // Info
                 Padding(
                   padding: const EdgeInsets.all(8),
                   child: Column(
@@ -828,13 +1094,22 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                             style: const TextStyle(
                                 fontSize: 11, color: Colors.white38),
                           ),
-                          if (createdAt.isNotEmpty) ...[
+                          if (dateStr.isNotEmpty) ...[
                             const Text(' · ',
                                 style: TextStyle(
                                     fontSize: 11, color: Colors.white24)),
-                            Text(_formatDate(createdAt),
+                            Text(_formatDate(dateStr),
                                 style: const TextStyle(
                                     fontSize: 11, color: Colors.white38)),
+                          ],
+                          if (_platform == 'twitch') ...[
+                            const Spacer(),
+                            const Icon(Icons.content_cut,
+                                size: 12, color: Colors.white24),
+                            const SizedBox(width: 4),
+                            const Text('Clips',
+                                style: TextStyle(
+                                    fontSize: 10, color: Colors.white24)),
                           ],
                         ],
                       ),
@@ -873,7 +1148,7 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
             FilledButton.icon(
               onPressed: _goBack,
               icon: const Icon(Icons.arrow_back),
-              label: const Text('Back to VODs'),
+              label: const Text('Back to Videos'),
             ),
           ],
         ),
@@ -890,6 +1165,7 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
         final duration = (clip['duration'] as num?)?.toDouble() ?? 0.0;
         final creatorName = clip['creator_name'] as String? ?? '';
         final vodOffset = clip['vod_offset'] as int? ?? 0;
+        final clipUrl = clip['url'] as String? ?? '';
 
         return Card(
           margin: const EdgeInsets.only(bottom: 8),
@@ -897,44 +1173,60 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
-                // Thumbnail
+                // Thumbnail with play overlay
                 if (thumbnail.isNotEmpty)
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: SizedBox(
-                      width: 140,
-                      height: 80,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          Image.network(thumbnail, fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => Container(
-                                  color: Colors.white10,
-                                  child: const Icon(Icons.broken_image,
-                                      size: 24, color: Colors.white24))),
-                          Positioned(
-                            bottom: 4,
-                            right: 4,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 4, vertical: 1),
-                              decoration: BoxDecoration(
-                                color: Colors.black87,
-                                borderRadius: BorderRadius.circular(3),
-                              ),
-                              child: Text(
-                                '${duration.toStringAsFixed(0)}s',
-                                style: const TextStyle(
-                                    fontSize: 10, color: Colors.white),
+                  GestureDetector(
+                    onTap: clipUrl.isNotEmpty
+                        ? () => _previewVideo(clip)
+                        : null,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: SizedBox(
+                        width: 140,
+                        height: 80,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Image.network(thumbnail, fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => Container(
+                                    color: Colors.white10,
+                                    child: const Icon(Icons.broken_image,
+                                        size: 24, color: Colors.white24))),
+                            Positioned(
+                              bottom: 4,
+                              right: 4,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 4, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: Colors.black87,
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                                child: Text(
+                                  '${duration.toStringAsFixed(0)}s',
+                                  style: const TextStyle(
+                                      fontSize: 10, color: Colors.white),
+                                ),
                               ),
                             ),
-                          ),
-                        ],
+                            Center(
+                              child: Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: Colors.black45,
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: const Icon(Icons.play_arrow,
+                                    size: 18, color: Colors.white70),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 if (thumbnail.isNotEmpty) const SizedBox(width: 12),
-                // Clip info
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -976,7 +1268,6 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                   ),
                 ),
                 const SizedBox(width: 12),
-                // Actions
                 Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -991,21 +1282,32 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                       ),
                     ),
                     const SizedBox(height: 6),
-                    IconButton(
-                      icon: const Icon(Icons.link, size: 18),
-                      tooltip: 'Copy URL',
-                      onPressed: () {
-                        final url = clip['url'] as String? ?? '';
-                        if (url.isNotEmpty) {
-                          Clipboard.setData(ClipboardData(text: url));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('URL copied to clipboard'),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        }
-                      },
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (clipUrl.isNotEmpty)
+                          IconButton(
+                            icon: const Icon(Icons.play_circle_outline,
+                                size: 18),
+                            tooltip: 'Preview',
+                            onPressed: () => _previewVideo(clip),
+                          ),
+                        IconButton(
+                          icon: const Icon(Icons.link, size: 18),
+                          tooltip: 'Copy URL',
+                          onPressed: () {
+                            if (clipUrl.isNotEmpty) {
+                              Clipboard.setData(ClipboardData(text: clipUrl));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('URL copied'),
+                                  duration: Duration(seconds: 1),
+                                ),
+                              );
+                            }
+                          },
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1049,17 +1351,19 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
   }
 }
 
-// ── Trending Video Card ──
+// ── Video Card (used in trending + search views) ──
 
-class _TrendingVideoCard extends StatelessWidget {
+class _VideoCard extends StatelessWidget {
   final Map<String, dynamic> video;
   final int rank;
   final VoidCallback onDownload;
+  final VoidCallback onPreview;
 
-  const _TrendingVideoCard({
+  const _VideoCard({
     required this.video,
     required this.rank,
     required this.onDownload,
+    required this.onPreview,
   });
 
   @override
@@ -1102,18 +1406,38 @@ class _TrendingVideoCard extends StatelessWidget {
                   )),
             ),
             const SizedBox(width: 12),
-            // Thumbnail
+            // Thumbnail (clickable for preview)
             if (thumbnailUrl.isNotEmpty)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: SizedBox(
-                  width: 120,
-                  height: 68,
-                  child: Image.network(thumbnailUrl, fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(
-                          color: Colors.white10,
-                          child: const Icon(Icons.broken_image,
-                              size: 24, color: Colors.white24))),
+              GestureDetector(
+                onTap: url.isNotEmpty ? onPreview : null,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: SizedBox(
+                    width: 120,
+                    height: 68,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.network(thumbnailUrl, fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                                color: Colors.white10,
+                                child: const Icon(Icons.broken_image,
+                                    size: 24, color: Colors.white24))),
+                        Center(
+                          child: Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: Colors.black45,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: const Icon(Icons.play_arrow,
+                                size: 18, color: Colors.white70),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             if (thumbnailUrl.isNotEmpty) const SizedBox(width: 12),
@@ -1134,7 +1458,12 @@ class _TrendingVideoCard extends StatelessWidget {
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      _StatChip(Icons.visibility, _formatCount(views)),
+                      const Icon(Icons.visibility,
+                          size: 14, color: Colors.white38),
+                      const SizedBox(width: 4),
+                      Text(_formatCount(views),
+                          style: const TextStyle(
+                              fontSize: 11, color: Colors.white54)),
                     ],
                   ),
                 ],
@@ -1156,10 +1485,15 @@ class _TrendingVideoCard extends StatelessWidget {
               ],
             ),
             const SizedBox(width: 8),
-            // Download + Copy
+            // Actions
             Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                IconButton(
+                  icon: const Icon(Icons.play_circle_outline, size: 20),
+                  tooltip: 'Preview',
+                  onPressed: url.isEmpty ? null : onPreview,
+                ),
                 IconButton(
                   icon: const Icon(Icons.download, size: 20),
                   tooltip: 'Download',
@@ -1174,7 +1508,7 @@ class _TrendingVideoCard extends StatelessWidget {
                           Clipboard.setData(ClipboardData(text: url));
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text('URL copied to clipboard'),
+                              content: Text('URL copied'),
                               duration: Duration(seconds: 1),
                             ),
                           );
@@ -1200,25 +1534,6 @@ class _TrendingVideoCard extends StatelessWidget {
     }
     if (velocity >= 1000) return '${(velocity / 1000).toStringAsFixed(1)}K/h';
     return '${velocity.toStringAsFixed(0)}/h';
-  }
-}
-
-class _StatChip extends StatelessWidget {
-  final IconData icon;
-  final String value;
-  const _StatChip(this.icon, this.value);
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 14, color: Colors.white38),
-        const SizedBox(width: 4),
-        Text(value,
-            style: const TextStyle(fontSize: 11, color: Colors.white54)),
-      ],
-    );
   }
 }
 

@@ -18,19 +18,284 @@ class SettingsPage extends ConsumerWidget {
       padding: const EdgeInsets.all(24),
       child: ListView(
         children: [
-          Text('Settings', style: theme.textTheme.headlineMedium),
-          const SizedBox(height: 24),
+          Row(
+            children: [
+              const Icon(Icons.settings, size: 28, color: Color(0xFF6C5CE7)),
+              const SizedBox(width: 12),
+              Text('Settings', style: theme.textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              )),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Manage API keys, updates, and application preferences.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: Colors.white.withOpacity(0.4),
+            ),
+          ),
+          const SizedBox(height: 28),
+          const _ApiKeySection(),
+          const SizedBox(height: 20),
           const _UpdateSection(),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
           const _SidecarStatusSection(),
-          const SizedBox(height: 24),
-          const _ApiKeySummarySection(),
-          const SizedBox(height: 24),
-          _AboutSection(),
+          const SizedBox(height: 20),
+          const _AboutSection(),
         ],
       ),
     );
   }
+}
+
+// ───────────────────── API Key Management ─────────────────────
+
+class _ApiKeySection extends ConsumerStatefulWidget {
+  const _ApiKeySection();
+
+  @override
+  ConsumerState<_ApiKeySection> createState() => _ApiKeySectionState();
+}
+
+class _ApiKeySectionState extends ConsumerState<_ApiKeySection> {
+  final _keyController = TextEditingController();
+  LlmProvider _selectedProvider = LlmProvider.openai;
+
+  @override
+  void dispose() {
+    _keyController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final apiService = ref.watch(apiKeyServiceProvider);
+
+    return _SettingsCard(
+      icon: Icons.vpn_key_rounded,
+      title: 'API Keys',
+      subtitle: 'Keys are encrypted and stored locally. '
+          'ClipMaster uses round-robin load balancing across all healthy keys.',
+      children: [
+        // Add key form
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.03),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.white.withOpacity(0.06)),
+          ),
+          child: Row(
+            children: [
+              // Provider dropdown
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.04),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<LlmProvider>(
+                    value: _selectedProvider,
+                    dropdownColor: const Color(0xFF1E1E2E),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    items: LlmProvider.values.map((p) {
+                      return DropdownMenuItem(
+                        value: p,
+                        child: Text(_providerLabel(p)),
+                      );
+                    }).toList(),
+                    onChanged: (p) => setState(() => _selectedProvider = p!),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 40,
+                  child: TextField(
+                    controller: _keyController,
+                    obscureText: true,
+                    style: const TextStyle(fontSize: 13),
+                    decoration: const InputDecoration(
+                      hintText: 'Paste API key...',
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              SizedBox(
+                height: 40,
+                child: FilledButton.icon(
+                  onPressed: () async {
+                    final key = _keyController.text.trim();
+                    if (key.isEmpty) return;
+                    await apiService.addKey(_selectedProvider, key);
+                    _keyController.clear();
+                    setState(() {});
+                  },
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add'),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        // Key list per provider
+        ...LlmProvider.values.map((provider) {
+          final keys = apiService.getKeysForProvider(provider);
+          if (keys.isEmpty) return const SizedBox.shrink();
+          return _buildProviderKeys(provider, keys, apiService);
+        }),
+        // Empty state
+        if (LlmProvider.values.every(
+            (p) => apiService.getKeysForProvider(p).isEmpty))
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline,
+                    size: 16, color: Colors.white.withOpacity(0.3)),
+                const SizedBox(width: 8),
+                Text(
+                  'No API keys configured. Add a key above to get started.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.white.withOpacity(0.3),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildProviderKeys(
+    LlmProvider provider,
+    List<ApiKeyEntry> keys,
+    ApiKeyService service,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _providerColor(provider).withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    _providerLabel(provider),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 11,
+                      color: _providerColor(provider),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${keys.length} key${keys.length > 1 ? 's' : ''}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.white.withOpacity(0.3),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ...keys.map((entry) => Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.03),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white.withOpacity(0.05)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      entry.isHealthy
+                          ? Icons.check_circle_rounded
+                          : Icons.error_rounded,
+                      color: entry.isHealthy
+                          ? const Color(0xFF00C853)
+                          : Colors.redAccent,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      entry.masked,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      'Used ${entry.usageCount}x',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.white.withOpacity(0.3),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        icon: Icon(Icons.close,
+                            size: 16,
+                            color: Colors.white.withOpacity(0.3)),
+                        onPressed: () async {
+                          await service.removeKey(provider, entry.masked);
+                          setState(() {});
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+
+  String _providerLabel(LlmProvider p) => switch (p) {
+        LlmProvider.openai => 'OpenAI',
+        LlmProvider.claude => 'Claude',
+        LlmProvider.gemini => 'Gemini',
+        LlmProvider.github => 'GitHub',
+      };
+
+  Color _providerColor(LlmProvider p) => switch (p) {
+        LlmProvider.openai => const Color(0xFF10A37F),
+        LlmProvider.claude => const Color(0xFFD97706),
+        LlmProvider.gemini => const Color(0xFF4285F4),
+        LlmProvider.github => Colors.white70,
+      };
 }
 
 // ───────────────────── Update Checker ─────────────────────
@@ -44,27 +309,36 @@ class _UpdateSection extends ConsumerWidget {
     final currentVersion = AutoUpdater.getInstalledVersion();
 
     return _SettingsCard(
-      icon: Icons.system_update,
+      icon: Icons.system_update_rounded,
       title: 'Updates',
       children: [
         Row(
           children: [
-            Text('Current version: ',
-                style: TextStyle(color: Colors.white54, fontSize: 13)),
-            Text('v$currentVersion',
-                style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold)),
+            Text('Installed version',
+                style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 13)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text('v$currentVersion',
+                  style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+            ),
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 14),
         updateState.when(
           data: (update) {
             if (update == null) {
               return Row(
                 children: [
-                  const Icon(Icons.check_circle, color: Colors.green, size: 18),
+                  const Icon(Icons.check_circle_rounded,
+                      color: Color(0xFF00C853), size: 18),
                   const SizedBox(width: 8),
                   const Text('You\'re on the latest version.',
                       style: TextStyle(fontSize: 13)),
@@ -84,13 +358,13 @@ class _UpdateSection extends ConsumerWidget {
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.new_releases,
+                    const Icon(Icons.new_releases_rounded,
                         color: Color(0xFF6C5CE7), size: 18),
                     const SizedBox(width: 8),
                     Text(
-                      'Update available: v${update.version}',
+                      'v${update.version} available',
                       style: const TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 13),
+                          fontWeight: FontWeight.w600, fontSize: 13),
                     ),
                     const Spacer(),
                     if (update.hasInstaller)
@@ -103,23 +377,27 @@ class _UpdateSection extends ConsumerWidget {
                       OutlinedButton.icon(
                         onPressed: () => _openUrl(update.htmlUrl),
                         icon: const Icon(Icons.open_in_new, size: 16),
-                        label: const Text('View on GitHub'),
+                        label: const Text('View Release'),
                       ),
                   ],
                 ),
                 if (update.releaseNotes.isNotEmpty) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 10),
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.05),
+                      color: Colors.white.withOpacity(0.03),
                       borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.white.withOpacity(0.05)),
                     ),
                     child: Text(
                       update.releaseNotes,
-                      style:
-                          const TextStyle(fontSize: 12, color: Colors.white54),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withOpacity(0.4),
+                        height: 1.5,
+                      ),
                       maxLines: 6,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -128,20 +406,27 @@ class _UpdateSection extends ConsumerWidget {
               ],
             );
           },
-          loading: () => const Row(
+          loading: () => Row(
             children: [
               SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2)),
-              SizedBox(width: 8),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white.withOpacity(0.3),
+                  )),
+              const SizedBox(width: 10),
               Text('Checking for updates...',
-                  style: TextStyle(fontSize: 13, color: Colors.white54)),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.white.withOpacity(0.4),
+                  )),
             ],
           ),
           error: (e, _) => Row(
             children: [
-              const Icon(Icons.warning_amber, color: Colors.orange, size: 18),
+              const Icon(Icons.warning_amber_rounded,
+                  color: Colors.orange, size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -159,12 +444,6 @@ class _UpdateSection extends ConsumerWidget {
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'Updates are checked automatically every 30 minutes.\n'
-          'For private repos, add a GitHub Personal Access Token in API Keys.',
-          style: TextStyle(fontSize: 11, color: Colors.white24),
         ),
       ],
     );
@@ -208,79 +487,64 @@ class _SidecarStatusSection extends ConsumerWidget {
     final connected = ipc.isConnected;
 
     return _SettingsCard(
-      icon: Icons.dns,
+      icon: Icons.dns_rounded,
       title: 'Python Sidecar',
       children: [
         Row(
           children: [
-            Icon(
-              connected ? Icons.check_circle : Icons.error,
-              color: connected ? Colors.green : Colors.redAccent,
-              size: 18,
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: connected
+                    ? const Color(0xFF00C853)
+                    : Colors.redAccent,
+                boxShadow: [
+                  BoxShadow(
+                    color: (connected
+                            ? const Color(0xFF00C853)
+                            : Colors.redAccent)
+                        .withOpacity(0.4),
+                    blurRadius: 6,
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
             Text(
               connected ? 'Connected' : 'Not connected',
               style: TextStyle(
                 fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: connected ? Colors.green : Colors.redAccent,
+                fontWeight: FontWeight.w600,
+                color: connected
+                    ? const Color(0xFF00C853)
+                    : Colors.redAccent,
               ),
             ),
           ],
         ),
         if (!connected) ...[
-          const SizedBox(height: 8),
-          const Text(
-            'The Python sidecar handles AI features (Fact Shorts, Viral Scout). '
-            'If it failed to start, check:\n'
-            '  1. Run setup.bat (Windows) or setup.sh (Mac/Linux) first\n'
-            '  2. Python 3.10+ must be installed\n'
-            '  3. Check the Dev Console for error details',
-            style: TextStyle(fontSize: 12, color: Colors.white54),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.redAccent.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.redAccent.withOpacity(0.15)),
+            ),
+            child: Text(
+              'The sidecar powers Fact Shorts and Viral Scout. '
+              'Run setup.bat (Windows) or setup.sh (Linux/Mac), '
+              'then restart the app. Check the Dev Console for details.',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.white.withOpacity(0.5),
+                height: 1.5,
+              ),
+            ),
           ),
         ],
-      ],
-    );
-  }
-}
-
-// ───────────────────── API Key Summary ─────────────────────
-
-class _ApiKeySummarySection extends ConsumerWidget {
-  const _ApiKeySummarySection();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final apiService = ref.watch(apiKeyServiceProvider);
-
-    final counts = <String, int>{};
-    for (final p in LlmProvider.values) {
-      final keys = apiService.getKeysForProvider(p);
-      if (keys.isNotEmpty) counts[p.name] = keys.length;
-    }
-
-    return _SettingsCard(
-      icon: Icons.key,
-      title: 'API Keys',
-      children: [
-        if (counts.isEmpty)
-          const Text(
-            'No API keys configured. Go to the API Keys tab to add one.',
-            style: TextStyle(fontSize: 13, color: Colors.white54),
-          )
-        else
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            children: counts.entries.map((e) {
-              return Chip(
-                avatar: const Icon(Icons.vpn_key, size: 14),
-                label: Text('${e.key.toUpperCase()}: ${e.value} key(s)',
-                    style: const TextStyle(fontSize: 12)),
-              );
-            }).toList(),
-          ),
       ],
     );
   }
@@ -289,21 +553,45 @@ class _ApiKeySummarySection extends ConsumerWidget {
 // ───────────────────── About ─────────────────────
 
 class _AboutSection extends StatelessWidget {
+  const _AboutSection();
+
   @override
   Widget build(BuildContext context) {
     return _SettingsCard(
-      icon: Icons.info_outline,
+      icon: Icons.info_outline_rounded,
       title: 'About',
       children: [
         Text(
-          'ClipMaster Pro — AI-powered short-form video creation tool.',
-          style: TextStyle(fontSize: 13, color: Colors.white54),
+          'ClipMaster Pro',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: Colors.white.withOpacity(0.7),
+          ),
         ),
         const SizedBox(height: 4),
         Text(
-          'Version: v${AutoUpdater.getInstalledVersion()}',
-          style: const TextStyle(
-              fontSize: 12, fontFamily: 'monospace', color: Colors.white38),
+          'AI-powered short-form video creation tool.',
+          style: TextStyle(
+            fontSize: 13,
+            color: Colors.white.withOpacity(0.35),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            'v${AutoUpdater.getInstalledVersion()}',
+            style: TextStyle(
+              fontSize: 11,
+              fontFamily: 'monospace',
+              color: Colors.white.withOpacity(0.35),
+            ),
+          ),
         ),
       ],
     );
@@ -315,11 +603,13 @@ class _AboutSection extends StatelessWidget {
 class _SettingsCard extends StatelessWidget {
   final IconData icon;
   final String title;
+  final String? subtitle;
   final List<Widget> children;
 
   const _SettingsCard({
     required this.icon,
     required this.title,
+    this.subtitle,
     required this.children,
   });
 
@@ -338,11 +628,26 @@ class _SettingsCard extends StatelessWidget {
                 Text(
                   title,
                   style: const TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 16),
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                  ),
                 ),
               ],
             ),
-            const Divider(height: 24),
+            if (subtitle != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                subtitle!,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.white.withOpacity(0.3),
+                ),
+              ),
+            ],
+            Divider(
+              height: 24,
+              color: Colors.white.withOpacity(0.06),
+            ),
             ...children,
           ],
         ),

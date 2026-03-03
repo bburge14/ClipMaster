@@ -43,7 +43,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
 
     if (apiKey == null || provider == null) {
       setState(() {
-        _error = 'No API keys configured. Go to API Keys tab and add one '
+        _error = 'No API keys configured. Go to Settings and add one '
             '(OpenAI, Claude, or Gemini).';
       });
       return;
@@ -116,13 +116,21 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Fact Shorts Generator', style: theme.textTheme.headlineMedium),
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome, size: 28, color: Color(0xFF6C5CE7)),
+              const SizedBox(width: 12),
+              Text('Fact Shorts', style: theme.textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              )),
+            ],
+          ),
           const SizedBox(height: 8),
           Text(
-            'Pick a category and generate interesting facts using AI. '
-            'Choose a fact to turn into a short-form video.',
-            style:
-                theme.textTheme.bodyMedium?.copyWith(color: Colors.white54),
+            'Generate AI-powered facts and turn them into short-form videos.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: Colors.white.withOpacity(0.4),
+            ),
           ),
           const SizedBox(height: 20),
           // Category chips
@@ -252,10 +260,10 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             style: TextStyle(color: Colors.white38, fontSize: 15),
           ),
           const SizedBox(height: 12),
-          const Text(
-            'Requires an API key (OpenAI, Claude, or Gemini)\nconfigured in the API Keys tab.',
+          Text(
+            'Requires an API key (OpenAI, Claude, or Gemini)\nconfigured in Settings.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white24, fontSize: 12),
+            style: TextStyle(color: Colors.white.withOpacity(0.2), fontSize: 12),
           ),
         ],
       ),

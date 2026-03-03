@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:logger/logger.dart';
 
+import '../utils/env_config.dart';
+
 final _log = Logger(printer: PrettyPrinter(methodCount: 0));
 
 /// Supported API key providers.
@@ -68,20 +70,46 @@ class ApiKeyService {
   ApiKeyService({FlutterSecureStorage? storage})
       : _storage = storage ?? const FlutterSecureStorage();
 
-  /// Load all keys from secure storage into memory.
+  /// Load all keys from secure storage into memory, then import any
+  /// keys from `.env` that aren't already stored.
   Future<void> init() async {
     final raw = await _storage.read(key: _storageKey);
-    if (raw == null) return;
-
-    try {
-      final List<dynamic> list = jsonDecode(raw) as List<dynamic>;
-      for (final item in list) {
-        final entry = ApiKeyEntry.fromJson(item as Map<String, dynamic>);
-        _keys.putIfAbsent(entry.provider, () => []).add(entry);
+    if (raw != null) {
+      try {
+        final List<dynamic> list = jsonDecode(raw) as List<dynamic>;
+        for (final item in list) {
+          final entry = ApiKeyEntry.fromJson(item as Map<String, dynamic>);
+          _keys.putIfAbsent(entry.provider, () => []).add(entry);
+        }
+        _log.i('Loaded ${list.length} API keys from secure storage.');
+      } catch (e) {
+        _log.e('Failed to parse stored API keys: $e');
       }
-      _log.i('Loaded ${list.length} API keys from secure storage.');
-    } catch (e) {
-      _log.e('Failed to parse stored API keys: $e');
+    }
+
+    // Auto-import keys from .env if not already present.
+    await _importFromEnv();
+  }
+
+  /// Import keys from the `.env` file. Only adds keys that don't already exist.
+  Future<void> _importFromEnv() async {
+    const envMappings = {
+      'GITHUB_TOKEN': LlmProvider.github,
+      'OPENAI_API_KEY': LlmProvider.openai,
+      'CLAUDE_API_KEY': LlmProvider.claude,
+      'GEMINI_API_KEY': LlmProvider.gemini,
+    };
+
+    for (final entry in envMappings.entries) {
+      final value = EnvConfig.get(entry.key);
+      if (value != null && value.isNotEmpty) {
+        final existing = _keys[entry.value] ?? [];
+        final alreadyStored = existing.any((k) => k.key == value);
+        if (!alreadyStored) {
+          await addKey(entry.value, value);
+          _log.i('Auto-imported ${entry.value.name} key from .env');
+        }
+      }
     }
   }
 

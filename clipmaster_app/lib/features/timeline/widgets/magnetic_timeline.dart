@@ -36,11 +36,23 @@ class _MagneticTimelineState extends State<MagneticTimeline> {
         Expanded(
           flex: 3,
           child: Container(
-            color: Colors.black,
-            child: const Center(
-              child: Text(
-                'Video Preview',
-                style: TextStyle(color: Colors.white24, fontSize: 18),
+            color: const Color(0xFF0A0A14),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.play_circle_outline,
+                      size: 56, color: Colors.white.withOpacity(0.08)),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Import a video to get started',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.15),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -53,7 +65,7 @@ class _MagneticTimelineState extends State<MagneticTimeline> {
         Expanded(
           flex: 2,
           child: Container(
-            color: const Color(0xFF1A1A2E),
+            color: const Color(0xFF141420),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -123,7 +135,7 @@ class _MagneticTimelineState extends State<MagneticTimeline> {
   Widget _buildTimelineToolbar(ThemeData theme) {
     return Container(
       height: 40,
-      color: const Color(0xFF16213E),
+      color: const Color(0xFF141420),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [

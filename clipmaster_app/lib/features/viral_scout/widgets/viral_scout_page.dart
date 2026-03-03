@@ -89,14 +89,21 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Viral Scout', style: theme.textTheme.headlineMedium),
+          Row(
+            children: [
+              const Icon(Icons.trending_up, size: 28, color: Color(0xFF6C5CE7)),
+              const SizedBox(width: 12),
+              Text('Viral Scout', style: theme.textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              )),
+            ],
+          ),
           const SizedBox(height: 8),
           Text(
-            'Discover trending videos ranked by viral clip potential. '
-            'Videos are scored by velocity (views/hour) and engagement '
-            'density ((likes + comments) / views).',
-            style:
-                theme.textTheme.bodyMedium?.copyWith(color: Colors.white54),
+            'Discover trending videos ranked by viral clip potential.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: Colors.white.withOpacity(0.4),
+            ),
           ),
           const SizedBox(height: 20),
           // Controls row

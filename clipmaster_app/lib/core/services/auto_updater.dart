@@ -218,6 +218,19 @@ class AutoUpdater {
     }
     final response = await http.Client().send(request);
 
+    // Validate the response before saving — if GitHub returns an HTML
+    // error page (404/302) we'd save garbage as .exe and get a
+    // "16-bit application" error when trying to launch it.
+    if (response.statusCode != 200) {
+      // Drain the stream so the client can be cleaned up.
+      await response.stream.drain<void>();
+      throw StateError(
+        'Download failed: HTTP ${response.statusCode}. '
+        'If this is a private repo, make sure your GitHub token has '
+        '"repo" scope. Release URL: ${update.htmlUrl}',
+      );
+    }
+
     final totalBytes = update.sizeBytes > 0 ? update.sizeBytes : 1;
     var receivedBytes = 0;
     final sink = file.openWrite();

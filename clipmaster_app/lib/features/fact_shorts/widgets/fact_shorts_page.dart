@@ -31,8 +31,10 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     String? apiKey;
     LlmProvider? provider;
 
-    // Try providers in order: openai, claude, gemini.
-    for (final p in LlmProvider.values.reversed) {
+    // Try LLM providers in preference order: openai, claude, gemini.
+    // Skip github — it's a PAT for the updater, not an LLM key.
+    const llmProviders = [LlmProvider.openai, LlmProvider.claude, LlmProvider.gemini];
+    for (final p in llmProviders) {
       final key = apiKeyService.getNextKey(p);
       if (key != null) {
         apiKey = key;

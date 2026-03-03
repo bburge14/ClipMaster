@@ -143,6 +143,19 @@ async def _handle_scout_trending(
     platform = msg.payload.get("platform", "youtube")
     limit = msg.payload.get("limit", 20)
 
+    await _send(ws, IpcMessage.progress(msg.id, "Finding yt-dlp", 5))
+    ytdlp = scout._find_ytdlp()
+    if not ytdlp:
+        await _send(
+            ws,
+            IpcMessage.error(
+                msg.id,
+                "yt-dlp not found. It should be in the bundled_binaries folder "
+                "next to the app. Try reinstalling ClipMaster Pro.",
+            ),
+        )
+        return
+
     await _send(ws, IpcMessage.progress(msg.id, "Fetching trending page", 10))
     await _send(ws, IpcMessage.progress(msg.id, "Scraping videos", 30))
     results = await scout.fetch_trending(platform=platform, limit=limit)

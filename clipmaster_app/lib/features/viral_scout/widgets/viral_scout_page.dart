@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
+import '../../../core/services/api_key_service.dart';
 
 class ViralScoutPage extends ConsumerStatefulWidget {
   const ViralScoutPage({super.key});
@@ -22,14 +23,16 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
   List<Map<String, dynamic>> _videos = [];
   String? _error;
 
+  final _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   List<Map<String, dynamic>> get _filteredVideos {
-    if (_searchQuery.isEmpty) return _videos;
-    final q = _searchQuery.toLowerCase();
-    return _videos.where((v) {
-      final title = (v['title'] as String? ?? '').toLowerCase();
-      final channel = (v['channel'] as String? ?? '').toLowerCase();
-      return title.contains(q) || channel.contains(q);
-    }).toList();
+    return _videos;
   }
 
   Future<void> _fetchTrending() async {
@@ -41,13 +44,26 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
     });
 
     try {
+      final apiKeyService = ref.read(apiKeyServiceProvider);
+      final youtubeKey = apiKeyService.getNextKey(LlmProvider.youtube);
+
+      final payload = <String, dynamic>{
+        'platform': _platform,
+        'limit': 20,
+      };
+      if (youtubeKey != null) {
+        payload['api_key'] = youtubeKey;
+      }
+      if (_searchQuery.isNotEmpty) {
+        payload['query'] = _searchQuery;
+      }
+
       final ipc = ref.read(ipcClientProvider);
       final response = await ipc.send(
         IpcMessage(
           type: MessageType.scoutTrending,
-          payload: {'platform': _platform, 'limit': 20},
+          payload: payload,
         ),
-        // yt-dlp can take a while to scrape trending videos.
         timeout: const Duration(seconds: 120),
         onProgress: (progress) {
           setState(() {
@@ -119,10 +135,11 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
               ),
               const SizedBox(width: 12),
               SizedBox(
-                width: 250,
+                width: 280,
                 child: TextField(
+                  controller: _searchController,
                   decoration: const InputDecoration(
-                    hintText: 'Filter by title or channel...',
+                    hintText: 'Search YouTube (or leave blank for trending)',
                     prefixIcon: Icon(Icons.search, size: 20),
                     border: OutlineInputBorder(),
                     isDense: true,
@@ -130,6 +147,7 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
                         EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   ),
                   onChanged: (q) => setState(() => _searchQuery = q),
+                  onSubmitted: (_) => _isLoading ? null : _fetchTrending(),
                 ),
               ),
               const SizedBox(width: 12),
@@ -195,19 +213,17 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
           children: [
             const Icon(Icons.trending_up, size: 64, color: Colors.white24),
             const SizedBox(height: 16),
-            Text(
-              _videos.isEmpty
-                  ? 'Click "Scout Trending" to discover viral videos.'
-                  : 'No videos match your filter.',
-              style: const TextStyle(color: Colors.white38, fontSize: 15),
+            const Text(
+              'Click "Scout Trending" to discover viral videos.',
+              style: TextStyle(color: Colors.white38, fontSize: 15),
             ),
-            if (_videos.isEmpty) ...[
-              const SizedBox(height: 8),
-              const Text(
-                'Videos will be ranked by velocity and engagement density.',
-                style: TextStyle(color: Colors.white24, fontSize: 12),
-              ),
-            ],
+            const SizedBox(height: 8),
+            const Text(
+              'Requires a YouTube Data API key in Settings.\n'
+              'Videos are ranked by velocity and engagement density.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white24, fontSize: 12),
+            ),
           ],
         ),
       );

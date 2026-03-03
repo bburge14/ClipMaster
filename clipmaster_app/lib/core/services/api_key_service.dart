@@ -9,7 +9,7 @@ import '../utils/env_config.dart';
 final _log = Logger(printer: PrettyPrinter(methodCount: 0));
 
 /// Supported API key providers.
-enum LlmProvider { gemini, claude, openai, github }
+enum LlmProvider { gemini, claude, openai, github, youtube, pexels, pixabay }
 
 /// Metadata for a single API key.
 class ApiKeyEntry {
@@ -98,6 +98,9 @@ class ApiKeyService {
       'OPENAI_API_KEY': LlmProvider.openai,
       'CLAUDE_API_KEY': LlmProvider.claude,
       'GEMINI_API_KEY': LlmProvider.gemini,
+      'YOUTUBE_API_KEY': LlmProvider.youtube,
+      'PEXELS_API_KEY': LlmProvider.pexels,
+      'PIXABAY_API_KEY': LlmProvider.pixabay,
     };
 
     for (final entry in envMappings.entries) {

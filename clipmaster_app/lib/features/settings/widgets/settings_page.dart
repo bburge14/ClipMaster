@@ -288,6 +288,9 @@ class _ApiKeySectionState extends ConsumerState<_ApiKeySection> {
         LlmProvider.claude => 'Claude',
         LlmProvider.gemini => 'Gemini',
         LlmProvider.github => 'GitHub',
+        LlmProvider.youtube => 'YouTube',
+        LlmProvider.pexels => 'Pexels',
+        LlmProvider.pixabay => 'Pixabay',
       };
 
   Color _providerColor(LlmProvider p) => switch (p) {
@@ -295,6 +298,9 @@ class _ApiKeySectionState extends ConsumerState<_ApiKeySection> {
         LlmProvider.claude => const Color(0xFFD97706),
         LlmProvider.gemini => const Color(0xFF4285F4),
         LlmProvider.github => Colors.white70,
+        LlmProvider.youtube => const Color(0xFFFF0000),
+        LlmProvider.pexels => const Color(0xFF05A081),
+        LlmProvider.pixabay => const Color(0xFF48B648),
       };
 }
 

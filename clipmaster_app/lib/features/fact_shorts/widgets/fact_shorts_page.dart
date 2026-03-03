@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
@@ -113,6 +116,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     if (_selectedFactIndex == null) return;
     final fact = _facts[_selectedFactIndex!];
     final factText = fact['fact'] as String? ?? '';
+    final factTitle = fact['title'] as String? ?? 'Untitled Fact';
+    final visualKeywords =
+        (fact['visual_keywords'] as List<dynamic>?)?.cast<String>() ?? [];
     if (factText.isEmpty) return;
 
     final apiKeyService = ref.read(apiKeyServiceProvider);
@@ -120,30 +126,52 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     if (openaiKey == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('OpenAI API key required for TTS. Add one in Settings.'),
+          content:
+              Text('OpenAI API key required for video creation. Add one in Settings.'),
         ),
       );
       return;
     }
 
+    // Get a proper output directory under Documents.
+    final docsDir = await getApplicationDocumentsDirectory();
+    final shortsDir = Directory(
+      '${docsDir.path}${Platform.pathSeparator}ClipMaster Pro${Platform.pathSeparator}shorts',
+    );
+    if (!shortsDir.existsSync()) {
+      await shortsDir.create(recursive: true);
+    }
+
     setState(() {
       _isGenerating = true;
-      _progressStage = 'Generating voiceover';
+      _progressStage = 'Creating short';
       _progressPercent = 0;
     });
 
     try {
       final ipc = ref.read(ipcClientProvider);
+
+      // Build payload with optional stock footage keys.
+      final payload = <String, dynamic>{
+        'text': factText,
+        'title': factTitle,
+        'api_key': openaiKey,
+        'voice': 'onyx',
+        'output_dir': shortsDir.path,
+        'visual_keywords': visualKeywords,
+      };
+
+      final pexelsKey = apiKeyService.getNextKey(LlmProvider.pexels);
+      final pixabayKey = apiKeyService.getNextKey(LlmProvider.pixabay);
+      if (pexelsKey != null) payload['pexels_key'] = pexelsKey;
+      if (pixabayKey != null) payload['pixabay_key'] = pixabayKey;
+
       final response = await ipc.send(
         IpcMessage(
-          type: MessageType.generateTts,
-          payload: {
-            'text': factText,
-            'api_key': openaiKey,
-            'voice': 'onyx',
-          },
+          type: MessageType.createShort,
+          payload: payload,
         ),
-        timeout: const Duration(seconds: 120),
+        timeout: const Duration(minutes: 5),
         onProgress: (progress) {
           if (mounted) {
             setState(() {
@@ -160,19 +188,38 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       if (response.type == MessageType.error) {
         setState(() {
           _isGenerating = false;
-          _error = response.payload['message'] as String? ?? 'TTS failed';
+          _error = response.payload['message'] as String? ?? 'Short creation failed';
         });
       } else {
-        final audioPath = response.payload['audio_path'] as String? ?? '';
-        final duration = response.payload['duration_estimate'] as num? ?? 0;
+        final outputPath = response.payload['output_path'] as String? ?? '';
+        final duration = (response.payload['duration'] as num?)?.toDouble() ?? 0;
         setState(() => _isGenerating = false);
+
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Voiceover created (~${duration.toStringAsFixed(0)}s). '
-              'File: ${audioPath.split('/').last}',
+              'Short created! ${duration.toStringAsFixed(0)}s video saved.',
             ),
-            duration: const Duration(seconds: 4),
+            duration: const Duration(seconds: 6),
+            action: outputPath.isNotEmpty
+                ? SnackBarAction(
+                    label: 'Open Folder',
+                    onPressed: () {
+                      final dir = outputPath.substring(
+                        0,
+                        outputPath.lastIndexOf(Platform.pathSeparator),
+                      );
+                      if (Platform.isWindows) {
+                        Process.run('explorer.exe', [dir]);
+                      } else if (Platform.isMacOS) {
+                        Process.run('open', [dir]);
+                      } else {
+                        Process.run('xdg-open', [dir]);
+                      }
+                    },
+                  )
+                : null,
           ),
         );
       }

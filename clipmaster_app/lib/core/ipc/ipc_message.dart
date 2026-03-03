@@ -44,6 +44,7 @@ enum MessageType {
   scoutTrending,
   generateFacts,
   ffmpegRender,
+  createShort,
 
   // -- Responses (Python -> Flutter) --
   pong,

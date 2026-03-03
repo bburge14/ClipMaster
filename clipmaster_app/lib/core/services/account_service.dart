@@ -357,7 +357,8 @@ class AccountService {
 
   void _openUrl(String url) {
     if (Platform.isWindows) {
-      Process.run('start', [url], runInShell: true);
+      // Use rundll32 to avoid cmd.exe interpreting & in URLs as a command separator.
+      Process.run('rundll32', ['url.dll,FileProtocolHandler', url]);
     } else if (Platform.isMacOS) {
       Process.run('open', [url]);
     } else {

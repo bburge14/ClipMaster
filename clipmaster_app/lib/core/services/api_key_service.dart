@@ -6,8 +6,8 @@ import 'package:logger/logger.dart';
 
 final _log = Logger(printer: PrettyPrinter(methodCount: 0));
 
-/// Supported LLM providers.
-enum LlmProvider { gemini, claude, openai }
+/// Supported API key providers.
+enum LlmProvider { gemini, claude, openai, github }
 
 /// Metadata for a single API key.
 class ApiKeyEntry {

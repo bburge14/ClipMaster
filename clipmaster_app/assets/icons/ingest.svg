@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Anchor ring -->
+  <circle cx="12" cy="5" r="2.5"/>
+  <!-- Anchor shaft -->
+  <line x1="12" y1="7.5" x2="12" y2="18"/>
+  <!-- Anchor arms -->
+  <path d="M7 15 C7 18, 12 18, 12 18"/>
+  <path d="M17 15 C17 18, 12 18, 12 18"/>
+  <!-- Download arrow overlaid on shaft -->
+  <polyline points="9,14 12,17.5 15,14"/>
+  <!-- Base bar -->
+  <line x1="5" y1="21" x2="19" y2="21"/>
+</svg>

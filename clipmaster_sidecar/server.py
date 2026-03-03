@@ -16,6 +16,7 @@ from .models.ipc_models import IpcMessage, MessageType
 from .services.fact_generator import FactGenerator
 from .services.llm_gateway import LlmGateway
 from .services.media_tools import (
+    download_clip,
     download_video,
     ffmpeg_render,
     generate_proxy,
@@ -130,6 +131,18 @@ async def _dispatch(
 
             case MessageType.create_short:
                 await _handle_create_short(ws, msg, stock_footage)
+
+            case MessageType.scout_channel:
+                await _handle_scout_channel(ws, msg, youtube_search, twitch_search)
+
+            case MessageType.scout_vods:
+                await _handle_scout_vods(ws, msg, youtube_search, twitch_search)
+
+            case MessageType.scout_clips:
+                await _handle_scout_clips(ws, msg, twitch_search)
+
+            case MessageType.download_clip:
+                await _handle_download_clip(ws, msg)
 
             case _:
                 await _send(
@@ -656,3 +669,150 @@ async def _get_audio_duration(ffmpeg: str, audio_path: str) -> float:
         return float(data.get("format", {}).get("duration", 0))
     except Exception:
         return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Channel-First Discovery
+# ---------------------------------------------------------------------------
+
+async def _handle_scout_channel(
+    ws: WebSocket,
+    msg: IpcMessage,
+    youtube_search: YouTubeSearchService,
+    twitch_search: TwitchSearchService,
+) -> None:
+    """Search for a channel/user by name on YouTube or Twitch."""
+    platform = msg.payload.get("platform", "youtube")
+    query = msg.payload.get("query", "")
+    api_key = msg.payload.get("api_key", "")
+    twitch_client_id = msg.payload.get("twitch_client_id", "")
+    twitch_client_secret = msg.payload.get("twitch_client_secret", "")
+
+    if not query:
+        await _send(ws, IpcMessage.error(msg.id, "No channel name provided."))
+        return
+
+    await _send(ws, IpcMessage.progress(msg.id, "Searching channel", 20))
+
+    try:
+        if platform == "twitch":
+            if not twitch_client_id or not twitch_client_secret:
+                await _send(ws, IpcMessage.error(
+                    msg.id, "Twitch Client ID and Secret required."))
+                return
+            result = await twitch_search.search_channel(
+                twitch_client_id, twitch_client_secret, query)
+        else:
+            if not api_key:
+                await _send(ws, IpcMessage.error(
+                    msg.id, "YouTube API key required."))
+                return
+            result = await youtube_search.search_channel(api_key, query)
+
+        if result is None:
+            await _send(ws, IpcMessage.error(
+                msg.id, f"No {platform} channel found for '{query}'."))
+            return
+
+        await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
+        await _send(ws, IpcMessage.result(msg.id, {"channel": result}))
+
+    except ValueError as exc:
+        await _send(ws, IpcMessage.error(msg.id, str(exc)))
+
+
+async def _handle_scout_vods(
+    ws: WebSocket,
+    msg: IpcMessage,
+    youtube_search: YouTubeSearchService,
+    twitch_search: TwitchSearchService,
+) -> None:
+    """Fetch VODs/videos for a given channel."""
+    platform = msg.payload.get("platform", "youtube")
+    limit = msg.payload.get("limit", 20)
+    api_key = msg.payload.get("api_key", "")
+    twitch_client_id = msg.payload.get("twitch_client_id", "")
+    twitch_client_secret = msg.payload.get("twitch_client_secret", "")
+
+    await _send(ws, IpcMessage.progress(msg.id, "Fetching videos", 20))
+
+    try:
+        if platform == "twitch":
+            user_id = msg.payload.get("user_id", "")
+            if not user_id:
+                await _send(ws, IpcMessage.error(msg.id, "No user_id provided."))
+                return
+            vods = await twitch_search.get_vods(
+                twitch_client_id, twitch_client_secret, user_id, limit=limit)
+            await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
+            await _send(ws, IpcMessage.result(msg.id, {"vods": vods}))
+        else:
+            channel_id = msg.payload.get("channel_id", "")
+            if not channel_id:
+                await _send(ws, IpcMessage.error(msg.id, "No channel_id provided."))
+                return
+            videos = await youtube_search.get_channel_videos(
+                api_key, channel_id, limit=limit)
+            await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
+            await _send(ws, IpcMessage.result(msg.id, {"vods": videos}))
+
+    except ValueError as exc:
+        await _send(ws, IpcMessage.error(msg.id, str(exc)))
+
+
+async def _handle_scout_clips(
+    ws: WebSocket,
+    msg: IpcMessage,
+    twitch_search: TwitchSearchService,
+) -> None:
+    """Fetch viewer-created clips for a Twitch broadcaster/VOD."""
+    broadcaster_id = msg.payload.get("broadcaster_id", "")
+    vod_id = msg.payload.get("vod_id")
+    limit = msg.payload.get("limit", 20)
+    twitch_client_id = msg.payload.get("twitch_client_id", "")
+    twitch_client_secret = msg.payload.get("twitch_client_secret", "")
+
+    if not broadcaster_id:
+        await _send(ws, IpcMessage.error(msg.id, "No broadcaster_id provided."))
+        return
+
+    await _send(ws, IpcMessage.progress(msg.id, "Fetching clips", 20))
+
+    try:
+        clips = await twitch_search.get_clips_for_broadcaster(
+            twitch_client_id, twitch_client_secret,
+            broadcaster_id, vod_id=vod_id, limit=limit,
+        )
+        await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
+        await _send(ws, IpcMessage.result(msg.id, {"clips": clips}))
+
+    except ValueError as exc:
+        await _send(ws, IpcMessage.error(msg.id, str(exc)))
+
+
+async def _handle_download_clip(ws: WebSocket, msg: IpcMessage) -> None:
+    """Download a partial clip from a video using stream seeking."""
+    url = msg.payload.get("url", "")
+    start_time = msg.payload.get("start_time", "")
+    end_time = msg.payload.get("end_time", "")
+    output_name = msg.payload.get("output_name")
+
+    if not url:
+        await _send(ws, IpcMessage.error(msg.id, "No URL provided."))
+        return
+    if not start_time or not end_time:
+        await _send(ws, IpcMessage.error(msg.id, "start_time and end_time required."))
+        return
+
+    try:
+        result = await download_clip(
+            url, start_time, end_time,
+            output_name=output_name,
+            on_progress=lambda pct, stage: _send(
+                ws, IpcMessage.progress(msg.id, stage, pct)),
+        )
+        await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
+        await _send(ws, IpcMessage.result(msg.id, result))
+    except Exception as exc:
+        logger.error("Clip download failed: %s", exc)
+        await _send(ws, IpcMessage.error(msg.id, f"Clip download failed: {exc}"))

@@ -244,5 +244,148 @@ class YouTubeSearchService:
         videos.sort(key=lambda v: v.composite_score, reverse=True)
         return videos
 
+    # ─── Channel-first discovery ───
+
+    async def search_channel(
+        self, api_key: str, query: str
+    ) -> dict | None:
+        """Search for a YouTube channel by name.
+
+        Returns dict with: channel_id, title, description, thumbnail_url,
+        subscriber_count, video_count.
+        """
+        try:
+            resp = await self._client.get(
+                f"{YOUTUBE_API_BASE}/search",
+                params={
+                    "part": "snippet",
+                    "q": query,
+                    "type": "channel",
+                    "maxResults": 1,
+                    "key": api_key,
+                },
+            )
+            resp.raise_for_status()
+            items = resp.json().get("items", [])
+            if not items:
+                return None
+
+            channel_id = items[0]["id"]["channelId"]
+            snippet = items[0].get("snippet", {})
+
+            # Get channel statistics.
+            stats_resp = await self._client.get(
+                f"{YOUTUBE_API_BASE}/channels",
+                params={
+                    "part": "snippet,statistics",
+                    "id": channel_id,
+                    "key": api_key,
+                },
+            )
+            stats_resp.raise_for_status()
+            channels = stats_resp.json().get("items", [])
+            stats = channels[0].get("statistics", {}) if channels else {}
+            ch_snippet = channels[0].get("snippet", snippet) if channels else snippet
+
+            return {
+                "channel_id": channel_id,
+                "title": ch_snippet.get("title", ""),
+                "description": ch_snippet.get("description", ""),
+                "thumbnail_url": (
+                    ch_snippet.get("thumbnails", {})
+                    .get("medium", {})
+                    .get("url", "")
+                ),
+                "subscriber_count": int(stats.get("subscriberCount", 0)),
+                "video_count": int(stats.get("videoCount", 0)),
+            }
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(
+                f"YouTube API error ({exc.response.status_code}) searching channel."
+            ) from exc
+        except Exception as exc:
+            raise ValueError(f"YouTube channel search failed: {exc}") from exc
+
+    async def get_channel_videos(
+        self,
+        api_key: str,
+        channel_id: str,
+        limit: int = 20,
+        order: str = "date",
+    ) -> list[dict]:
+        """Fetch recent videos from a YouTube channel.
+
+        Returns list of dicts with: video_id, title, thumbnail_url,
+        published_at, view_count, duration.
+        """
+        try:
+            # Step 1: Search for videos on the channel.
+            search_resp = await self._client.get(
+                f"{YOUTUBE_API_BASE}/search",
+                params={
+                    "part": "snippet",
+                    "channelId": channel_id,
+                    "type": "video",
+                    "order": order,
+                    "maxResults": min(limit, 50),
+                    "key": api_key,
+                },
+            )
+            search_resp.raise_for_status()
+            items = search_resp.json().get("items", [])
+
+            video_ids = [
+                item["id"]["videoId"]
+                for item in items
+                if "videoId" in item.get("id", {})
+            ]
+            if not video_ids:
+                return []
+
+            # Step 2: Get full stats for each video.
+            stats_resp = await self._client.get(
+                f"{YOUTUBE_API_BASE}/videos",
+                params={
+                    "part": "snippet,statistics,contentDetails",
+                    "id": ",".join(video_ids),
+                    "key": api_key,
+                },
+            )
+            stats_resp.raise_for_status()
+
+            videos = []
+            for item in stats_resp.json().get("items", []):
+                snippet = item.get("snippet", {})
+                stats = item.get("statistics", {})
+                content = item.get("contentDetails", {})
+                thumbnails = snippet.get("thumbnails", {})
+                thumb = (
+                    thumbnails.get("high", {}).get("url", "")
+                    or thumbnails.get("medium", {}).get("url", "")
+                    or thumbnails.get("default", {}).get("url", "")
+                )
+
+                videos.append({
+                    "video_id": item.get("id", ""),
+                    "title": snippet.get("title", "Untitled"),
+                    "url": f"https://www.youtube.com/watch?v={item.get('id', '')}",
+                    "thumbnail_url": thumb,
+                    "published_at": snippet.get("publishedAt", ""),
+                    "channel": snippet.get("channelTitle", ""),
+                    "view_count": int(stats.get("viewCount", 0)),
+                    "like_count": int(stats.get("likeCount", 0)),
+                    "comment_count": int(stats.get("commentCount", 0)),
+                    "duration": content.get("duration", ""),
+                })
+
+            return videos
+
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(
+                f"YouTube API error ({exc.response.status_code}) fetching videos."
+            ) from exc
+        except Exception as exc:
+            raise ValueError(f"YouTube video fetch failed: {exc}") from exc
+
     async def close(self) -> None:
         await self._client.aclose()

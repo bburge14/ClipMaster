@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/ipc/ipc_client.dart';
@@ -21,9 +23,9 @@ class FactShortsPage extends ConsumerStatefulWidget {
 }
 
 class _FactShortsPageState extends ConsumerState<FactShortsPage> {
+  // ── Fact generation ──
   String _selectedCategory = 'Science';
   int _factCount = 5;
-  TtsVoice _selectedVoice = TtsVoice.onyx;
   bool _isGenerating = false;
   String _progressStage = '';
   int _progressPercent = 0;
@@ -31,15 +33,70 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   int? _selectedFactIndex;
   String? _error;
 
+  // ── Composer state (active when a fact is selected) ──
+  String _composerTitle = '';
+  String _composerScript = '';
+  List<String> _visualKeywords = [];
+  TtsVoice _selectedVoice = TtsVoice.onyx;
+
+  // Text editing
+  bool _editingScript = false;
+  final _scriptEditController = TextEditingController();
+
+  // Voice preview
+  Player? _voicePreviewPlayer;
+  VideoController? _voicePreviewController;
+  bool _isPreviewingVoice = false;
+  String? _previewAudioPath;
+  bool _voicePlaying = false;
+
+  // Background footage
+  List<Map<String, dynamic>> _bgResults = [];
+  bool _isSearchingBg = false;
+  String? _selectedBgPreviewUrl;
+  String? _selectedBgDownloadUrl;
+  Player? _bgPlayer;
+  VideoController? _bgController;
+
+  // Timeline scrubber
+  double _scrubPosition = 0.0;
+  double _estimatedDuration = 30.0;
+
+  // Music (placeholder for future)
+  String? _selectedMusicLabel;
+
+  // Rendering
+  bool _isRendering = false;
+
+  // Caption style for this composer
+  String _fontFamily = 'Inter';
+  double _fontSize = 36;
+  int _colorHex = 0xFFFFFFFF;
+  bool _hasBorder = true;
+  double _textPosY = 0.75;
+
+  @override
+  void dispose() {
+    _scriptEditController.dispose();
+    _voicePreviewPlayer?.dispose();
+    _bgPlayer?.dispose();
+    super.dispose();
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  FACT GENERATION
+  // ════════════════════════════════════════════════════════════════
+
   Future<void> _generate() async {
-    // Find an available API key.
     final apiKeyService = ref.read(apiKeyServiceProvider);
     String? apiKey;
     LlmProvider? provider;
 
-    // Try LLM providers in preference order: openai, claude, gemini.
-    // Skip github — it's a PAT for the updater, not an LLM key.
-    const llmProviders = [LlmProvider.openai, LlmProvider.claude, LlmProvider.gemini];
+    const llmProviders = [
+      LlmProvider.openai,
+      LlmProvider.claude,
+      LlmProvider.gemini
+    ];
     for (final p in llmProviders) {
       final key = apiKeyService.getNextKey(p);
       if (key != null) {
@@ -78,7 +135,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             'api_key': apiKey,
           },
         ),
-        // LLM calls can take 15-30s depending on provider.
         timeout: const Duration(seconds: 90),
         onProgress: (progress) {
           if (mounted) {
@@ -97,9 +153,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           _error = response.payload['message'] as String? ?? 'Unknown error';
         });
       } else {
-        final factList =
-            (response.payload['facts'] as List<dynamic>? ?? [])
-                .cast<Map<String, dynamic>>();
+        final factList = (response.payload['facts'] as List<dynamic>? ?? [])
+            .cast<Map<String, dynamic>>();
         setState(() {
           _isGenerating = false;
           _facts = factList;
@@ -115,28 +170,195 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
   }
 
-  Future<void> _createShort() async {
-    if (_selectedFactIndex == null) return;
-    final fact = _facts[_selectedFactIndex!];
-    final factText = fact['fact'] as String? ?? '';
-    final factTitle = fact['title'] as String? ?? 'Untitled Fact';
-    final visualKeywords =
-        (fact['visual_keywords'] as List<dynamic>?)?.cast<String>() ?? [];
-    if (factText.isEmpty) return;
+  void _selectFact(int index) {
+    final fact = _facts[index];
+    setState(() {
+      _selectedFactIndex = index;
+      _composerTitle = fact['title'] as String? ?? 'Untitled';
+      _composerScript = fact['fact'] as String? ?? '';
+      _visualKeywords =
+          (fact['visual_keywords'] as List<dynamic>?)?.cast<String>() ?? [];
+      _editingScript = false;
+      _scrubPosition = 0;
+      _estimatedDuration =
+          (_composerScript.split(' ').length / 2.5).clamp(10, 90);
 
+      // Auto-search for background footage
+      if (_visualKeywords.isNotEmpty) {
+        _searchBackgrounds(_visualKeywords.first);
+      }
+    });
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  VOICE PREVIEW
+  // ════════════════════════════════════════════════════════════════
+
+  Future<void> _previewVoice() async {
     final apiKeyService = ref.read(apiKeyServiceProvider);
     final openaiKey = apiKeyService.getNextKey(LlmProvider.openai);
     if (openaiKey == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content:
-              Text('OpenAI API key required for video creation. Add one in Settings.'),
-        ),
+            content: Text('OpenAI API key required for voice preview.')),
       );
       return;
     }
 
-    // Get a proper output directory under Documents.
+    // Use the first ~30 words of the script for a quick preview
+    final words = _composerScript.split(' ');
+    final sampleText = words.take(30).join(' ');
+    if (sampleText.isEmpty) return;
+
+    setState(() => _isPreviewingVoice = true);
+
+    try {
+      final ipc = ref.read(ipcClientProvider);
+      final response = await ipc.send(
+        IpcMessage(
+          type: MessageType.generateTts,
+          payload: {
+            'text': sampleText,
+            'api_key': openaiKey,
+            'voice': _selectedVoice.name,
+          },
+        ),
+        timeout: const Duration(seconds: 30),
+      );
+
+      if (!mounted) return;
+
+      if (response.type == MessageType.error) {
+        setState(() => _isPreviewingVoice = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(response.payload['message'] as String? ??
+                  'Voice preview failed')),
+        );
+        return;
+      }
+
+      final audioPath = response.payload['audio_path'] as String? ?? '';
+      if (audioPath.isEmpty) {
+        setState(() => _isPreviewingVoice = false);
+        return;
+      }
+
+      // Play the preview audio
+      _voicePreviewPlayer?.dispose();
+      _voicePreviewPlayer = Player();
+      _voicePreviewPlayer!.open(Media(audioPath));
+      _voicePreviewPlayer!.stream.playing.listen((playing) {
+        if (mounted) setState(() => _voicePlaying = playing);
+      });
+      _voicePreviewPlayer!.stream.completed.listen((completed) {
+        if (completed && mounted) {
+          setState(() {
+            _voicePlaying = false;
+            _isPreviewingVoice = false;
+          });
+        }
+      });
+
+      setState(() {
+        _previewAudioPath = audioPath;
+        _isPreviewingVoice = false;
+        _voicePlaying = true;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isPreviewingVoice = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Voice preview failed: $e')),
+        );
+      }
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  BACKGROUND FOOTAGE SEARCH
+  // ════════════════════════════════════════════════════════════════
+
+  Future<void> _searchBackgrounds(String query) async {
+    if (query.isEmpty) return;
+    final apiKeyService = ref.read(apiKeyServiceProvider);
+    final pexelsKey = apiKeyService.getNextKey(LlmProvider.pexels);
+    final pixabayKey = apiKeyService.getNextKey(LlmProvider.pixabay);
+    if (pexelsKey == null && pixabayKey == null) return;
+
+    setState(() {
+      _isSearchingBg = true;
+      _bgResults = [];
+    });
+
+    try {
+      final ipc = ref.read(ipcClientProvider);
+      final response = await ipc.send(
+        IpcMessage(
+          type: MessageType.queryStockFootage,
+          payload: {
+            'keyword': query,
+            if (pexelsKey != null) 'pexels_key': pexelsKey,
+            if (pixabayKey != null) 'pixabay_key': pixabayKey,
+            'per_source': 4,
+          },
+        ),
+        timeout: const Duration(seconds: 15),
+      );
+
+      if (mounted) {
+        if (response.type != MessageType.error) {
+          final clips = (response.payload['clips'] as List<dynamic>? ?? [])
+              .cast<Map<String, dynamic>>();
+          setState(() {
+            _isSearchingBg = false;
+            _bgResults = clips;
+          });
+        } else {
+          setState(() => _isSearchingBg = false);
+        }
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isSearchingBg = false);
+    }
+  }
+
+  void _selectBackground(Map<String, dynamic> clip) {
+    final previewUrl = clip['preview_url'] as String? ?? '';
+    final downloadUrl = clip['download_url'] as String? ?? '';
+
+    setState(() {
+      _selectedBgPreviewUrl = previewUrl;
+      _selectedBgDownloadUrl = downloadUrl;
+    });
+
+    // Load preview into bg player
+    if (previewUrl.isNotEmpty) {
+      _bgPlayer?.dispose();
+      _bgPlayer = Player();
+      _bgController = VideoController(_bgPlayer!);
+      _bgPlayer!.open(Media(previewUrl));
+      _bgPlayer!.setPlaylistMode(PlaylistMode.loop);
+      _bgPlayer!.setVolume(0);
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  RENDER / EXPORT
+  // ════════════════════════════════════════════════════════════════
+
+  Future<void> _renderShort() async {
+    if (_composerScript.isEmpty) return;
+
+    final apiKeyService = ref.read(apiKeyServiceProvider);
+    final openaiKey = apiKeyService.getNextKey(LlmProvider.openai);
+    if (openaiKey == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('OpenAI API key required for rendering.')),
+      );
+      return;
+    }
+
     final docsDir = await getApplicationDocumentsDirectory();
     final shortsDir = Directory(
       '${docsDir.path}${Platform.pathSeparator}ClipMaster Pro${Platform.pathSeparator}shorts',
@@ -146,22 +368,20 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
 
     setState(() {
-      _isGenerating = true;
-      _progressStage = 'Creating short';
+      _isRendering = true;
+      _progressStage = 'Rendering short';
       _progressPercent = 0;
     });
 
     try {
       final ipc = ref.read(ipcClientProvider);
-
-      // Build payload with optional stock footage keys.
       final payload = <String, dynamic>{
-        'text': factText,
-        'title': factTitle,
+        'text': _composerScript,
+        'title': _composerTitle,
         'api_key': openaiKey,
         'voice': _selectedVoice.name,
         'output_dir': shortsDir.path,
-        'visual_keywords': visualKeywords,
+        'visual_keywords': _visualKeywords,
       };
 
       final pexelsKey = apiKeyService.getNextKey(LlmProvider.pexels);
@@ -170,16 +390,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       if (pixabayKey != null) payload['pixabay_key'] = pixabayKey;
 
       final response = await ipc.send(
-        IpcMessage(
-          type: MessageType.createShort,
-          payload: payload,
-        ),
+        IpcMessage(type: MessageType.createShort, payload: payload),
         timeout: const Duration(minutes: 5),
         onProgress: (progress) {
           if (mounted) {
             setState(() {
               _progressStage =
-                  progress.payload['stage'] as String? ?? 'Creating short';
+                  progress.payload['stage'] as String? ?? 'Rendering';
               _progressPercent = progress.payload['percent'] as int? ?? 0;
             });
           }
@@ -189,30 +406,29 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       if (!mounted) return;
 
       if (response.type == MessageType.error) {
-        setState(() {
-          _isGenerating = false;
-          _error = response.payload['message'] as String? ?? 'Short creation failed';
-        });
+        setState(() => _isRendering = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(response.payload['message'] as String? ??
+                  'Render failed')),
+        );
       } else {
         final outputPath = response.payload['output_path'] as String? ?? '';
-        final duration = (response.payload['duration'] as num?)?.toDouble() ?? 0;
-        setState(() => _isGenerating = false);
+        final duration =
+            (response.payload['duration'] as num?)?.toDouble() ?? 0;
+        setState(() => _isRendering = false);
 
-        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Short created! ${duration.toStringAsFixed(0)}s video saved.',
-            ),
+                'Short rendered! ${duration.toStringAsFixed(0)}s video saved.'),
             duration: const Duration(seconds: 6),
             action: outputPath.isNotEmpty
                 ? SnackBarAction(
                     label: 'Open Folder',
                     onPressed: () {
                       final dir = outputPath.substring(
-                        0,
-                        outputPath.lastIndexOf(Platform.pathSeparator),
-                      );
+                          0, outputPath.lastIndexOf(Platform.pathSeparator));
                       if (Platform.isWindows) {
                         Process.run('explorer.exe', [dir]);
                       } else if (Platform.isMacOS) {
@@ -228,36 +444,28 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _isGenerating = false;
-          _error = e.toString();
-        });
+        setState(() => _isRendering = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Render failed: $e')),
+        );
       }
     }
   }
 
   Future<void> _editInTimeline() async {
-    if (_selectedFactIndex == null) return;
-    final fact = _facts[_selectedFactIndex!];
-    final factText = fact['fact'] as String? ?? '';
-    final factTitle = fact['title'] as String? ?? 'Untitled Fact';
-    final visualKeywords =
-        (fact['visual_keywords'] as List<dynamic>?)?.cast<String>() ?? [];
-    if (factText.isEmpty) return;
+    if (_composerScript.isEmpty) return;
 
     final apiKeyService = ref.read(apiKeyServiceProvider);
     final openaiKey = apiKeyService.getNextKey(LlmProvider.openai);
     if (openaiKey == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('OpenAI API key required for TTS. Add one in Settings.'),
-        ),
+        const SnackBar(content: Text('OpenAI API key required for TTS.')),
       );
       return;
     }
 
     setState(() {
-      _isGenerating = true;
+      _isRendering = true;
       _progressStage = 'Generating voiceover';
       _progressPercent = 10;
     });
@@ -265,12 +473,11 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     try {
       final ipc = ref.read(ipcClientProvider);
 
-      // Step 1: Generate TTS audio only.
       final ttsResponse = await ipc.send(
         IpcMessage(
           type: MessageType.generateTts,
           payload: {
-            'text': factText,
+            'text': _composerScript,
             'api_key': openaiKey,
             'voice': _selectedVoice.name,
           },
@@ -288,361 +495,268 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       );
 
       if (!mounted) return;
-
       if (ttsResponse.type == MessageType.error) {
-        setState(() {
-          _isGenerating = false;
-          _error = ttsResponse.payload['message'] as String? ?? 'TTS failed';
-        });
+        setState(() => _isRendering = false);
         return;
       }
 
       final ttsAudioPath = ttsResponse.payload['audio_path'] as String? ?? '';
 
-      // Step 2: Search for stock footage.
-      setState(() {
-        _progressStage = 'Searching stock footage';
-        _progressPercent = 50;
-      });
+      setState(() => _isRendering = false);
 
-      final stockClips = <Map<String, dynamic>>[];
-      final pexelsKey = apiKeyService.getNextKey(LlmProvider.pexels);
-      final pixabayKey = apiKeyService.getNextKey(LlmProvider.pixabay);
-
-      if (visualKeywords.isNotEmpty && (pexelsKey != null || pixabayKey != null)) {
-        for (final kw in visualKeywords.take(3)) {
-          final stockResponse = await ipc.send(
-            IpcMessage(
-              type: MessageType.queryStockFootage,
-              payload: {
-                'keyword': kw,
-                if (pexelsKey != null) 'pexels_key': pexelsKey,
-                if (pixabayKey != null) 'pixabay_key': pixabayKey,
-                'per_source': 2,
-              },
-            ),
-            timeout: const Duration(seconds: 15),
-          );
-          if (stockResponse.type != MessageType.error) {
-            final clips =
-                (stockResponse.payload['clips'] as List<dynamic>? ?? [])
-                    .cast<Map<String, dynamic>>();
-            stockClips.addAll(clips);
-          }
-        }
-      }
-
-      setState(() => _isGenerating = false);
-
-      // Step 3: Load everything into the timeline.
       ref.read(projectProvider.notifier).loadShortIntoTimeline(
-        title: factTitle,
-        scriptText: factText,
-        voice: _selectedVoice,
-        ttsAudioPath: ttsAudioPath.isNotEmpty ? ttsAudioPath : null,
-        stockClips: stockClips,
-      );
+            title: _composerTitle,
+            scriptText: _composerScript,
+            voice: _selectedVoice,
+            ttsAudioPath: ttsAudioPath.isNotEmpty ? ttsAudioPath : null,
+          );
 
-      // Switch to Timeline tab.
       ref.read(selectedTabProvider.notifier).state = 0;
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text(
-                'Assets loaded into Timeline. Add B-roll, adjust text, and render when ready.'),
+            content: Text('Loaded into Timeline. Adjust and render.'),
             duration: Duration(seconds: 3),
           ),
         );
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _isGenerating = false;
-          _error = e.toString();
-        });
+        setState(() => _isRendering = false);
       }
     }
   }
 
+  // ════════════════════════════════════════════════════════════════
+  //  BUILD UI
+  // ════════════════════════════════════════════════════════════════
+
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final hasComposer = _selectedFactIndex != null;
 
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Column(
+      children: [
+        Expanded(
+          child: Row(
             children: [
-              const Icon(Icons.auto_awesome, size: 28, color: Color(0xFF6C5CE7)),
-              const SizedBox(width: 12),
-              Text('Fact Shorts', style: theme.textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-              )),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Generate AI-powered facts and turn them into short-form videos.',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: Colors.white.withOpacity(0.4),
-            ),
-          ),
-          const SizedBox(height: 20),
-          // Category chips
-          Wrap(
-            spacing: 8,
-            children: _categories.map((cat) {
-              return ChoiceChip(
-                label: Text(cat),
-                selected: _selectedCategory == cat,
-                onSelected: (_) {
-                  setState(() {
-                    _selectedCategory = cat;
-                  });
-                },
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 16),
-          // Controls row
-          Row(
-            children: [
-              const Text('Facts:', style: TextStyle(fontSize: 13)),
-              const SizedBox(width: 8),
-              DropdownButton<int>(
-                value: _factCount,
-                items: [1, 3, 5, 8, 10]
-                    .map((n) =>
-                        DropdownMenuItem(value: n, child: Text('$n')))
-                    .toList(),
-                onChanged: (v) => setState(() => _factCount = v!),
+              // ── Left panel: fact list ──
+              SizedBox(
+                width: hasComposer ? 300 : double.infinity,
+                child: _buildFactListPanel(),
               ),
-              const SizedBox(width: 16),
-              // Voice picker
-              const Text('Voice:', style: TextStyle(fontSize: 13)),
-              const SizedBox(width: 8),
-              DropdownButton<TtsVoice>(
-                value: _selectedVoice,
-                items: TtsVoice.values
-                    .map((v) => DropdownMenuItem(
-                          value: v,
-                          child: Text(v.label,
-                              style: const TextStyle(fontSize: 13)),
-                        ))
-                    .toList(),
-                onChanged: (v) => setState(() => _selectedVoice = v!),
-              ),
-              const SizedBox(width: 16),
-              FilledButton.icon(
-                onPressed: _isGenerating ? null : _generate,
-                icon: const Icon(Icons.auto_awesome, size: 18),
-                label: const Text('Generate Facts'),
-              ),
-              if (_facts.isNotEmpty) ...[
-                const SizedBox(width: 16),
-                TextButton.icon(
-                  onPressed: () => setState(() {
-                    _facts = [];
-                    _selectedFactIndex = null;
-                    _error = null;
-                  }),
-                  icon: const Icon(Icons.refresh, size: 18),
-                  label: const Text('New Facts'),
-                ),
+              // ── Composer (when fact selected) ──
+              if (hasComposer) ...[
+                Container(width: 1, color: Colors.white.withOpacity(0.06)),
+                Expanded(child: _buildComposer()),
               ],
             ],
           ),
-          const SizedBox(height: 16),
-          Expanded(child: _buildContent(theme)),
+        ),
+        // ── Bottom: timeline scrubber (only in composer mode) ──
+        if (hasComposer) _buildTimelineScrubber(),
+      ],
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  //  LEFT: FACT LIST PANEL
+  // ────────────────────────────────────────────────────────────────
+
+  Widget _buildFactListPanel() {
+    final isCompact = _selectedFactIndex != null;
+
+    return Container(
+      color: const Color(0xFF141420),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.auto_awesome,
+                    size: 22, color: Color(0xFF6C5CE7)),
+                const SizedBox(width: 8),
+                Text(
+                  isCompact ? 'Facts' : 'Fact Shorts',
+                  style: TextStyle(
+                    fontSize: isCompact ? 16 : 22,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (!isCompact) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                'Generate AI facts and compose them into short-form videos.',
+                style: TextStyle(
+                    fontSize: 13, color: Colors.white.withOpacity(0.35)),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          // Category chips
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: _categories.map((cat) {
+                return ChoiceChip(
+                  label: Text(cat, style: TextStyle(fontSize: isCompact ? 11 : 13)),
+                  selected: _selectedCategory == cat,
+                  onSelected: (_) => setState(() => _selectedCategory = cat),
+                  visualDensity: isCompact
+                      ? VisualDensity.compact
+                      : VisualDensity.standard,
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Controls
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                if (!isCompact) ...[
+                  const Text('Facts:', style: TextStyle(fontSize: 12)),
+                  const SizedBox(width: 4),
+                  DropdownButton<int>(
+                    value: _factCount,
+                    isDense: true,
+                    items: [1, 3, 5, 8, 10]
+                        .map((n) =>
+                            DropdownMenuItem(value: n, child: Text('$n')))
+                        .toList(),
+                    onChanged: (v) => setState(() => _factCount = v!),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _isGenerating || _isRendering ? null : _generate,
+                    icon: const Icon(Icons.auto_awesome, size: 16),
+                    label: Text(isCompact ? 'Generate' : 'Generate Facts',
+                        style: const TextStyle(fontSize: 12)),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Divider(height: 1, color: Colors.white.withOpacity(0.06)),
+          // Fact list / loading / error / empty
+          Expanded(child: _buildFactListContent(isCompact)),
         ],
       ),
     );
   }
 
-  Widget _buildContent(ThemeData theme) {
-    if (_isGenerating) {
+  Widget _buildFactListContent(bool isCompact) {
+    if (_isGenerating && _facts.isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 16),
-            Text('$_progressStage... $_progressPercent%'),
-            const SizedBox(height: 8),
             SizedBox(
-              width: 200,
-              child: LinearProgressIndicator(
-                value: _progressPercent / 100,
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white.withOpacity(0.4),
               ),
             ),
             const SizedBox(height: 12),
-            Text(
-              'Asking AI for $_factCount $_selectedCategory facts...',
-              style: const TextStyle(fontSize: 12, color: Colors.white38),
-            ),
+            Text('$_progressStage...',
+                style: TextStyle(
+                    fontSize: 12, color: Colors.white.withOpacity(0.4))),
           ],
         ),
       );
     }
 
     if (_error != null) {
-      return Center(
+      return Padding(
+        padding: const EdgeInsets.all(16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: 400,
-              child: Text(
-                _error!,
-                style: const TextStyle(color: Colors.redAccent),
-                textAlign: TextAlign.center,
-              ),
-            ),
-            const SizedBox(height: 16),
-            FilledButton.icon(
+            const Icon(Icons.error_outline, size: 32, color: Colors.redAccent),
+            const SizedBox(height: 8),
+            Text(_error!,
+                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                textAlign: TextAlign.center),
+            const SizedBox(height: 8),
+            TextButton(
               onPressed: () => setState(() => _error = null),
-              icon: const Icon(Icons.refresh),
-              label: const Text('Try Again'),
+              child: const Text('Dismiss', style: TextStyle(fontSize: 12)),
             ),
           ],
         ),
       );
     }
 
-    if (_facts.isNotEmpty) {
-      return _buildFactsList(theme);
-    }
-
-    // Empty state
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.auto_awesome, size: 64,
-              color: Colors.white.withOpacity(0.15)),
-          const SizedBox(height: 16),
-          const Text(
-            'Select a category and click "Generate Facts"\n'
-            'to get AI-generated facts for your next short.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white38, fontSize: 15),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'Requires an API key (OpenAI, Claude, or Gemini)\nconfigured in Settings.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white.withOpacity(0.2), fontSize: 12),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFactsList(ThemeData theme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+    if (_facts.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
+            Icon(Icons.auto_awesome,
+                size: 40, color: Colors.white.withOpacity(0.08)),
+            const SizedBox(height: 8),
             Text(
-              '${_facts.length} $_selectedCategory Facts',
-              style: theme.textTheme.titleMedium,
+              isCompact
+                  ? 'Generate facts\nto get started.'
+                  : 'Select a category and click\n"Generate Facts" to begin.',
+              textAlign: TextAlign.center,
+              style:
+                  TextStyle(color: Colors.white.withOpacity(0.2), fontSize: 12),
             ),
-            const Spacer(),
-            if (_selectedFactIndex != null) ...[
-              OutlinedButton.icon(
-                onPressed: _isGenerating ? null : _createShort,
-                icon: const Icon(Icons.bolt, size: 18),
-                label: const Text('Quick Render'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white70,
-                  side: BorderSide(color: Colors.white.withOpacity(0.2)),
-                ),
-              ),
-              const SizedBox(width: 8),
-              FilledButton.icon(
-                onPressed: _isGenerating ? null : _editInTimeline,
-                icon: const Icon(Icons.movie_creation, size: 18),
-                label: const Text('Edit in Timeline'),
-              ),
-            ],
           ],
         ),
-        const SizedBox(height: 12),
-        Expanded(
-          child: ListView.builder(
-            itemCount: _facts.length,
-            itemBuilder: (context, index) {
-              return _FactCard(
-                fact: _facts[index],
-                index: index,
-                isSelected: _selectedFactIndex == index,
-                onTap: () {
-                  setState(() {
-                    _selectedFactIndex =
-                        _selectedFactIndex == index ? null : index;
-                  });
-                },
-              );
-            },
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(8),
+      itemCount: _facts.length,
+      itemBuilder: (context, index) {
+        final fact = _facts[index];
+        final title = fact['title'] as String? ?? 'Untitled';
+        final isSelected = _selectedFactIndex == index;
+
+        return Card(
+          margin: const EdgeInsets.only(bottom: 6),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: isSelected
+                ? const BorderSide(color: Color(0xFF6C5CE7), width: 2)
+                : BorderSide.none,
           ),
-        ),
-      ],
-    );
-  }
-}
-
-class _FactCard extends StatelessWidget {
-  final Map<String, dynamic> fact;
-  final int index;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  const _FactCard({
-    required this.fact,
-    required this.index,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final title = fact['title'] as String? ?? 'Untitled';
-    final body = fact['fact'] as String? ?? '';
-    final keywords = (fact['visual_keywords'] as List<dynamic>?)
-            ?.cast<String>() ??
-        [];
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: isSelected
-            ? const BorderSide(color: Color(0xFF6C5CE7), width: 2)
-            : BorderSide.none,
-      ),
-      color: isSelected
-          ? const Color(0xFF6C5CE7).withOpacity(0.08)
-          : null,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+          color: isSelected
+              ? const Color(0xFF6C5CE7).withOpacity(0.08)
+              : null,
+          child: InkWell(
+            onTap: () => _selectFact(index),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
                 children: [
-                  // Number badge
                   Container(
-                    width: 28,
-                    height: 28,
+                    width: 24,
+                    height: 24,
                     decoration: BoxDecoration(
                       color: isSelected
                           ? const Color(0xFF6C5CE7)
@@ -654,74 +768,924 @@ class _FactCard extends StatelessWidget {
                       '${index + 1}',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        fontSize: 12,
+                        fontSize: 11,
                         color: isSelected ? Colors.white : Colors.white54,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   Expanded(
-                    child: Text(
-                      title,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 15,
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title,
+                            style: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                        if (!isCompact) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            fact['fact'] as String? ?? '',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.white.withOpacity(0.4)),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ],
                     ),
                   ),
-                  // Copy button
                   IconButton(
-                    icon: const Icon(Icons.content_copy, size: 18),
-                    tooltip: 'Copy narration script',
+                    icon: const Icon(Icons.content_copy, size: 14),
                     onPressed: () {
-                      Clipboard.setData(ClipboardData(text: body));
+                      Clipboard.setData(ClipboardData(
+                          text: fact['fact'] as String? ?? ''));
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Script copied to clipboard'),
-                          duration: Duration(seconds: 1),
-                        ),
+                            content: Text('Copied'),
+                            duration: Duration(seconds: 1)),
                       );
                     },
+                    style:
+                        IconButton.styleFrom(foregroundColor: Colors.white38),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              Text(
-                body,
-                style: const TextStyle(
-                  fontSize: 13,
-                  height: 1.5,
-                  color: Colors.white70,
-                ),
-              ),
-              if (keywords.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  children: keywords.map((kw) {
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF6C5CE7).withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        kw,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF6C5CE7),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  //  CENTER: COMPOSER
+  // ────────────────────────────────────────────────────────────────
+
+  Widget _buildComposer() {
+    return Container(
+      color: const Color(0xFF0A0A14),
+      child: Row(
+        children: [
+          // ── Center: 9:16 Preview ──
+          Expanded(
+            flex: 3,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  // Title bar
+                  Row(
+                    children: [
+                      const Icon(Icons.smart_display,
+                          size: 18, color: Color(0xFF6C5CE7)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _composerTitle,
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w700),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                    );
-                  }).toList(),
-                ),
-              ],
-            ],
+                      const SizedBox(width: 8),
+                      // Action buttons
+                      OutlinedButton.icon(
+                        onPressed: _isRendering ? null : _editInTimeline,
+                        icon: const Icon(Icons.movie_creation, size: 14),
+                        label: const Text('Timeline',
+                            style: TextStyle(fontSize: 11)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white60,
+                          side:
+                              BorderSide(color: Colors.white.withOpacity(0.15)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton.icon(
+                        onPressed: _isRendering ? null : _renderShort,
+                        icon: _isRendering
+                            ? SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white.withOpacity(0.7),
+                                ),
+                              )
+                            : const Icon(Icons.bolt, size: 14),
+                        label: Text(
+                          _isRendering
+                              ? '$_progressStage $_progressPercent%'
+                              : 'Render',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // 9:16 phone frame
+                  Expanded(child: _buildPhonePreview()),
+                ],
+              ),
+            ),
+          ),
+          Container(width: 1, color: Colors.white.withOpacity(0.06)),
+          // ── Right: Properties panel ──
+          SizedBox(
+            width: 280,
+            child: _buildPropertiesPanel(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  //  9:16 PHONE PREVIEW
+  // ────────────────────────────────────────────────────────────────
+
+  Widget _buildPhonePreview() {
+    return Center(
+      child: AspectRatio(
+        aspectRatio: 9 / 16,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withOpacity(0.12), width: 2),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final frameW = constraints.maxWidth;
+                final frameH = constraints.maxHeight;
+
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Background layer
+                    if (_bgController != null)
+                      Video(
+                        controller: _bgController!,
+                        controls: NoVideoControls,
+                        fit: BoxFit.cover,
+                      )
+                    else
+                      Container(
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Color(0xFF1A1A2E), Color(0xFF0A0A14)],
+                          ),
+                        ),
+                      ),
+                    // Dark overlay for readability
+                    Container(color: Colors.black.withOpacity(0.3)),
+                    // Title text (top area)
+                    Positioned(
+                      top: frameH * 0.08,
+                      left: 16,
+                      right: 16,
+                      child: Text(
+                        _composerTitle,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: _fontFamily,
+                          fontSize: (_fontSize * 0.45).clamp(12, 24),
+                          fontWeight: FontWeight.w800,
+                          color: Color(_colorHex),
+                          shadows: _hasBorder
+                              ? const [
+                                  Shadow(color: Colors.black, blurRadius: 6),
+                                  Shadow(color: Colors.black, blurRadius: 12),
+                                ]
+                              : null,
+                        ),
+                      ),
+                    ),
+                    // Script text (draggable position)
+                    Positioned(
+                      top: _textPosY * frameH - 40,
+                      left: 12,
+                      right: 12,
+                      child: GestureDetector(
+                        onPanUpdate: (details) {
+                          setState(() {
+                            _textPosY = (_textPosY + details.delta.dy / frameH)
+                                .clamp(0.15, 0.92);
+                          });
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 6),
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: const Color(0xFF6C5CE7).withOpacity(0.3),
+                            ),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            _composerScript,
+                            textAlign: TextAlign.center,
+                            maxLines: 6,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily: _fontFamily,
+                              fontSize: (_fontSize * 0.3).clamp(8, 16),
+                              fontWeight: FontWeight.w600,
+                              color: Color(_colorHex),
+                              height: 1.4,
+                              shadows: _hasBorder
+                                  ? const [
+                                      Shadow(
+                                          color: Colors.black, blurRadius: 4),
+                                    ]
+                                  : null,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    // Category badge
+                    Positioned(
+                      bottom: 12,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF6C5CE7).withOpacity(0.6),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            _selectedCategory,
+                            style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ),
+                    // Position presets (right edge)
+                    Positioned(
+                      right: 4,
+                      top: frameH * 0.3,
+                      child: Column(
+                        children: [
+                          _previewPosButton(Icons.vertical_align_top, 0.25),
+                          _previewPosButton(Icons.vertical_align_center, 0.5),
+                          _previewPosButton(Icons.vertical_align_bottom, 0.8),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ),
     );
+  }
+
+  Widget _previewPosButton(IconData icon, double y) {
+    final isActive = (_textPosY - y).abs() < 0.08;
+    return GestureDetector(
+      onTap: () => setState(() => _textPosY = y),
+      child: Container(
+        width: 22,
+        height: 22,
+        margin: const EdgeInsets.only(bottom: 2),
+        decoration: BoxDecoration(
+          color: isActive
+              ? const Color(0xFF6C5CE7).withOpacity(0.6)
+              : Colors.black38,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Icon(icon,
+            size: 14, color: isActive ? Colors.white : Colors.white38),
+      ),
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  //  RIGHT: PROPERTIES PANEL
+  // ────────────────────────────────────────────────────────────────
+
+  Widget _buildPropertiesPanel() {
+    return Container(
+      color: const Color(0xFF141420),
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          // ── Voice section ──
+          _sectionHeader('Voice', Icons.record_voice_over),
+          const SizedBox(height: 8),
+          DropdownButton<TtsVoice>(
+            value: _selectedVoice,
+            isExpanded: true,
+            items: TtsVoice.values
+                .map((v) => DropdownMenuItem(
+                      value: v,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(v.label, style: const TextStyle(fontSize: 13)),
+                          Text(v.description,
+                              style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.white.withOpacity(0.3))),
+                        ],
+                      ),
+                    ))
+                .toList(),
+            onChanged: (v) {
+              if (v != null) setState(() => _selectedVoice = v);
+            },
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _isPreviewingVoice ? null : _previewVoice,
+              icon: _isPreviewingVoice
+                  ? SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white.withOpacity(0.4),
+                      ),
+                    )
+                  : Icon(
+                      _voicePlaying ? Icons.stop : Icons.play_arrow,
+                      size: 16,
+                    ),
+              label: Text(
+                _isPreviewingVoice
+                    ? 'Generating...'
+                    : _voicePlaying
+                        ? 'Playing...'
+                        : 'Preview Voice',
+                style: const TextStyle(fontSize: 11),
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white60,
+                side: BorderSide(color: Colors.white.withOpacity(0.12)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Divider(color: Colors.white.withOpacity(0.06)),
+          const SizedBox(height: 12),
+
+          // ── Text Style section ──
+          _sectionHeader('Text Style', Icons.text_fields),
+          const SizedBox(height: 8),
+          Text('Font',
+              style:
+                  TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
+          const SizedBox(height: 4),
+          DropdownButton<String>(
+            value: _fontFamily,
+            isExpanded: true,
+            items: [
+              'Inter',
+              'Roboto',
+              'Montserrat',
+              'Oswald',
+              'Lato',
+              'Poppins'
+            ]
+                .map((f) => DropdownMenuItem(
+                    value: f,
+                    child: Text(f, style: const TextStyle(fontSize: 12))))
+                .toList(),
+            onChanged: (v) {
+              if (v != null) setState(() => _fontFamily = v);
+            },
+          ),
+          const SizedBox(height: 8),
+          Text('Size: ${_fontSize.toInt()}px',
+              style:
+                  TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
+          Slider(
+            value: _fontSize,
+            min: 20,
+            max: 72,
+            divisions: 26,
+            onChanged: (v) => setState(() => _fontSize = v),
+          ),
+          const SizedBox(height: 4),
+          Text('Color',
+              style:
+                  TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _colorDot(0xFFFFFFFF),
+              _colorDot(0xFFFFD700),
+              _colorDot(0xFF6C5CE7),
+              _colorDot(0xFF00C853),
+              _colorDot(0xFFFF5252),
+              _colorDot(0xFF40C4FF),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text('Text Shadow',
+                  style: TextStyle(
+                      fontSize: 11, color: Colors.white.withOpacity(0.5))),
+              const Spacer(),
+              Switch(
+                value: _hasBorder,
+                onChanged: (v) => setState(() => _hasBorder = v),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Divider(color: Colors.white.withOpacity(0.06)),
+          const SizedBox(height: 12),
+
+          // ── Background section ──
+          _sectionHeader('Background', Icons.image),
+          const SizedBox(height: 8),
+          if (_bgResults.isEmpty && !_isSearchingBg)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  _visualKeywords.isEmpty
+                      ? 'No keywords available'
+                      : 'Searching for backgrounds...',
+                  style: TextStyle(
+                      fontSize: 11, color: Colors.white.withOpacity(0.2)),
+                ),
+              ),
+            ),
+          if (_isSearchingBg)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white.withOpacity(0.3),
+                  ),
+                ),
+              ),
+            ),
+          if (_bgResults.isNotEmpty)
+            SizedBox(
+              height: 80,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: _bgResults.length,
+                itemBuilder: (context, index) {
+                  final clip = _bgResults[index];
+                  final url = clip['preview_url'] as String? ?? '';
+                  final isSelected = url == _selectedBgPreviewUrl;
+                  return GestureDetector(
+                    onTap: () => _selectBackground(clip),
+                    child: Container(
+                      width: 80,
+                      margin: const EdgeInsets.only(right: 6),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: isSelected
+                              ? const Color(0xFF6C5CE7)
+                              : Colors.white.withOpacity(0.08),
+                          width: isSelected ? 2 : 1,
+                        ),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: url.isNotEmpty
+                            ? Image.network(url,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => Container(
+                                    color: Colors.white10,
+                                    child: const Icon(Icons.image,
+                                        color: Colors.white24, size: 16)))
+                            : Container(
+                                color: Colors.white10,
+                                child: const Icon(Icons.image,
+                                    color: Colors.white24, size: 16)),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          // Keyword chips for searching different backgrounds
+          if (_visualKeywords.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: _visualKeywords.map((kw) {
+                return ActionChip(
+                  label: Text(kw, style: const TextStyle(fontSize: 10)),
+                  onPressed: () => _searchBackgrounds(kw),
+                  backgroundColor:
+                      const Color(0xFF6C5CE7).withOpacity(0.1),
+                  side: BorderSide(
+                      color: const Color(0xFF6C5CE7).withOpacity(0.2)),
+                  visualDensity: VisualDensity.compact,
+                );
+              }).toList(),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Divider(color: Colors.white.withOpacity(0.06)),
+          const SizedBox(height: 12),
+
+          // ── Script section ──
+          _sectionHeader('Script', Icons.edit_note),
+          const SizedBox(height: 8),
+          if (_editingScript) ...[
+            TextField(
+              controller: _scriptEditController,
+              maxLines: 6,
+              style: const TextStyle(fontSize: 12, height: 1.5),
+              decoration: const InputDecoration(
+                isDense: true,
+                contentPadding: EdgeInsets.all(10),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                FilledButton(
+                  onPressed: () {
+                    setState(() {
+                      _composerScript = _scriptEditController.text;
+                      _editingScript = false;
+                      _estimatedDuration =
+                          (_composerScript.split(' ').length / 2.5)
+                              .clamp(10, 90);
+                    });
+                  },
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 6),
+                  ),
+                  child: const Text('Save', style: TextStyle(fontSize: 11)),
+                ),
+                const SizedBox(width: 6),
+                TextButton(
+                  onPressed: () => setState(() => _editingScript = false),
+                  child: const Text('Cancel', style: TextStyle(fontSize: 11)),
+                ),
+              ],
+            ),
+          ] else ...[
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.circular(8),
+                border:
+                    Border.all(color: Colors.white.withOpacity(0.06)),
+              ),
+              child: Text(
+                _composerScript,
+                style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.white.withOpacity(0.5),
+                    height: 1.5),
+                maxLines: 6,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(height: 6),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton.icon(
+                onPressed: () {
+                  _scriptEditController.text = _composerScript;
+                  setState(() => _editingScript = true);
+                },
+                icon: const Icon(Icons.edit, size: 14),
+                label: const Text('Edit Script',
+                    style: TextStyle(fontSize: 11)),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.white54,
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          // Word count + estimated duration
+          Row(
+            children: [
+              Text(
+                '${_composerScript.split(' ').length} words',
+                style: TextStyle(
+                    fontSize: 10, color: Colors.white.withOpacity(0.25)),
+              ),
+              const Spacer(),
+              Text(
+                '~${_estimatedDuration.toInt()}s',
+                style: TextStyle(
+                    fontSize: 10, color: Colors.white.withOpacity(0.25)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionHeader(String title, IconData icon) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: Colors.white.withOpacity(0.4)),
+        const SizedBox(width: 6),
+        Text(title,
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: Colors.white.withOpacity(0.5))),
+      ],
+    );
+  }
+
+  Widget _colorDot(int hex) {
+    final isSelected = hex == _colorHex;
+    return GestureDetector(
+      onTap: () => setState(() => _colorHex = hex),
+      child: Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          color: Color(hex),
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: isSelected ? Colors.white : Colors.white24,
+            width: isSelected ? 3 : 1,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  //  BOTTOM: TIMELINE SCRUBBER
+  // ────────────────────────────────────────────────────────────────
+
+  Widget _buildTimelineScrubber() {
+    final words = _composerScript.split(' ');
+    final totalWords = words.length;
+    // Create segments: each ~10 words is a "segment" on the timeline
+    final segmentCount = (totalWords / 10).ceil().clamp(1, 20);
+
+    return Container(
+      height: 80,
+      color: const Color(0xFF141420),
+      child: Column(
+        children: [
+          Divider(height: 1, color: Colors.white.withOpacity(0.06)),
+          // Track labels + segments
+          Expanded(
+            child: Row(
+              children: [
+                // Track labels
+                SizedBox(
+                  width: 80,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _trackLabel('Voice', Icons.record_voice_over,
+                          const Color(0xFF2D824A)),
+                      _trackLabel(
+                          'Video', Icons.videocam, const Color(0xFF2D5AA0)),
+                      _trackLabel(
+                          'Text', Icons.text_fields, const Color(0xFF82782D)),
+                    ],
+                  ),
+                ),
+                Container(
+                    width: 1, color: Colors.white.withOpacity(0.06)),
+                // Segment bars + scrubber
+                Expanded(
+                  child: GestureDetector(
+                    onTapDown: (details) {
+                      final renderBox =
+                          context.findRenderObject() as RenderBox;
+                      // Account for the 80px label column
+                      final localX =
+                          details.localPosition.dx;
+                      final totalWidth = renderBox.size.width - 80;
+                      setState(() {
+                        _scrubPosition =
+                            (localX / totalWidth).clamp(0.0, 1.0);
+                      });
+                    },
+                    onPanUpdate: (details) {
+                      final renderBox =
+                          context.findRenderObject() as RenderBox;
+                      final totalWidth = renderBox.size.width - 80;
+                      setState(() {
+                        _scrubPosition =
+                            (_scrubPosition + details.delta.dx / totalWidth)
+                                .clamp(0.0, 1.0);
+                      });
+                    },
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final trackWidth = constraints.maxWidth;
+                        return Stack(
+                          children: [
+                            Column(
+                              children: [
+                                // Voice track
+                                _trackBar(const Color(0xFF2D824A), trackWidth,
+                                    _previewAudioPath != null
+                                        ? _selectedVoice.label
+                                        : 'TTS (${_selectedVoice.label})'),
+                                // Video track
+                                _trackBar(const Color(0xFF2D5AA0), trackWidth,
+                                    _selectedBgPreviewUrl != null
+                                        ? 'Stock footage'
+                                        : 'Gradient background'),
+                                // Text track — show segments
+                                _trackBarSegmented(
+                                    const Color(0xFF82782D),
+                                    trackWidth,
+                                    segmentCount),
+                              ],
+                            ),
+                            // Playhead
+                            Positioned(
+                              left: _scrubPosition * trackWidth,
+                              top: 0,
+                              bottom: 0,
+                              child: Container(
+                                width: 2,
+                                color: Colors.redAccent,
+                              ),
+                            ),
+                            // Scrub handle
+                            Positioned(
+                              left: _scrubPosition * trackWidth - 6,
+                              top: -2,
+                              child: Container(
+                                width: 12,
+                                height: 12,
+                                decoration: const BoxDecoration(
+                                  color: Colors.redAccent,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Time labels
+          Padding(
+            padding: const EdgeInsets.only(left: 80, right: 8, bottom: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  _formatTime(_scrubPosition * _estimatedDuration),
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontFamily: 'monospace',
+                    color: Colors.white.withOpacity(0.3),
+                  ),
+                ),
+                Text(
+                  _formatTime(_estimatedDuration),
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontFamily: 'monospace',
+                    color: Colors.white.withOpacity(0.3),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _trackLabel(String name, IconData icon, Color color) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      child: Row(
+        children: [
+          Icon(icon, size: 10, color: color.withOpacity(0.6)),
+          const SizedBox(width: 4),
+          Text(name,
+              style: TextStyle(
+                  fontSize: 9, color: Colors.white.withOpacity(0.4))),
+        ],
+      ),
+    );
+  }
+
+  Widget _trackBar(Color color, double width, String label) {
+    return Expanded(
+      child: Container(
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.15),
+          border: Border(
+              bottom:
+                  BorderSide(color: Colors.white.withOpacity(0.04))),
+        ),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
+            width: width * 0.95,
+            margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.35),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(label,
+                style: const TextStyle(fontSize: 8, color: Colors.white60),
+                overflow: TextOverflow.ellipsis),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _trackBarSegmented(Color color, double width, int segments) {
+    return Expanded(
+      child: Container(
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.15),
+          border: Border(
+              bottom:
+                  BorderSide(color: Colors.white.withOpacity(0.04))),
+        ),
+        child: Row(
+          children: List.generate(segments, (i) {
+            return Expanded(
+              child: Container(
+                margin: const EdgeInsets.symmetric(
+                    horizontal: 1, vertical: 2),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.35),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+                child: i == 0
+                    ? Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Text('Caption ${i + 1}',
+                            style: const TextStyle(
+                                fontSize: 7, color: Colors.white54),
+                            overflow: TextOverflow.ellipsis),
+                      )
+                    : null,
+              ),
+            );
+          }),
+        ),
+      ),
+    );
+  }
+
+  String _formatTime(double seconds) {
+    final m = (seconds ~/ 60).toString().padLeft(2, '0');
+    final s = (seconds.toInt() % 60).toString().padLeft(2, '0');
+    return '$m:$s';
   }
 }

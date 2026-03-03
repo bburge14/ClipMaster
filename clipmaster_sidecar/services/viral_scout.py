@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -73,6 +74,23 @@ class ViralScout:
     VELOCITY_WEIGHT = 0.6
     ENGAGEMENT_WEIGHT = 0.4
 
+    @staticmethod
+    def _find_ytdlp() -> str | None:
+        """Locate yt-dlp: check PATH first, then bundled_binaries/."""
+        on_path = shutil.which("yt-dlp")
+        if on_path:
+            return on_path
+        # In production the sidecar lives at <install>/clipmaster_sidecar/services/.
+        # Bundled binaries are at <install>/bundled_binaries/.
+        sidecar_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        install_dir = os.path.dirname(sidecar_dir)
+        exe_name = "yt-dlp.exe" if os.name == "nt" else "yt-dlp"
+        bundled = os.path.join(install_dir, "bundled_binaries", exe_name)
+        if os.path.isfile(bundled):
+            logger.info("Using bundled yt-dlp: %s", bundled)
+            return bundled
+        return None
+
     async def fetch_trending(
         self,
         platform: str = "youtube",
@@ -111,7 +129,7 @@ class ViralScout:
         trending page, then fetches full metadata for each video to get
         view counts, likes, and comments.
         """
-        ytdlp = shutil.which("yt-dlp")
+        ytdlp = self._find_ytdlp()
         if not ytdlp:
             logger.error("yt-dlp not found on PATH or in bundled_binaries/.")
             return []

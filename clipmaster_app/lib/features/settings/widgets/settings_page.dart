@@ -574,45 +574,37 @@ class _ConnectedAccountsSectionState
             ),
           ),
         ],
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.03),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Setup Instructions',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white.withOpacity(0.5),
+        // Show a hint only when OAuth is not configured in this build.
+        if (!accountService.hasClientId(AccountProvider.youtube) &&
+            !accountService.hasClientId(AccountProvider.twitch)) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.03),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline,
+                    size: 16, color: Colors.white.withOpacity(0.3)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'OAuth not configured in this build. '
+                    'For dev builds, add GOOGLE_CLIENT_ID and '
+                    'TWITCH_CLIENT_ID to your .env file.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.white.withOpacity(0.35),
+                      height: 1.4,
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'To enable account login, add OAuth Client IDs to your .env file:\n\n'
-                'YouTube:\n'
-                '  1. Go to console.cloud.google.com > Credentials\n'
-                '  2. Create an OAuth 2.0 Client ID (Desktop type)\n'
-                '  3. Add to .env: GOOGLE_CLIENT_ID=... and GOOGLE_CLIENT_SECRET=...\n\n'
-                'Twitch:\n'
-                '  1. Go to dev.twitch.tv/console/apps\n'
-                '  2. Register a new application (use http://localhost as redirect)\n'
-                '  3. Add to .env: TWITCH_CLIENT_ID=... and TWITCH_CLIENT_SECRET=...',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.white.withOpacity(0.3),
-                  height: 1.5,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -658,7 +650,7 @@ class _ConnectedAccountsSectionState
                   )
                 else if (!hasClientId)
                   Text(
-                    'Client ID not configured (see setup below)',
+                    'OAuth not configured',
                     style: TextStyle(
                       fontSize: 12,
                       color: Colors.white.withOpacity(0.3),

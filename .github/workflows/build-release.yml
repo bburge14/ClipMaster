@@ -131,6 +131,18 @@ jobs:
           WshShell.Run """" & appDir & "clipmaster_app.exe""", 1, False
           '@ | Set-Content "$dist\ClipMaster Pro.vbs"
 
+      # Bundle OAuth credentials from GitHub Secrets so the installed app
+      # can offer "Connect YouTube" / "Connect Twitch" out of the box.
+      - name: Bundle environment config
+        shell: pwsh
+        run: |
+          @"
+          GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+          TWITCH_CLIENT_ID=${{ secrets.TWITCH_CLIENT_ID }}
+          TWITCH_CLIENT_SECRET=${{ secrets.TWITCH_CLIENT_SECRET }}
+          "@ | Set-Content "dist\ClipMasterPro\.env"
+
       # Patch the Inno Setup version to match this build
       - name: Patch Inno Setup version
         shell: pwsh

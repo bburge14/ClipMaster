@@ -542,10 +542,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           child: Row(
             children: [
               // ── Left panel: fact list ──
-              SizedBox(
-                width: hasComposer ? 300 : double.infinity,
-                child: _buildFactListPanel(),
-              ),
+              if (hasComposer)
+                SizedBox(
+                  width: 300,
+                  child: _buildFactListPanel(),
+                )
+              else
+                Expanded(child: _buildFactListPanel()),
               // ── Composer (when fact selected) ──
               if (hasComposer) ...[
                 Container(width: 1, color: Colors.white.withOpacity(0.06)),

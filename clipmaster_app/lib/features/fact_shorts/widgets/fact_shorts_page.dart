@@ -8,6 +8,8 @@ import 'package:path_provider/path_provider.dart';
 import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/api_key_service.dart';
+import '../../../core/services/project_state.dart';
+import '../../../main.dart';
 
 const _categories = ['Space', 'History', 'Science', 'Technology', 'Nature'];
 
@@ -21,6 +23,7 @@ class FactShortsPage extends ConsumerStatefulWidget {
 class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   String _selectedCategory = 'Science';
   int _factCount = 5;
+  TtsVoice _selectedVoice = TtsVoice.onyx;
   bool _isGenerating = false;
   String _progressStage = '';
   int _progressPercent = 0;
@@ -156,7 +159,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         'text': factText,
         'title': factTitle,
         'api_key': openaiKey,
-        'voice': 'onyx',
+        'voice': _selectedVoice.name,
         'output_dir': shortsDir.path,
         'visual_keywords': visualKeywords,
       };
@@ -233,6 +236,135 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
   }
 
+  Future<void> _editInTimeline() async {
+    if (_selectedFactIndex == null) return;
+    final fact = _facts[_selectedFactIndex!];
+    final factText = fact['fact'] as String? ?? '';
+    final factTitle = fact['title'] as String? ?? 'Untitled Fact';
+    final visualKeywords =
+        (fact['visual_keywords'] as List<dynamic>?)?.cast<String>() ?? [];
+    if (factText.isEmpty) return;
+
+    final apiKeyService = ref.read(apiKeyServiceProvider);
+    final openaiKey = apiKeyService.getNextKey(LlmProvider.openai);
+    if (openaiKey == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('OpenAI API key required for TTS. Add one in Settings.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isGenerating = true;
+      _progressStage = 'Generating voiceover';
+      _progressPercent = 10;
+    });
+
+    try {
+      final ipc = ref.read(ipcClientProvider);
+
+      // Step 1: Generate TTS audio only.
+      final ttsResponse = await ipc.send(
+        IpcMessage(
+          type: MessageType.generateTts,
+          payload: {
+            'text': factText,
+            'api_key': openaiKey,
+            'voice': _selectedVoice.name,
+          },
+        ),
+        timeout: const Duration(seconds: 60),
+        onProgress: (progress) {
+          if (mounted) {
+            setState(() {
+              _progressStage =
+                  progress.payload['stage'] as String? ?? 'Generating TTS';
+              _progressPercent = progress.payload['percent'] as int? ?? 0;
+            });
+          }
+        },
+      );
+
+      if (!mounted) return;
+
+      if (ttsResponse.type == MessageType.error) {
+        setState(() {
+          _isGenerating = false;
+          _error = ttsResponse.payload['message'] as String? ?? 'TTS failed';
+        });
+        return;
+      }
+
+      final ttsAudioPath = ttsResponse.payload['audio_path'] as String? ?? '';
+
+      // Step 2: Search for stock footage.
+      setState(() {
+        _progressStage = 'Searching stock footage';
+        _progressPercent = 50;
+      });
+
+      final stockClips = <Map<String, dynamic>>[];
+      final pexelsKey = apiKeyService.getNextKey(LlmProvider.pexels);
+      final pixabayKey = apiKeyService.getNextKey(LlmProvider.pixabay);
+
+      if (visualKeywords.isNotEmpty && (pexelsKey != null || pixabayKey != null)) {
+        for (final kw in visualKeywords.take(3)) {
+          final stockResponse = await ipc.send(
+            IpcMessage(
+              type: MessageType.queryStockFootage,
+              payload: {
+                'keyword': kw,
+                if (pexelsKey != null) 'pexels_key': pexelsKey,
+                if (pixabayKey != null) 'pixabay_key': pixabayKey,
+                'per_source': 2,
+              },
+            ),
+            timeout: const Duration(seconds: 15),
+          );
+          if (stockResponse.type != MessageType.error) {
+            final clips =
+                (stockResponse.payload['clips'] as List<dynamic>? ?? [])
+                    .cast<Map<String, dynamic>>();
+            stockClips.addAll(clips);
+          }
+        }
+      }
+
+      setState(() => _isGenerating = false);
+
+      // Step 3: Load everything into the timeline.
+      ref.read(projectProvider.notifier).loadShortIntoTimeline(
+        title: factTitle,
+        scriptText: factText,
+        voice: _selectedVoice,
+        ttsAudioPath: ttsAudioPath.isNotEmpty ? ttsAudioPath : null,
+        stockClips: stockClips,
+      );
+
+      // Switch to Timeline tab.
+      ref.read(selectedTabProvider.notifier).state = 0;
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'Assets loaded into Timeline. Add B-roll, adjust text, and render when ready.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isGenerating = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -287,6 +419,21 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         DropdownMenuItem(value: n, child: Text('$n')))
                     .toList(),
                 onChanged: (v) => setState(() => _factCount = v!),
+              ),
+              const SizedBox(width: 16),
+              // Voice picker
+              const Text('Voice:', style: TextStyle(fontSize: 13)),
+              const SizedBox(width: 8),
+              DropdownButton<TtsVoice>(
+                value: _selectedVoice,
+                items: TtsVoice.values
+                    .map((v) => DropdownMenuItem(
+                          value: v,
+                          child: Text(v.label,
+                              style: const TextStyle(fontSize: 13)),
+                        ))
+                    .toList(),
+                onChanged: (v) => setState(() => _selectedVoice = v!),
               ),
               const SizedBox(width: 16),
               FilledButton.icon(
@@ -407,12 +554,23 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               style: theme.textTheme.titleMedium,
             ),
             const Spacer(),
-            if (_selectedFactIndex != null)
-              FilledButton.icon(
+            if (_selectedFactIndex != null) ...[
+              OutlinedButton.icon(
                 onPressed: _isGenerating ? null : _createShort,
-                icon: const Icon(Icons.movie_creation, size: 18),
-                label: const Text('Create Short'),
+                icon: const Icon(Icons.bolt, size: 18),
+                label: const Text('Quick Render'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white70,
+                  side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                ),
               ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: _isGenerating ? null : _editInTimeline,
+                icon: const Icon(Icons.movie_creation, size: 18),
+                label: const Text('Edit in Timeline'),
+              ),
+            ],
           ],
         ),
         const SizedBox(height: 12),

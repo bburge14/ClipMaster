@@ -18,6 +18,9 @@ import 'features/timeline/widgets/magnetic_timeline.dart';
 import 'features/settings/widgets/settings_page.dart';
 import 'features/viral_scout/widgets/viral_scout_page.dart';
 
+/// Provider to allow any page to switch tabs programmatically.
+final selectedTabProvider = StateProvider<int>((ref) => 0);
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -179,7 +182,6 @@ class MainShell extends ConsumerStatefulWidget {
 }
 
 class _MainShellState extends ConsumerState<MainShell> {
-  int _selectedIndex = 0;
   bool _devConsoleVisible = false;
 
   @override
@@ -222,6 +224,7 @@ class _MainShellState extends ConsumerState<MainShell> {
   @override
   Widget build(BuildContext context) {
     final updateCheck = ref.watch(updateCheckProvider);
+    final selectedIndex = ref.watch(selectedTabProvider);
 
     return Scaffold(
       body: Column(
@@ -286,9 +289,9 @@ class _MainShellState extends ConsumerState<MainShell> {
                       // Nav items
                       ...List.generate(_navItems.length, (i) {
                         final item = _navItems[i];
-                        final selected = _selectedIndex == i;
+                        final selected = selectedIndex == i;
                         return _buildNavButton(item, selected, () {
-                          setState(() => _selectedIndex = i);
+                          ref.read(selectedTabProvider.notifier).state = i;
                         });
                       }),
                       const Spacer(),
@@ -316,7 +319,7 @@ class _MainShellState extends ConsumerState<MainShell> {
                 // so tab state is preserved when switching.
                 Expanded(
                   child: IndexedStack(
-                    index: _selectedIndex,
+                    index: selectedIndex,
                     children: const [
                       MagneticTimeline(),
                       FactShortsPage(),

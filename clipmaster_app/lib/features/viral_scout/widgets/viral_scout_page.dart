@@ -6,7 +6,9 @@ import 'package:intl/intl.dart';
 import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/api_key_service.dart';
+import '../../../core/services/project_state.dart';
 import '../../../core/utils/env_config.dart';
+import '../../../main.dart';
 
 class ViralScoutPage extends ConsumerStatefulWidget {
   const ViralScoutPage({super.key});
@@ -267,14 +269,14 @@ class _ViralScoutPageState extends ConsumerState<ViralScoutPage> {
   }
 }
 
-class _VideoCard extends StatelessWidget {
+class _VideoCard extends ConsumerWidget {
   final Map<String, dynamic> video;
   final int rank;
 
   const _VideoCard({required this.video, required this.rank});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final title = video['title'] as String? ?? 'Untitled';
     final channel = video['channel'] as String? ?? 'Unknown';
     final platform = video['platform'] as String? ?? '';
@@ -287,6 +289,7 @@ class _VideoCard extends StatelessWidget {
     final composite =
         (video['composite_score'] as num?)?.toDouble() ?? 0.0;
     final url = video['url'] as String? ?? '';
+    final thumbnailUrl = video['thumbnail_url'] as String? ?? '';
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -315,6 +318,25 @@ class _VideoCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
+            // Thumbnail
+            if (thumbnailUrl.isNotEmpty)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: SizedBox(
+                  width: 120,
+                  height: 68,
+                  child: Image.network(
+                    thumbnailUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      color: Colors.white10,
+                      child: const Icon(Icons.broken_image,
+                          size: 24, color: Colors.white24),
+                    ),
+                  ),
+                ),
+              ),
+            if (thumbnailUrl.isNotEmpty) const SizedBox(width: 12),
             // Video info
             Expanded(
               child: Column(
@@ -372,21 +394,52 @@ class _VideoCard extends StatelessWidget {
               ],
             ),
             const SizedBox(width: 8),
-            // Copy URL button
-            IconButton(
-              icon: const Icon(Icons.link, size: 20),
-              tooltip: 'Copy video URL',
-              onPressed: url.isEmpty
-                  ? null
-                  : () {
-                      Clipboard.setData(ClipboardData(text: url));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('URL copied to clipboard'),
-                          duration: Duration(seconds: 1),
-                        ),
-                      );
-                    },
+            // Action buttons column
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.movie_creation_outlined, size: 20),
+                  tooltip: 'Send to Timeline',
+                  onPressed: url.isEmpty
+                      ? null
+                      : () {
+                          ref.read(projectProvider.notifier).addAsset(
+                            TimelineAsset(
+                              id: 'scout_${video['video_id'] ?? DateTime.now().millisecondsSinceEpoch}',
+                              track: TimelineTrack.video,
+                              label: title,
+                              url: url,
+                              thumbnailUrl: thumbnailUrl,
+                              metadata: video,
+                            ),
+                          );
+                          ref.read(selectedTabProvider.notifier).state = 0;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                  'Added "$title" to Timeline. Downloading...'),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.link, size: 20),
+                  tooltip: 'Copy video URL',
+                  onPressed: url.isEmpty
+                      ? null
+                      : () {
+                          Clipboard.setData(ClipboardData(text: url));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('URL copied to clipboard'),
+                              duration: Duration(seconds: 1),
+                            ),
+                          );
+                        },
+                ),
+              ],
             ),
           ],
         ),

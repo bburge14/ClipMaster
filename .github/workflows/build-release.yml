@@ -82,18 +82,22 @@ jobs:
           $pyRuntime = "$dist\python_runtime"
           Expand-Archive -Path "dist\python-embed.zip" -DestinationPath $pyRuntime -Force
 
-          # Enable pip in embedded Python
+          # Enable pip in embedded Python and add the app install directory to the
+          # module search path so `python -m clipmaster_sidecar` always works,
+          # even when the working directory is not the install folder.
           $pthFile = Get-ChildItem -Path $pyRuntime -Filter "python*._pth" | Select-Object -First 1
           (Get-Content $pthFile.FullName) -replace '#import site', 'import site' | Set-Content $pthFile.FullName
           Add-Content -Path $pthFile.FullName -Value "Lib\site-packages"
+          Add-Content -Path $pthFile.FullName -Value ".."
 
           # Install pip
           Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "$pyRuntime\get-pip.py"
           & "$pyRuntime\python.exe" "$pyRuntime\get-pip.py" --no-warn-script-location 2>&1 | Out-Null
           Remove-Item "$pyRuntime\get-pip.py"
 
-          # Install sidecar dependencies
-          & "$pyRuntime\python.exe" -m pip install --quiet --no-warn-script-location -r "clipmaster_sidecar\requirements.txt"
+          # Install sidecar dependencies (fail the build if any dependency fails)
+          & "$pyRuntime\python.exe" -m pip install --no-warn-script-location -r "clipmaster_sidecar\requirements.txt"
+          if ($LASTEXITCODE -ne 0) { throw "pip install failed with exit code $LASTEXITCODE" }
 
           # Copy sidecar (without tests / pycache)
           Copy-Item -Path "clipmaster_sidecar" -Destination "$dist\clipmaster_sidecar" -Recurse -Force
@@ -121,6 +125,7 @@ jobs:
           @'
           Set WshShell = CreateObject("WScript.Shell")
           appDir = Replace(WScript.ScriptFullName, WScript.ScriptName, "")
+          WshShell.CurrentDirectory = appDir
           WshShell.Run """" & appDir & "python_runtime\python.exe"" -m clipmaster_sidecar --port 9120", 0, False
           WScript.Sleep 2000
           WshShell.Run """" & appDir & "clipmaster_app.exe""", 1, False

@@ -8,11 +8,8 @@ dependencies = [
     "uvicorn[standard]>=0.25.0",
     "websockets>=12.0",
     "pydantic>=2.5.0",
-    "faster-whisper>=1.0.0",
     "httpx>=0.26.0",
     "yt-dlp>=2024.1.0",
-    "pillow>=10.2.0",
-    "numpy>=1.26.0",
 ]
 
 [project.optional-dependencies]

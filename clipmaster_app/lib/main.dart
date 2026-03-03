@@ -270,9 +270,12 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
     });
     try {
       final updater = ref.read(autoUpdaterProvider);
+      final apiKeyService = ref.read(apiKeyServiceProvider);
+      final githubToken = apiKeyService.getNextKey(LlmProvider.github);
       await updater.downloadAndInstall(
         widget.update,
         onProgress: (p) => setState(() => _percent = p),
+        githubToken: githubToken,
       );
     } catch (e) {
       setState(() {

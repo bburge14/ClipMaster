@@ -5,8 +5,9 @@ Usage:
 """
 
 import argparse
-import asyncio
 import logging
+import os
+import sys
 
 import uvicorn
 
@@ -19,7 +20,28 @@ logging.basicConfig(
 logger = logging.getLogger("clipmaster_sidecar")
 
 
+def _setup_bundled_binaries_path() -> None:
+    """Add bundled_binaries/ to the system PATH so shutil.which() can find
+    yt-dlp.exe, ffmpeg.exe, etc. that are shipped alongside the installed app.
+
+    Layout in the installed .exe:
+        <install_dir>/
+            clipmaster_sidecar/   <-- we are here
+            bundled_binaries/     <-- yt-dlp.exe, ffmpeg.exe
+            python_runtime/
+            clipmaster_app.exe
+    """
+    sidecar_dir = os.path.dirname(os.path.abspath(__file__))
+    bundled = os.path.join(sidecar_dir, "..", "bundled_binaries")
+    if os.path.isdir(bundled):
+        bundled = os.path.realpath(bundled)
+        logger.info("Adding bundled binaries to PATH: %s", bundled)
+        os.environ["PATH"] = bundled + os.pathsep + os.environ.get("PATH", "")
+
+
 def main() -> None:
+    _setup_bundled_binaries_path()
+
     parser = argparse.ArgumentParser(description="ClipMaster Sidecar")
     parser.add_argument("--port", type=int, default=9120, help="WebSocket port")
     parser.add_argument("--host", type=str, default="127.0.0.1")

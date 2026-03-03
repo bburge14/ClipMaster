@@ -7,6 +7,8 @@ import 'package:http/http.dart' as http;
 import 'package:logger/logger.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'api_key_service.dart';
+
 final _log = Logger(printer: PrettyPrinter(methodCount: 0));
 
 /// Metadata about an available update.
@@ -85,7 +87,10 @@ class AutoUpdater {
   }
 
   /// Check GitHub Releases for a newer version.
-  Future<UpdateInfo?> checkForUpdate() async {
+  ///
+  /// If the repo is private, pass a [githubToken] (Personal Access Token)
+  /// so the API call can authenticate. Without it, private repos return 404.
+  Future<UpdateInfo?> checkForUpdate({String? githubToken}) async {
     try {
       final installedVersion = getInstalledVersion();
       _log.i('Checking for updates (installed: $installedVersion)...');
@@ -93,10 +98,23 @@ class AutoUpdater {
       final uri = Uri.parse(
         'https://api.github.com/repos/$_repoOwner/$_repoName/releases/latest',
       );
-      final response = await http.get(uri, headers: {
+      final headers = <String, String>{
         'Accept': 'application/vnd.github.v3+json',
         'User-Agent': 'ClipMasterPro/$installedVersion',
-      });
+      };
+      if (githubToken != null && githubToken.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $githubToken';
+        _log.d('Using GitHub token for authenticated release check.');
+      }
+      final response = await http.get(uri, headers: headers);
+
+      if (response.statusCode == 404 && (githubToken == null || githubToken.isEmpty)) {
+        _log.w(
+          'Update check returned 404. The repo may be private. '
+          'Add a GitHub Personal Access Token in API Keys to enable updates.',
+        );
+        return null;
+      }
 
       if (response.statusCode != 200) {
         _log.w('Update check failed: HTTP ${response.statusCode}');
@@ -177,6 +195,7 @@ class AutoUpdater {
   Future<void> downloadAndInstall(
     UpdateInfo update, {
     void Function(int percent)? onProgress,
+    String? githubToken,
   }) async {
     if (update.downloadUrl == null) {
       throw StateError(
@@ -193,6 +212,10 @@ class AutoUpdater {
     _log.i('Downloading update to $installerPath');
 
     final request = http.Request('GET', Uri.parse(update.downloadUrl!));
+    request.headers['Accept'] = 'application/octet-stream';
+    if (githubToken != null && githubToken.isNotEmpty) {
+      request.headers['Authorization'] = 'Bearer $githubToken';
+    }
     final response = await http.Client().send(request);
 
     final totalBytes = update.sizeBytes > 0 ? update.sizeBytes : 1;
@@ -251,7 +274,11 @@ class UpdateCheckNotifier extends StateNotifier<AsyncValue<UpdateInfo?>> {
     // visible while re-checking in the background.
     try {
       final updater = _ref.read(autoUpdaterProvider);
-      final result = await updater.checkForUpdate();
+      // Use GitHub PAT from the API Keys service if available (needed for
+      // private repos — without it the GitHub API returns 404).
+      final apiKeyService = _ref.read(apiKeyServiceProvider);
+      final githubToken = apiKeyService.getNextKey(LlmProvider.github);
+      final result = await updater.checkForUpdate(githubToken: githubToken);
       if (mounted) state = AsyncValue.data(result);
     } catch (e, st) {
       if (mounted) state = AsyncValue.error(e, st);

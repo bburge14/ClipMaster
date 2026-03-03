@@ -162,7 +162,8 @@ class _UpdateSection extends ConsumerWidget {
         ),
         const SizedBox(height: 8),
         const Text(
-          'Updates are checked automatically every 30 minutes.',
+          'Updates are checked automatically every 30 minutes.\n'
+          'For private repos, add a GitHub Personal Access Token in API Keys.',
           style: TextStyle(fontSize: 11, color: Colors.white24),
         ),
       ],
@@ -173,7 +174,9 @@ class _UpdateSection extends ConsumerWidget {
       BuildContext context, WidgetRef ref, UpdateInfo update) async {
     try {
       final updater = ref.read(autoUpdaterProvider);
-      await updater.downloadAndInstall(update);
+      final apiKeyService = ref.read(apiKeyServiceProvider);
+      final githubToken = apiKeyService.getNextKey(LlmProvider.github);
+      await updater.downloadAndInstall(update, githubToken: githubToken);
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

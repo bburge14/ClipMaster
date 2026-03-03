@@ -51,4 +51,7 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\ClipMaster Pro.vbs"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
+; For manual install: user gets a "Launch" checkbox on the finish page.
 Filename: "{app}\ClipMaster Pro.vbs"; WorkingDir: "{app}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent shellexec
+; For silent/auto-update: always relaunch the app after updating.
+Filename: "wscript.exe"; Parameters: """{app}\ClipMaster Pro.vbs"""; WorkingDir: "{app}"; Flags: nowait skipifdoesntexist; Check: WizardSilent

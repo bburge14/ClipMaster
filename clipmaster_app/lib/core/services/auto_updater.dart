@@ -246,11 +246,25 @@ class AutoUpdater {
 
     _log.i('Download complete. Launching installer...');
 
-    // /SILENT runs the installer without a wizard but shows a progress bar.
-    // It upgrades in-place to the same directory.
+    // Write a helper script that:
+    //   1. Waits for this app to close (so the exe is unlocked)
+    //   2. Runs the Inno Setup installer silently
+    //   3. The installer's [Run] section relaunches the app
+    //   4. Cleans up the script
+    final scriptPath =
+        '${tempDir.path}${Platform.pathSeparator}clipmaster_update.cmd';
+    await File(scriptPath).writeAsString(
+      '@echo off\r\n'
+      'echo Waiting for ClipMaster to close...\r\n'
+      'timeout /t 3 /nobreak >nul\r\n'
+      'echo Running installer...\r\n'
+      '"$installerPath" /SILENT\r\n'
+      'del "%~f0"\r\n',
+    );
+
     await Process.start(
-      installerPath,
-      ['/SILENT'],
+      'cmd.exe',
+      ['/c', scriptPath],
       mode: ProcessStartMode.detached,
     );
     exit(0);

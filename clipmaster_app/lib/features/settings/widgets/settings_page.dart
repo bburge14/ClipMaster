@@ -14,47 +14,66 @@ class SettingsPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-
     return Padding(
       padding: const EdgeInsets.all(24),
-      child: ListView(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.settings, size: 28, color: Color(0xFF6C5CE7)),
-              const SizedBox(width: 12),
-              Text('Settings', style: theme.textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-              )),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Manage API keys, updates, and application preferences.',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: Colors.white.withOpacity(0.4),
+          // Left column: Accounts + API Keys
+          Expanded(
+            flex: 3,
+            child: ListView(
+              children: [
+                _buildHeader(context),
+                const SizedBox(height: 24),
+                const _ConnectedAccountsSection(),
+                const SizedBox(height: 20),
+                const _ApiKeySection(),
+              ],
             ),
           ),
-          const SizedBox(height: 28),
-          const _ConnectedAccountsSection(),
-          const SizedBox(height: 20),
-          const _ApiKeySection(),
-          const SizedBox(height: 20),
-          const _StorageSection(),
-          const SizedBox(height: 20),
-          const _UpdateSection(),
-          const SizedBox(height: 20),
-          const _SidecarStatusSection(),
-          const SizedBox(height: 20),
-          const _AboutSection(),
+          const SizedBox(width: 24),
+          // Right column: Storage, Updates, Sidecar, About
+          Expanded(
+            flex: 2,
+            child: ListView(
+              children: const [
+                _StorageSection(),
+                SizedBox(height: 16),
+                _UpdateSection(),
+                SizedBox(height: 16),
+                _SidecarStatusSection(),
+                SizedBox(height: 16),
+                _AboutSection(),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
+
+  Widget _buildHeader(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        const Icon(Icons.settings, size: 28, color: Color(0xFF6C5CE7)),
+        const SizedBox(width: 12),
+        Text('Settings',
+            style: theme.textTheme.headlineMedium
+                ?.copyWith(fontWeight: FontWeight.w700)),
+      ],
+    );
+  }
 }
 
-// ───────────────────── API Key Management ─────────────────────
+// ═══════════════════════════════════════════════════════════════════
+//  API KEY MANAGEMENT — Grouped by category, with inline add + list
+// ═══════════════════════════════════════════════════════════════════
+
+const _aiProviders = [LlmProvider.openai, LlmProvider.claude, LlmProvider.gemini];
+const _mediaProviders = [LlmProvider.youtube, LlmProvider.pexels, LlmProvider.pixabay];
+const _platformProviders = [LlmProvider.github];
 
 class _ApiKeySection extends ConsumerStatefulWidget {
   const _ApiKeySection();
@@ -64,8 +83,68 @@ class _ApiKeySection extends ConsumerStatefulWidget {
 }
 
 class _ApiKeySectionState extends ConsumerState<_ApiKeySection> {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _groupHeader('AI Model Keys',
+            'Round-robin across healthy keys for cost balancing.',
+            Icons.psychology_rounded),
+        const SizedBox(height: 10),
+        ..._aiProviders.map((p) => _ProviderKeyCard(provider: p)),
+        const SizedBox(height: 20),
+        _groupHeader('Media & Stock APIs',
+            'Used for video search, stock footage, and thumbnails.',
+            Icons.perm_media_rounded),
+        const SizedBox(height: 10),
+        ..._mediaProviders.map((p) => _ProviderKeyCard(provider: p)),
+        const SizedBox(height: 20),
+        _groupHeader('Platform Tokens',
+            'GitHub PAT for auto-update from private releases.',
+            Icons.token_rounded),
+        const SizedBox(height: 10),
+        ..._platformProviders.map((p) => _ProviderKeyCard(provider: p)),
+      ],
+    );
+  }
+
+  Widget _groupHeader(String title, String subtitle, IconData icon) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: Colors.white.withOpacity(0.4)),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white.withOpacity(0.6))),
+            Text(subtitle,
+                style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.white.withOpacity(0.25))),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ProviderKeyCard extends ConsumerStatefulWidget {
+  final LlmProvider provider;
+  const _ProviderKeyCard({required this.provider});
+
+  @override
+  ConsumerState<_ProviderKeyCard> createState() => _ProviderKeyCardState();
+}
+
+class _ProviderKeyCardState extends ConsumerState<_ProviderKeyCard> {
+  bool _expanded = false;
+  bool _adding = false;
   final _keyController = TextEditingController();
-  LlmProvider _selectedProvider = LlmProvider.openai;
 
   @override
   void dispose() {
@@ -73,422 +152,302 @@ class _ApiKeySectionState extends ConsumerState<_ApiKeySection> {
     super.dispose();
   }
 
+  IconData get _icon => switch (widget.provider) {
+    LlmProvider.openai => Icons.auto_awesome,
+    LlmProvider.claude => Icons.smart_toy,
+    LlmProvider.gemini => Icons.diamond,
+    LlmProvider.github => Icons.code,
+    LlmProvider.youtube => Icons.play_circle_filled,
+    LlmProvider.pexels => Icons.camera_alt,
+    LlmProvider.pixabay => Icons.image,
+  };
+
+  Color get _color => switch (widget.provider) {
+    LlmProvider.openai => const Color(0xFF10A37F),
+    LlmProvider.claude => const Color(0xFFD97706),
+    LlmProvider.gemini => const Color(0xFF4285F4),
+    LlmProvider.github => Colors.white70,
+    LlmProvider.youtube => const Color(0xFFFF0000),
+    LlmProvider.pexels => const Color(0xFF05A081),
+    LlmProvider.pixabay => const Color(0xFF48B648),
+  };
+
+  String get _label => switch (widget.provider) {
+    LlmProvider.openai => 'OpenAI',
+    LlmProvider.claude => 'Claude (Anthropic)',
+    LlmProvider.gemini => 'Gemini (Google)',
+    LlmProvider.github => 'GitHub',
+    LlmProvider.youtube => 'YouTube Data API',
+    LlmProvider.pexels => 'Pexels',
+    LlmProvider.pixabay => 'Pixabay',
+  };
+
+  String get _hint => switch (widget.provider) {
+    LlmProvider.openai => 'sk-...',
+    LlmProvider.claude => 'sk-ant-...',
+    LlmProvider.gemini => 'AIza...',
+    LlmProvider.github => 'ghp_...',
+    LlmProvider.youtube => 'AIza...',
+    LlmProvider.pexels => 'Pexels API key...',
+    LlmProvider.pixabay => 'Pixabay API key...',
+  };
+
   @override
   Widget build(BuildContext context) {
     final apiService = ref.watch(apiKeyServiceProvider);
+    final keys = apiService.getKeysForProvider(widget.provider);
+    final healthyCount = keys.where((k) => k.isHealthy).length;
 
-    return _SettingsCard(
-      icon: Icons.vpn_key_rounded,
-      title: 'API Keys',
-      subtitle: 'Keys are encrypted and stored locally. '
-          'ClipMaster uses round-robin load balancing across all healthy keys.',
-      children: [
-        // Add key form
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.03),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.white.withOpacity(0.06)),
-          ),
-          child: Row(
-            children: [
-              // Provider dropdown
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.04),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<LlmProvider>(
-                    value: _selectedProvider,
-                    dropdownColor: const Color(0xFF1E1E2E),
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                    items: LlmProvider.values.map((p) {
-                      return DropdownMenuItem(
-                        value: p,
-                        child: Text(_providerLabel(p)),
-                      );
-                    }).toList(),
-                    onChanged: (p) => setState(() => _selectedProvider = p!),
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        children: [
+          // Provider header row
+          InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  // Provider icon
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: _color.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(_icon, size: 18, color: _color),
                   ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: SizedBox(
-                  height: 40,
-                  child: TextField(
-                    controller: _keyController,
-                    obscureText: true,
-                    style: const TextStyle(fontSize: 13),
-                    decoration: const InputDecoration(
-                      hintText: 'Paste API key...',
-                      isDense: true,
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
+                  const SizedBox(width: 12),
+                  // Provider name + status
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_label,
+                            style: const TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 2),
+                        if (keys.isEmpty)
+                          Text('No keys configured',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.white.withOpacity(0.25)))
+                        else
+                          Row(
+                            children: [
+                              Container(
+                                width: 6,
+                                height: 6,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: healthyCount == keys.length
+                                      ? const Color(0xFF00C853)
+                                      : healthyCount > 0
+                                          ? Colors.orange
+                                          : Colors.redAccent,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                '${keys.length} key${keys.length > 1 ? 's' : ''}'
+                                ' \u2022 $healthyCount healthy',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.white.withOpacity(0.35)),
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+                  // Add button
+                  SizedBox(
+                    height: 30,
+                    child: TextButton.icon(
+                      onPressed: () => setState(() {
+                        _expanded = true;
+                        _adding = true;
+                      }),
+                      icon: const Icon(Icons.add, size: 14),
+                      label: const Text('Add', style: TextStyle(fontSize: 12)),
+                      style: TextButton.styleFrom(
+                        foregroundColor: _color,
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
                       ),
                     ),
                   ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              SizedBox(
-                height: 40,
-                child: FilledButton.icon(
-                  onPressed: () async {
-                    final key = _keyController.text.trim();
-                    if (key.isEmpty) return;
-                    await apiService.addKey(_selectedProvider, key);
-                    _keyController.clear();
-                    setState(() {});
-                  },
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Add'),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        // Key list per provider
-        ...LlmProvider.values.map((provider) {
-          final keys = apiService.getKeysForProvider(provider);
-          if (keys.isEmpty) return const SizedBox.shrink();
-          return _buildProviderKeys(provider, keys, apiService);
-        }),
-        // Empty state
-        if (LlmProvider.values.every(
-            (p) => apiService.getKeysForProvider(p).isEmpty))
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Row(
-              children: [
-                Icon(Icons.info_outline,
-                    size: 16, color: Colors.white.withOpacity(0.3)),
-                const SizedBox(width: 8),
-                Text(
-                  'No API keys configured. Add a key above to get started.',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.white.withOpacity(0.3),
+                  const SizedBox(width: 4),
+                  Icon(
+                    _expanded
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
+                    size: 20,
+                    color: Colors.white24,
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-      ],
-    );
-  }
-
-  Widget _buildProviderKeys(
-    LlmProvider provider,
-    List<ApiKeyEntry> keys,
-    ApiKeyService service,
-  ) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: _providerColor(provider).withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    _providerLabel(provider),
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 11,
-                      color: _providerColor(provider),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '${keys.length} key${keys.length > 1 ? 's' : ''}',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.white.withOpacity(0.3),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          ...keys.map((entry) => Container(
-                margin: const EdgeInsets.only(bottom: 6),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.03),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.white.withOpacity(0.05)),
-                ),
+          // Expanded: key list + add form
+          if (_expanded) ...[
+            Divider(height: 1, color: Colors.white.withOpacity(0.06)),
+            // Add key form
+            if (_adding)
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 child: Row(
                   children: [
-                    Icon(
-                      entry.isHealthy
-                          ? Icons.check_circle_rounded
-                          : Icons.error_rounded,
-                      color: entry.isHealthy
-                          ? const Color(0xFF00C853)
-                          : Colors.redAccent,
-                      size: 16,
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      entry.masked,
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
+                    Expanded(
+                      child: SizedBox(
+                        height: 36,
+                        child: TextField(
+                          controller: _keyController,
+                          obscureText: true,
+                          autofocus: true,
+                          style: const TextStyle(
+                              fontSize: 13, fontFamily: 'monospace'),
+                          decoration: InputDecoration(
+                            hintText: _hint,
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                          ),
+                          onSubmitted: (_) => _addKey(apiService),
+                        ),
                       ),
                     ),
-                    const Spacer(),
-                    Text(
-                      'Used ${entry.usageCount}x',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.white.withOpacity(0.3),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 8),
                     SizedBox(
-                      width: 28,
-                      height: 28,
+                      height: 36,
+                      child: FilledButton(
+                        onPressed: () => _addKey(apiService),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _color,
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 16),
+                        ),
+                        child: const Text('Save',
+                            style: TextStyle(fontSize: 12)),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    SizedBox(
+                      height: 36,
                       child: IconButton(
-                        padding: EdgeInsets.zero,
-                        icon: Icon(Icons.close,
-                            size: 16,
-                            color: Colors.white.withOpacity(0.3)),
-                        onPressed: () async {
-                          await service.removeKey(provider, entry.masked);
-                          setState(() {});
-                        },
+                        icon: const Icon(Icons.close, size: 16),
+                        onPressed: () => setState(() {
+                          _adding = false;
+                          _keyController.clear();
+                        }),
+                        style: IconButton.styleFrom(
+                          foregroundColor: Colors.white38,
+                        ),
                       ),
                     ),
                   ],
                 ),
-              )),
+              ),
+            // Key list
+            if (keys.isNotEmpty)
+              ...keys.map((entry) => _buildKeyRow(entry, apiService)),
+            if (keys.isEmpty && !_adding)
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Center(
+                  child: Text(
+                    'No keys yet. Click "Add" to get started.',
+                    style: TextStyle(
+                        fontSize: 12, color: Colors.white.withOpacity(0.2)),
+                  ),
+                ),
+              ),
+          ],
         ],
       ),
     );
   }
 
-  String _providerLabel(LlmProvider p) => switch (p) {
-        LlmProvider.openai => 'OpenAI',
-        LlmProvider.claude => 'Claude',
-        LlmProvider.gemini => 'Gemini',
-        LlmProvider.github => 'GitHub',
-        LlmProvider.youtube => 'YouTube',
-        LlmProvider.pexels => 'Pexels',
-        LlmProvider.pixabay => 'Pixabay',
-      };
-
-  Color _providerColor(LlmProvider p) => switch (p) {
-        LlmProvider.openai => const Color(0xFF10A37F),
-        LlmProvider.claude => const Color(0xFFD97706),
-        LlmProvider.gemini => const Color(0xFF4285F4),
-        LlmProvider.github => Colors.white70,
-        LlmProvider.youtube => const Color(0xFFFF0000),
-        LlmProvider.pexels => const Color(0xFF05A081),
-        LlmProvider.pixabay => const Color(0xFF48B648),
-      };
-}
-
-// ───────────────────── Update Checker ─────────────────────
-
-class _UpdateSection extends ConsumerWidget {
-  const _UpdateSection();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final updateState = ref.watch(updateCheckProvider);
-    final currentVersion = AutoUpdater.getInstalledVersion();
-
-    return _SettingsCard(
-      icon: Icons.system_update_rounded,
-      title: 'Updates',
-      children: [
-        Row(
-          children: [
-            Text('Installed version',
-                style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 13)),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.06),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text('v$currentVersion',
-                  style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600)),
+  Widget _buildKeyRow(ApiKeyEntry entry, ApiKeyService service) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Row(
+        children: [
+          // Health indicator
+          Tooltip(
+            message: entry.isHealthy ? 'Healthy' : 'Unhealthy — may be rate-limited or invalid',
+            child: Icon(
+              entry.isHealthy
+                  ? Icons.check_circle_rounded
+                  : Icons.error_rounded,
+              color: entry.isHealthy
+                  ? const Color(0xFF00C853)
+                  : Colors.redAccent,
+              size: 14,
             ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        updateState.when(
-          data: (update) {
-            if (update == null) {
-              return Row(
-                children: [
-                  const Icon(Icons.check_circle_rounded,
-                      color: Color(0xFF00C853), size: 18),
-                  const SizedBox(width: 8),
-                  const Text('You\'re on the latest version.',
-                      style: TextStyle(fontSize: 13)),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: () =>
-                        ref.read(updateCheckProvider.notifier).check(),
-                    icon: const Icon(Icons.refresh, size: 16),
-                    label: const Text('Check Now'),
-                  ),
-                ],
-              );
-            }
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.new_releases_rounded,
-                        color: Color(0xFF6C5CE7), size: 18),
-                    const SizedBox(width: 8),
-                    Text(
-                      'v${update.version} available',
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w600, fontSize: 13),
-                    ),
-                    const Spacer(),
-                    if (update.hasInstaller)
-                      FilledButton.icon(
-                        onPressed: () => _startUpdate(context, ref, update),
-                        icon: const Icon(Icons.download, size: 16),
-                        label: const Text('Update Now'),
-                      )
-                    else
-                      OutlinedButton.icon(
-                        onPressed: () => _openUrl(update.htmlUrl),
-                        icon: const Icon(Icons.open_in_new, size: 16),
-                        label: const Text('View Release'),
-                      ),
-                  ],
-                ),
-                if (update.releaseNotes.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.03),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white.withOpacity(0.05)),
-                    ),
-                    child: Text(
-                      update.releaseNotes,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white.withOpacity(0.4),
-                        height: 1.5,
-                      ),
-                      maxLines: 6,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ],
-            );
-          },
-          loading: () => Row(
-            children: [
-              SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white.withOpacity(0.3),
-                  )),
-              const SizedBox(width: 10),
-              Text('Checking for updates...',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.white.withOpacity(0.4),
-                  )),
-            ],
           ),
-          error: (e, _) => Row(
-            children: [
-              const Icon(Icons.warning_amber_rounded,
-                  color: Colors.orange, size: 18),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Update check failed: $e',
-                  style: const TextStyle(fontSize: 12, color: Colors.orange),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              TextButton.icon(
-                onPressed: () =>
-                    ref.read(updateCheckProvider.notifier).check(),
-                icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('Retry'),
-              ),
-            ],
+          const SizedBox(width: 10),
+          // Masked key
+          Text(
+            entry.masked,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: Colors.white.withOpacity(0.6),
+            ),
           ),
-        ),
-      ],
+          const Spacer(),
+          // Usage count
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.04),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              '${entry.usageCount} uses',
+              style: TextStyle(
+                  fontSize: 10, color: Colors.white.withOpacity(0.25)),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Remove
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              icon: const Icon(Icons.delete_outline, size: 14),
+              color: Colors.white.withOpacity(0.2),
+              hoverColor: Colors.redAccent.withOpacity(0.1),
+              onPressed: () async {
+                await service.removeKey(widget.provider, entry.masked);
+                setState(() {});
+              },
+              tooltip: 'Remove key',
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  void _startUpdate(
-      BuildContext context, WidgetRef ref, UpdateInfo update) async {
-    try {
-      final updater = ref.read(autoUpdaterProvider);
-      final apiKeyService = ref.read(apiKeyServiceProvider);
-      final githubToken = apiKeyService.getNextKey(LlmProvider.github);
-      await updater.downloadAndInstall(update, githubToken: githubToken);
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Update failed: $e')),
-        );
-      }
-    }
-  }
-
-  void _openUrl(String url) {
-    if (Platform.isWindows) {
-      Process.run('rundll32', ['url.dll,FileProtocolHandler', url]);
-    } else if (Platform.isMacOS) {
-      Process.run('open', [url]);
-    } else {
-      Process.run('xdg-open', [url]);
-    }
+  Future<void> _addKey(ApiKeyService service) async {
+    final key = _keyController.text.trim();
+    if (key.isEmpty) return;
+    await service.addKey(widget.provider, key);
+    _keyController.clear();
+    setState(() => _adding = false);
   }
 }
 
-// ───────────────────── Connected Accounts ─────────────────────
+// ═══════════════════════════════════════════════════════════════════
+//  CONNECTED ACCOUNTS
+// ═══════════════════════════════════════════════════════════════════
 
 class _ConnectedAccountsSection extends ConsumerStatefulWidget {
   const _ConnectedAccountsSection();
@@ -535,8 +494,6 @@ class _ConnectedAccountsSectionState
     return _SettingsCard(
       icon: Icons.account_circle_rounded,
       title: 'Connected Accounts',
-      subtitle: 'Log in to YouTube and Twitch to unlock uploads, '
-          'VOD downloads, and channel analytics.',
       children: [
         _buildAccountRow(
           provider: AccountProvider.youtube,
@@ -574,7 +531,6 @@ class _ConnectedAccountsSectionState
             ),
           ),
         ],
-        // Show a hint only when OAuth is not configured in this build.
         if (!accountService.hasClientId(AccountProvider.youtube) &&
             !accountService.hasClientId(AccountProvider.twitch)) ...[
           const SizedBox(height: 12),
@@ -592,8 +548,7 @@ class _ConnectedAccountsSectionState
                 Expanded(
                   child: Text(
                     'OAuth not configured in this build. '
-                    'For dev builds, add GOOGLE_CLIENT_ID and '
-                    'TWITCH_CLIENT_ID to your .env file.',
+                    'Add GOOGLE_CLIENT_ID and TWITCH_CLIENT_ID to .env.',
                     style: TextStyle(
                       fontSize: 12,
                       color: Colors.white.withOpacity(0.35),
@@ -626,56 +581,47 @@ class _ConnectedAccountsSectionState
       ),
       child: Row(
         children: [
-          Icon(icon, size: 24, color: color),
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 18, color: color),
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 14,
-                  ),
-                ),
+                Text(label,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 14)),
                 const SizedBox(height: 2),
                 if (account != null)
-                  Text(
-                    'Connected as ${account.username}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF00C853),
-                    ),
-                  )
+                  Text('Connected as ${account.username}',
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF00C853)))
                 else if (!hasClientId)
-                  Text(
-                    'OAuth not configured',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.white.withOpacity(0.3),
-                    ),
-                  )
+                  Text('OAuth not configured',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withOpacity(0.3)))
                 else
-                  Text(
-                    'Not connected',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.white.withOpacity(0.3),
-                    ),
-                  ),
+                  Text('Not connected',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withOpacity(0.3))),
               ],
             ),
           ),
           if (account != null)
             TextButton(
-              onPressed: _connectingProvider != null
-                  ? null
-                  : () => _disconnect(provider),
-              child: const Text(
-                'Disconnect',
-                style: TextStyle(color: Colors.redAccent, fontSize: 12),
-              ),
+              onPressed:
+                  _connectingProvider != null ? null : () => _disconnect(provider),
+              child: const Text('Disconnect',
+                  style: TextStyle(color: Colors.redAccent, fontSize: 12)),
             )
           else
             FilledButton(
@@ -692,9 +638,7 @@ class _ConnectedAccountsSectionState
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
+                          strokeWidth: 2, color: Colors.white),
                     )
                   : const Text('Connect', style: TextStyle(fontSize: 12)),
             ),
@@ -704,7 +648,182 @@ class _ConnectedAccountsSectionState
   }
 }
 
-// ───────────────────── Storage / Folders ─────────────────────
+// ═══════════════════════════════════════════════════════════════════
+//  UPDATE CHECKER
+// ═══════════════════════════════════════════════════════════════════
+
+class _UpdateSection extends ConsumerWidget {
+  const _UpdateSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final updateState = ref.watch(updateCheckProvider);
+    final currentVersion = AutoUpdater.getInstalledVersion();
+
+    return _SettingsCard(
+      icon: Icons.system_update_rounded,
+      title: 'Updates',
+      children: [
+        Row(
+          children: [
+            Text('Installed',
+                style: TextStyle(
+                    color: Colors.white.withOpacity(0.4), fontSize: 12)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text('v$currentVersion',
+                  style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        updateState.when(
+          data: (update) {
+            if (update == null) {
+              return Row(
+                children: [
+                  const Icon(Icons.check_circle_rounded,
+                      color: Color(0xFF00C853), size: 16),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text('Up to date',
+                        style: TextStyle(fontSize: 12)),
+                  ),
+                  TextButton.icon(
+                    onPressed: () =>
+                        ref.read(updateCheckProvider.notifier).check(),
+                    icon: const Icon(Icons.refresh, size: 14),
+                    label: const Text('Check', style: TextStyle(fontSize: 11)),
+                  ),
+                ],
+              );
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.new_releases_rounded,
+                        color: Color(0xFF6C5CE7), size: 16),
+                    const SizedBox(width: 8),
+                    Text('v${update.version} available',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 12)),
+                    const Spacer(),
+                    if (update.hasInstaller)
+                      FilledButton.icon(
+                        onPressed: () => _startUpdate(context, ref, update),
+                        icon: const Icon(Icons.download, size: 14),
+                        label: const Text('Update',
+                            style: TextStyle(fontSize: 11)),
+                      )
+                    else
+                      OutlinedButton.icon(
+                        onPressed: () => _openUrl(update.htmlUrl),
+                        icon: const Icon(Icons.open_in_new, size: 14),
+                        label: const Text('View',
+                            style: TextStyle(fontSize: 11)),
+                      ),
+                  ],
+                ),
+                if (update.releaseNotes.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.03),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      update.releaseNotes,
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.white.withOpacity(0.4),
+                          height: 1.5),
+                      maxLines: 4,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ],
+            );
+          },
+          loading: () => Row(
+            children: [
+              SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white.withOpacity(0.3),
+                  )),
+              const SizedBox(width: 10),
+              Text('Checking...',
+                  style: TextStyle(
+                      fontSize: 12, color: Colors.white.withOpacity(0.4))),
+            ],
+          ),
+          error: (e, _) => Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded,
+                  color: Colors.orange, size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Check failed',
+                    style: const TextStyle(fontSize: 11, color: Colors.orange)),
+              ),
+              TextButton.icon(
+                onPressed: () =>
+                    ref.read(updateCheckProvider.notifier).check(),
+                icon: const Icon(Icons.refresh, size: 14),
+                label: const Text('Retry', style: TextStyle(fontSize: 11)),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _startUpdate(
+      BuildContext context, WidgetRef ref, UpdateInfo update) async {
+    try {
+      final updater = ref.read(autoUpdaterProvider);
+      final apiKeyService = ref.read(apiKeyServiceProvider);
+      final githubToken = apiKeyService.getNextKey(LlmProvider.github);
+      await updater.downloadAndInstall(update, githubToken: githubToken);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Update failed: $e')),
+        );
+      }
+    }
+  }
+
+  void _openUrl(String url) {
+    if (Platform.isWindows) {
+      Process.run('rundll32', ['url.dll,FileProtocolHandler', url]);
+    } else if (Platform.isMacOS) {
+      Process.run('open', [url]);
+    } else {
+      Process.run('xdg-open', [url]);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  STORAGE
+// ═══════════════════════════════════════════════════════════════════
 
 class _StorageSection extends StatelessWidget {
   const _StorageSection();
@@ -714,20 +833,15 @@ class _StorageSection extends StatelessWidget {
     return _SettingsCard(
       icon: Icons.folder_rounded,
       title: 'Storage',
-      subtitle: 'Where ClipMaster stores downloads, proxies, and exports.',
       children: [
         _FolderRow(
           label: 'App Data',
-          description: 'Settings, API keys, account tokens',
-          getPath: () async {
-            final dir = await getApplicationSupportDirectory();
-            return dir.path;
-          },
+          getPath: () async =>
+              (await getApplicationSupportDirectory()).path,
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         _FolderRow(
           label: 'Downloads & Exports',
-          description: 'Downloaded videos, generated shorts, TTS audio',
           getPath: () async {
             final dir = await getApplicationDocumentsDirectory();
             final clipmasterDir =
@@ -738,14 +852,11 @@ class _StorageSection extends StatelessWidget {
             return clipmasterDir.path;
           },
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         _FolderRow(
           label: 'Temp / Cache',
-          description: 'Temporary files, update downloads',
-          getPath: () async {
-            final dir = await getTemporaryDirectory();
-            return dir.path;
-          },
+          getPath: () async =>
+              (await getTemporaryDirectory()).path,
         ),
       ],
     );
@@ -754,14 +865,9 @@ class _StorageSection extends StatelessWidget {
 
 class _FolderRow extends StatefulWidget {
   final String label;
-  final String description;
   final Future<String> Function() getPath;
 
-  const _FolderRow({
-    required this.label,
-    required this.description,
-    required this.getPath,
-  });
+  const _FolderRow({required this.label, required this.getPath});
 
   @override
   State<_FolderRow> createState() => _FolderRowState();
@@ -792,11 +898,10 @@ class _FolderRowState extends State<_FolderRow> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.03),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
       child: Row(
         children: [
@@ -804,28 +909,17 @@ class _FolderRowState extends State<_FolderRow> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  widget.label,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w600, fontSize: 13),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  widget.description,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.white.withOpacity(0.3),
-                  ),
-                ),
+                Text(widget.label,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 12)),
                 if (_path != null) ...[
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 2),
                   Text(
                     _path!,
                     style: TextStyle(
-                      fontSize: 10,
-                      fontFamily: 'monospace',
-                      color: Colors.white.withOpacity(0.2),
-                    ),
+                        fontSize: 10,
+                        fontFamily: 'monospace',
+                        color: Colors.white.withOpacity(0.2)),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -833,11 +927,10 @@ class _FolderRowState extends State<_FolderRow> {
               ],
             ),
           ),
-          const SizedBox(width: 12),
           IconButton(
             onPressed: _path != null ? _openFolder : null,
-            icon: const Icon(Icons.folder_open, size: 20),
-            tooltip: 'Open in file explorer',
+            icon: const Icon(Icons.folder_open, size: 16),
+            tooltip: 'Open in explorer',
             style: IconButton.styleFrom(
               foregroundColor: const Color(0xFF6C5CE7),
             ),
@@ -848,7 +941,9 @@ class _FolderRowState extends State<_FolderRow> {
   }
 }
 
-// ───────────────────── Sidecar Status ─────────────────────
+// ═══════════════════════════════════════════════════════════════════
+//  SIDECAR STATUS
+// ═══════════════════════════════════════════════════════════════════
 
 class _SidecarStatusSection extends ConsumerWidget {
   const _SidecarStatusSection();
@@ -889,31 +984,20 @@ class _SidecarStatusSection extends ConsumerWidget {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: connected
-                    ? const Color(0xFF00C853)
-                    : Colors.redAccent,
+                color: connected ? const Color(0xFF00C853) : Colors.redAccent,
               ),
             ),
           ],
         ),
         if (!connected) ...[
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.redAccent.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.redAccent.withOpacity(0.15)),
-            ),
-            child: Text(
-              'The sidecar powers Fact Shorts and Viral Scout. '
-              'Run setup.bat (Windows) or setup.sh (Linux/Mac), '
-              'then restart the app. Check the Dev Console for details.',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.white.withOpacity(0.5),
-                height: 1.5,
-              ),
+          const SizedBox(height: 10),
+          Text(
+            'Run setup.bat (Windows) or setup.sh (Linux/Mac), '
+            'then restart. Check the Dev Console for details.',
+            style: TextStyle(
+              fontSize: 11,
+              color: Colors.white.withOpacity(0.35),
+              height: 1.5,
             ),
           ),
         ],
@@ -922,7 +1006,9 @@ class _SidecarStatusSection extends ConsumerWidget {
   }
 }
 
-// ───────────────────── About ─────────────────────
+// ═══════════════════════════════════════════════════════════════════
+//  ABOUT
+// ═══════════════════════════════════════════════════════════════════
 
 class _AboutSection extends StatelessWidget {
   const _AboutSection();
@@ -933,55 +1019,52 @@ class _AboutSection extends StatelessWidget {
       icon: Icons.info_outline_rounded,
       title: 'About',
       children: [
-        Text(
-          'ClipMaster Pro',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: Colors.white.withOpacity(0.7),
-          ),
+        Row(
+          children: [
+            Text('ClipMaster Pro',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white.withOpacity(0.6))),
+            const Spacer(),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                'v${AutoUpdater.getInstalledVersion()}',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                    color: Colors.white.withOpacity(0.35)),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 4),
-        Text(
-          'AI-powered short-form video creation tool.',
-          style: TextStyle(
-            fontSize: 13,
-            color: Colors.white.withOpacity(0.35),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            'v${AutoUpdater.getInstalledVersion()}',
+        Text('AI-powered short-form video creation tool.',
             style: TextStyle(
-              fontSize: 11,
-              fontFamily: 'monospace',
-              color: Colors.white.withOpacity(0.35),
-            ),
-          ),
-        ),
+                fontSize: 12, color: Colors.white.withOpacity(0.25))),
       ],
     );
   }
 }
 
-// ───────────────────── Shared Card ─────────────────────
+// ═══════════════════════════════════════════════════════════════════
+//  SHARED CARD
+// ═══════════════════════════════════════════════════════════════════
 
 class _SettingsCard extends StatelessWidget {
   final IconData icon;
   final String title;
-  final String? subtitle;
   final List<Widget> children;
 
   const _SettingsCard({
     required this.icon,
     required this.title,
-    this.subtitle,
     required this.children,
   });
 
@@ -989,37 +1072,20 @@ class _SettingsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Icon(icon, size: 20, color: const Color(0xFF6C5CE7)),
-                const SizedBox(width: 10),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
-                  ),
-                ),
+                Icon(icon, size: 18, color: const Color(0xFF6C5CE7)),
+                const SizedBox(width: 8),
+                Text(title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 14)),
               ],
             ),
-            if (subtitle != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                subtitle!,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.white.withOpacity(0.3),
-                ),
-              ),
-            ],
-            Divider(
-              height: 24,
-              color: Colors.white.withOpacity(0.06),
-            ),
+            Divider(height: 20, color: Colors.white.withOpacity(0.06)),
             ...children,
           ],
         ),

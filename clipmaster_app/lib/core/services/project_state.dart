@@ -71,12 +71,18 @@ class CaptionStyle {
   final int bgColorHex;
   final bool hasBorder;
 
+  /// Text position within the 9:16 frame (0.0 – 1.0 normalised).
+  final double positionX;
+  final double positionY;
+
   const CaptionStyle({
     this.fontFamily = 'Inter',
     this.fontSize = 36,
     this.colorHex = 0xFFFFFFFF,
     this.bgColorHex = 0x00000000,
     this.hasBorder = true,
+    this.positionX = 0.5,
+    this.positionY = 0.75,
   });
 
   CaptionStyle copyWith({
@@ -85,6 +91,8 @@ class CaptionStyle {
     int? colorHex,
     int? bgColorHex,
     bool? hasBorder,
+    double? positionX,
+    double? positionY,
   }) {
     return CaptionStyle(
       fontFamily: fontFamily ?? this.fontFamily,
@@ -92,6 +100,8 @@ class CaptionStyle {
       colorHex: colorHex ?? this.colorHex,
       bgColorHex: bgColorHex ?? this.bgColorHex,
       hasBorder: hasBorder ?? this.hasBorder,
+      positionX: positionX ?? this.positionX,
+      positionY: positionY ?? this.positionY,
     );
   }
 }

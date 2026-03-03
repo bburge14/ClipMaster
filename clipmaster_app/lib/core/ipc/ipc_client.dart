@@ -126,11 +126,12 @@ class IpcClient {
   /// Returns a [Stream] of progress messages via [onProgress].
   ///
   /// Throws [StateError] immediately if the sidecar is not connected.
-  /// Times out after [timeout] (default 60 s) so the UI never hangs.
+  /// Times out after [timeout] (default 30 s) so the UI never hangs.
+  /// Callers can pass a longer timeout for slow operations (LLM, yt-dlp).
   Future<IpcMessage> send(
     IpcMessage request, {
     void Function(IpcMessage progress)? onProgress,
-    Duration timeout = const Duration(seconds: 60),
+    Duration timeout = const Duration(seconds: 30),
   }) {
     if (_channel == null || _disposed) {
       return Future.error(

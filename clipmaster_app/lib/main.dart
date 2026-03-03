@@ -43,7 +43,7 @@ class ClipMasterApp extends ConsumerWidget {
         textTheme: GoogleFonts.interTextTheme(
           ThemeData(brightness: Brightness.dark).textTheme,
         ),
-        cardTheme: CardThemeData(
+        cardTheme: CardTheme(
           elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
@@ -151,7 +151,7 @@ class _MainShellState extends ConsumerState<MainShell> {
   }
 
   static const _navItems = [
-    _NavItem(Icons.movie_edit_outlined, Icons.movie_edit, 'Timeline'),
+    _NavItem(Icons.movie_creation_outlined, Icons.movie_creation, 'Timeline'),
     _NavItem(Icons.auto_awesome_outlined, Icons.auto_awesome, 'Fact Shorts'),
     _NavItem(Icons.trending_up_outlined, Icons.trending_up, 'Scout'),
     _NavItem(Icons.settings_outlined, Icons.settings, 'Settings'),

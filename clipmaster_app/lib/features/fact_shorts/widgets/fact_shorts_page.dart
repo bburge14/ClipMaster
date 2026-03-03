@@ -109,6 +109,83 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
   }
 
+  Future<void> _createShort() async {
+    if (_selectedFactIndex == null) return;
+    final fact = _facts[_selectedFactIndex!];
+    final factText = fact['fact'] as String? ?? '';
+    if (factText.isEmpty) return;
+
+    final apiKeyService = ref.read(apiKeyServiceProvider);
+    final openaiKey = apiKeyService.getNextKey(LlmProvider.openai);
+    if (openaiKey == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('OpenAI API key required for TTS. Add one in Settings.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isGenerating = true;
+      _progressStage = 'Generating voiceover';
+      _progressPercent = 0;
+    });
+
+    try {
+      final ipc = ref.read(ipcClientProvider);
+      final response = await ipc.send(
+        IpcMessage(
+          type: MessageType.generateTts,
+          payload: {
+            'text': factText,
+            'api_key': openaiKey,
+            'voice': 'onyx',
+          },
+        ),
+        timeout: const Duration(seconds: 120),
+        onProgress: (progress) {
+          if (mounted) {
+            setState(() {
+              _progressStage =
+                  progress.payload['stage'] as String? ?? 'Creating short';
+              _progressPercent = progress.payload['percent'] as int? ?? 0;
+            });
+          }
+        },
+      );
+
+      if (!mounted) return;
+
+      if (response.type == MessageType.error) {
+        setState(() {
+          _isGenerating = false;
+          _error = response.payload['message'] as String? ?? 'TTS failed';
+        });
+      } else {
+        final audioPath = response.payload['audio_path'] as String? ?? '';
+        final duration = response.payload['duration_estimate'] as num? ?? 0;
+        setState(() => _isGenerating = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Voiceover created (~${duration.toStringAsFixed(0)}s). '
+              'File: ${audioPath.split('/').last}',
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isGenerating = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -285,19 +362,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             const Spacer(),
             if (_selectedFactIndex != null)
               FilledButton.icon(
-                onPressed: () {
-                  // TODO: Wire up short creation from selected fact.
-                  final fact = _facts[_selectedFactIndex!];
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Short creation coming soon! '
-                        'Selected: "${fact['title']}"',
-                      ),
-                      duration: const Duration(seconds: 2),
-                    ),
-                  );
-                },
+                onPressed: _isGenerating ? null : _createShort,
                 icon: const Icon(Icons.movie_creation, size: 18),
                 label: const Text('Create Short'),
               ),

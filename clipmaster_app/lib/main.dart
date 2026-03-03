@@ -12,6 +12,7 @@ import 'core/utils/binary_paths.dart';
 import 'core/utils/env_config.dart';
 import 'features/dev_console/widgets/dev_console_panel.dart';
 import 'features/fact_shorts/widgets/fact_shorts_page.dart';
+import 'features/onboarding/widgets/onboarding_wizard.dart';
 import 'features/timeline/widgets/magnetic_timeline.dart';
 import 'features/settings/widgets/settings_page.dart';
 import 'features/viral_scout/widgets/viral_scout_page.dart';
@@ -103,8 +104,68 @@ class ClipMasterApp extends ConsumerWidget {
           indicatorColor: const Color(0xFF6C5CE7).withOpacity(0.15),
         ),
       ),
-      home: const MainShell(),
+      home: const _AppEntry(),
     );
+  }
+}
+
+/// Entry point that initializes API key service, then shows onboarding or main shell.
+class _AppEntry extends ConsumerStatefulWidget {
+  const _AppEntry();
+
+  @override
+  ConsumerState<_AppEntry> createState() => _AppEntryState();
+}
+
+class _AppEntryState extends ConsumerState<_AppEntry> {
+  bool _initialized = false;
+  bool _showOnboarding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    final apiKeyService = ref.read(apiKeyServiceProvider);
+    await apiKeyService.init();
+
+    // Check if any keys exist — if not, show onboarding.
+    bool hasKeys = false;
+    for (final p in LlmProvider.values) {
+      if (apiKeyService.getKeysForProvider(p).isNotEmpty) {
+        hasKeys = true;
+        break;
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _initialized = true;
+        _showOnboarding = !hasKeys;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_initialized) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF141420),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_showOnboarding) {
+      return OnboardingWizard(
+        onComplete: () {
+          setState(() => _showOnboarding = false);
+        },
+      );
+    }
+
+    return const MainShell();
   }
 }
 
@@ -127,9 +188,6 @@ class _MainShellState extends ConsumerState<MainShell> {
   }
 
   Future<void> _initServices() async {
-    final apiKeyService = ref.read(apiKeyServiceProvider);
-    await apiKeyService.init();
-
     final devConsole = ref.read(devConsoleProvider);
     devConsole.info('App', 'ClipMaster Pro initialized.');
     devConsole.info('App', 'ffmpeg: ${BinaryPaths.ffmpeg}');

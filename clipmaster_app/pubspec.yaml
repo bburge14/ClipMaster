@@ -30,6 +30,7 @@ dependencies:
   # File & Path Management
   path_provider: ^2.1.1
   path: ^1.8.3
+  file_picker: ^6.1.1
 
   # Video Player for Preview
   media_kit: ^1.1.10

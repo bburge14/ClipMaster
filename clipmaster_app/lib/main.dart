@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'core/ipc/ipc_client.dart';
 import 'core/logging/dev_console.dart';
+import 'core/services/account_service.dart';
 import 'core/services/api_key_service.dart';
 import 'core/services/auto_updater.dart';
 import 'core/utils/binary_paths.dart';
@@ -188,6 +189,9 @@ class _MainShellState extends ConsumerState<MainShell> {
   }
 
   Future<void> _initServices() async {
+    final accountService = ref.read(accountServiceProvider);
+    await accountService.init();
+
     final devConsole = ref.read(devConsoleProvider);
     devConsole.info('App', 'ClipMaster Pro initialized.');
     devConsole.info('App', 'ffmpeg: ${BinaryPaths.ffmpeg}');
@@ -308,9 +312,18 @@ class _MainShellState extends ConsumerState<MainShell> {
                   width: 1,
                   color: Colors.white.withOpacity(0.06),
                 ),
-                // Main content area
+                // Main content area — IndexedStack keeps all pages alive
+                // so tab state is preserved when switching.
                 Expanded(
-                  child: _buildPage(),
+                  child: IndexedStack(
+                    index: _selectedIndex,
+                    children: const [
+                      MagneticTimeline(),
+                      FactShortsPage(),
+                      ViralScoutPage(),
+                      SettingsPage(),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -376,15 +389,6 @@ class _MainShellState extends ConsumerState<MainShell> {
     );
   }
 
-  Widget _buildPage() {
-    return switch (_selectedIndex) {
-      0 => const MagneticTimeline(),
-      1 => const FactShortsPage(),
-      2 => const ViralScoutPage(),
-      3 => const SettingsPage(),
-      _ => const SizedBox.shrink(),
-    };
-  }
 }
 
 class _NavItem {

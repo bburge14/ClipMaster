@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/ipc/ipc_client.dart';
@@ -60,11 +62,32 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   // Rendering
   bool _isRendering = false;
 
+  // Preview player
+  Player? _previewPlayer;
+  VideoController? _previewController;
+  bool _previewPlaying = false;
+
   @override
   void dispose() {
     _horizontalScroll.dispose();
     _stockSearchController.dispose();
+    _previewPlayer?.dispose();
     super.dispose();
+  }
+
+  void _initPreviewPlayer(String path) {
+    if (_previewPlayer != null) {
+      _previewPlayer!.dispose();
+    }
+    _previewPlayer = Player();
+    _previewController = VideoController(_previewPlayer!);
+    final media = path.startsWith('http') ? Media(path) : Media(path);
+    _previewPlayer!.open(media);
+    _previewPlayer!.setPlaylistMode(PlaylistMode.loop);
+    _previewPlaying = true;
+    _previewPlayer!.stream.playing.listen((playing) {
+      if (mounted) setState(() => _previewPlaying = playing);
+    });
   }
 
   Future<void> _importVideo() async {
@@ -652,12 +675,24 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   }
 
   Widget _buildProjectView(ProjectState project) {
+    // Auto-init preview player when we have a video file
+    final previewSource = _proxyPath ?? _importedVideoPath;
+    if (previewSource != null && _previewPlayer == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _initPreviewPlayer(previewSource);
+        setState(() {});
+      });
+    }
+
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Left: video info + actions
+          // ── Left: 9:16 Phone Frame Preview with draggable text ──
+          _buildPhonePreview(project),
+          const SizedBox(width: 20),
+          // ── Right: controls + script ──
           Expanded(
             flex: 3,
             child: Column(
@@ -863,6 +898,28 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                       },
                     ),
                   ),
+                ] else ...[
+                  Expanded(
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.movie_creation,
+                              size: 32,
+                              color: Colors.white.withOpacity(0.1)),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Use Fact Shorts to generate a script,\nor import a video and transcribe it.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.white.withOpacity(0.2),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -873,7 +930,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
               .isNotEmpty) ...[
             const SizedBox(width: 16),
             SizedBox(
-              width: 160,
+              width: 140,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -903,6 +960,226 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     );
   }
 
+  /// 9:16 phone-frame preview with live video + draggable text overlay.
+  Widget _buildPhonePreview(ProjectState project) {
+    final style = project.captionStyle;
+    final hasText = project.scriptText != null || project.scriptTitle != null;
+    final displayText = project.scriptTitle ?? '';
+
+    return SizedBox(
+      width: 200,
+      child: Column(
+        children: [
+          // Phone frame header
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: const BoxDecoration(
+              color: Color(0xFF1A1A2A),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Phone frame body — 9:16 aspect ratio
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF0A0A14),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.1),
+                  width: 2,
+                ),
+              ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final frameW = constraints.maxWidth;
+                  final frameH = constraints.maxHeight;
+
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // Video layer
+                      if (_previewController != null)
+                        ClipRect(
+                          child: Video(
+                            controller: _previewController!,
+                            controls: NoVideoControls,
+                            fit: BoxFit.cover,
+                          ),
+                        )
+                      else
+                        Center(
+                          child: Icon(Icons.videocam_off,
+                              size: 32,
+                              color: Colors.white.withOpacity(0.08)),
+                        ),
+                      // Draggable text overlay
+                      if (hasText && displayText.isNotEmpty)
+                        Positioned(
+                          left: (style.positionX * frameW) - (frameW * 0.45),
+                          top: (style.positionY * frameH) - 20,
+                          child: GestureDetector(
+                            onPanUpdate: (details) {
+                              final newX =
+                                  (style.positionX + details.delta.dx / frameW)
+                                      .clamp(0.05, 0.95);
+                              final newY =
+                                  (style.positionY + details.delta.dy / frameH)
+                                      .clamp(0.05, 0.95);
+                              ref
+                                  .read(projectProvider.notifier)
+                                  .setCaptionStyle(style.copyWith(
+                                    positionX: newX,
+                                    positionY: newY,
+                                  ));
+                            },
+                            child: Container(
+                              width: frameW * 0.9,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 3),
+                              decoration: BoxDecoration(
+                                border: Border.all(
+                                  color: const Color(0xFF6C5CE7)
+                                      .withOpacity(0.4),
+                                  width: 1,
+                                ),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                displayText,
+                                textAlign: TextAlign.center,
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontFamily: style.fontFamily,
+                                  fontSize: style.fontSize * 0.35,
+                                  color: Color(style.colorHex),
+                                  fontWeight: FontWeight.w700,
+                                  shadows: style.hasBorder
+                                      ? const [
+                                          Shadow(
+                                              color: Colors.black,
+                                              blurRadius: 4),
+                                          Shadow(
+                                              color: Colors.black,
+                                              blurRadius: 8),
+                                        ]
+                                      : null,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      // Position presets (top / center / bottom)
+                      if (hasText)
+                        Positioned(
+                          right: 4,
+                          top: 4,
+                          child: Column(
+                            children: [
+                              _posPresetButton(
+                                  Icons.vertical_align_top, 0.5, 0.12, style),
+                              _posPresetButton(
+                                  Icons.vertical_align_center, 0.5, 0.5, style),
+                              _posPresetButton(Icons.vertical_align_bottom,
+                                  0.5, 0.85, style),
+                            ],
+                          ),
+                        ),
+                      // Play/pause button
+                      if (_previewPlayer != null)
+                        Positioned(
+                          left: 4,
+                          bottom: 4,
+                          child: GestureDetector(
+                            onTap: () => _previewPlayer!.playOrPause(),
+                            child: Container(
+                              width: 28,
+                              height: 28,
+                              decoration: BoxDecoration(
+                                color: Colors.black54,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Icon(
+                                _previewPlaying
+                                    ? Icons.pause
+                                    : Icons.play_arrow,
+                                size: 16,
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+          // Phone frame footer
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            decoration: const BoxDecoration(
+              color: Color(0xFF1A1A2A),
+              borderRadius:
+                  BorderRadius.vertical(bottom: Radius.circular(16)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  '9:16 Preview',
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: Colors.white.withOpacity(0.2),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _posPresetButton(
+      IconData icon, double x, double y, CaptionStyle current) {
+    final isActive =
+        (current.positionX - x).abs() < 0.1 &&
+        (current.positionY - y).abs() < 0.1;
+    return GestureDetector(
+      onTap: () {
+        ref.read(projectProvider.notifier).setCaptionStyle(
+          current.copyWith(positionX: x, positionY: y),
+        );
+      },
+      child: Container(
+        width: 22,
+        height: 22,
+        margin: const EdgeInsets.only(bottom: 2),
+        decoration: BoxDecoration(
+          color: isActive
+              ? const Color(0xFF6C5CE7).withOpacity(0.6)
+              : Colors.black45,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Icon(icon, size: 14,
+            color: isActive ? Colors.white : Colors.white38),
+      ),
+    );
+  }
+
   Widget _buildBrollThumb(TimelineAsset asset) {
     final previewUrl = asset.thumbnailUrl ??
         asset.metadata['preview_url'] as String? ??
@@ -915,8 +1192,8 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
           ClipRRect(
             borderRadius: BorderRadius.circular(6),
             child: SizedBox(
-              width: 160,
-              height: 90,
+              width: 140,
+              height: 80,
               child: previewUrl.isNotEmpty
                   ? Image.network(
                       previewUrl,
@@ -1357,39 +1634,72 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                       );
                     },
                   ),
-                  const SizedBox(height: 24),
-                  // Preview
-                  const Text('Preview',
+                  const SizedBox(height: 16),
+                  const Text('Text Position',
                       style: TextStyle(fontSize: 11, color: Colors.white54)),
                   const SizedBox(height: 8),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0A0A14),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      project.scriptTitle ?? 'Sample Text',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontFamily: style.fontFamily,
-                        fontSize: style.fontSize * 0.5,
-                        color: Color(style.colorHex),
-                        shadows: style.hasBorder
-                            ? [
-                                const Shadow(
-                                    color: Colors.black, blurRadius: 4),
-                              ]
-                            : null,
-                      ),
-                    ),
+                  Row(
+                    children: [
+                      _posChip('Top', 0.5, 0.12, style),
+                      const SizedBox(width: 6),
+                      _posChip('Center', 0.5, 0.5, style),
+                      const SizedBox(width: 6),
+                      _posChip('Bottom', 0.5, 0.85, style),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Or drag the text in the preview.',
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.white.withOpacity(0.2)),
                   ),
                 ],
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _posChip(String label, double x, double y, CaptionStyle style) {
+    final isActive =
+        (style.positionX - x).abs() < 0.1 &&
+        (style.positionY - y).abs() < 0.1;
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          ref.read(projectProvider.notifier).setCaptionStyle(
+            style.copyWith(positionX: x, positionY: y),
+          );
+        },
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            color: isActive
+                ? const Color(0xFF6C5CE7).withOpacity(0.2)
+                : Colors.white.withOpacity(0.04),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: isActive
+                  ? const Color(0xFF6C5CE7)
+                  : Colors.white.withOpacity(0.08),
+            ),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+              color: isActive
+                  ? const Color(0xFF6C5CE7)
+                  : Colors.white54,
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -13,6 +13,11 @@ dependencies:
   google_fonts: ^6.1.0
   flutter_svg: ^2.0.9
 
+  # Video Playback
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_video: ^1.0.5
+
   # State Management
   flutter_riverpod: ^2.4.9
   riverpod_annotation: ^2.3.3

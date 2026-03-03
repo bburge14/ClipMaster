@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'core/ipc/ipc_client.dart';
 import 'core/logging/dev_console.dart';
@@ -25,6 +26,7 @@ final selectedTabProvider = StateProvider<int>((ref) => 0);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized();
 
   // Load .env config (GitHub token, API keys, etc.).
   await EnvConfig.load();

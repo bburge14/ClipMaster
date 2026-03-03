@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white">
+  <!-- Rounded rectangle screen -->
+  <rect x="2" y="5" width="20" height="14" rx="3"/>
+  <!-- Play triangle (cutout effect via dark fill) -->
+  <polygon points="10,8.5 10,15.5 16,12" fill="#141420"/>
+</svg>

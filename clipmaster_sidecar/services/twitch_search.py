@@ -296,5 +296,156 @@ class TwitchSearchService:
         clips.sort(key=lambda c: c.composite_score, reverse=True)
         return clips
 
+    # ─── Channel-first discovery ───
+
+    async def search_channel(
+        self, client_id: str, client_secret: str, username: str
+    ) -> dict | None:
+        """Look up a Twitch user by login name.
+
+        Returns dict with: user_id, login, display_name, profile_image_url,
+        description, view_count.
+        """
+        try:
+            token = await self._get_app_token(client_id, client_secret)
+            headers = self._headers(client_id, token)
+
+            resp = await self._client.get(
+                f"{TWITCH_HELIX_BASE}/users",
+                headers=headers,
+                params={"login": username.strip().lower()},
+            )
+            resp.raise_for_status()
+            users = resp.json().get("data", [])
+            if not users:
+                return None
+
+            u = users[0]
+            return {
+                "user_id": u.get("id", ""),
+                "login": u.get("login", ""),
+                "display_name": u.get("display_name", ""),
+                "profile_image_url": u.get("profile_image_url", ""),
+                "description": u.get("description", ""),
+                "view_count": u.get("view_count", 0),
+            }
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(
+                f"Twitch API error ({exc.response.status_code}) looking up user."
+            ) from exc
+        except Exception as exc:
+            raise ValueError(f"Twitch user lookup failed: {exc}") from exc
+
+    async def get_vods(
+        self,
+        client_id: str,
+        client_secret: str,
+        user_id: str,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Fetch recent archive VODs for a Twitch user.
+
+        Uses /helix/videos?user_id=ID&type=archive.
+        """
+        try:
+            token = await self._get_app_token(client_id, client_secret)
+            headers = self._headers(client_id, token)
+
+            resp = await self._client.get(
+                f"{TWITCH_HELIX_BASE}/videos",
+                headers=headers,
+                params={
+                    "user_id": user_id,
+                    "type": "archive",
+                    "first": min(limit, 100),
+                },
+            )
+            resp.raise_for_status()
+
+            vods = []
+            for v in resp.json().get("data", []):
+                vods.append({
+                    "vod_id": v.get("id", ""),
+                    "title": v.get("title", "Untitled"),
+                    "url": v.get("url", ""),
+                    "thumbnail_url": (
+                        v.get("thumbnail_url", "")
+                        .replace("%{width}", "320")
+                        .replace("%{height}", "180")
+                    ),
+                    "duration": v.get("duration", "0h0m0s"),
+                    "view_count": v.get("view_count", 0),
+                    "created_at": v.get("created_at", ""),
+                    "stream_id": v.get("stream_id", ""),
+                })
+            return vods
+
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(
+                f"Twitch API error ({exc.response.status_code}) fetching VODs."
+            ) from exc
+        except Exception as exc:
+            raise ValueError(f"Twitch VOD fetch failed: {exc}") from exc
+
+    async def get_clips_for_broadcaster(
+        self,
+        client_id: str,
+        client_secret: str,
+        broadcaster_id: str,
+        vod_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Fetch clips for a broadcaster, optionally filtered to a specific VOD.
+
+        If vod_id is provided, filters clips that have the matching video_id.
+        Otherwise returns top recent clips for the broadcaster.
+        """
+        try:
+            token = await self._get_app_token(client_id, client_secret)
+            headers = self._headers(client_id, token)
+
+            params: dict = {
+                "broadcaster_id": broadcaster_id,
+                "first": min(limit, 100),
+            }
+
+            resp = await self._client.get(
+                f"{TWITCH_HELIX_BASE}/clips",
+                headers=headers,
+                params=params,
+            )
+            resp.raise_for_status()
+
+            clips = []
+            for item in resp.json().get("data", []):
+                # If filtering by VOD, skip clips that don't match.
+                if vod_id and item.get("video_id", "") != vod_id:
+                    continue
+
+                clips.append({
+                    "clip_id": item.get("id", ""),
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "embed_url": item.get("embed_url", ""),
+                    "thumbnail_url": item.get("thumbnail_url", ""),
+                    "view_count": item.get("view_count", 0),
+                    "duration": item.get("duration", 0),
+                    "created_at": item.get("created_at", ""),
+                    "creator_name": item.get("creator_name", ""),
+                    "video_id": item.get("video_id", ""),
+                    "vod_offset": item.get("vod_offset", 0),
+                    "broadcaster_name": item.get("broadcaster_name", ""),
+                })
+
+            clips.sort(key=lambda c: c.get("view_count", 0), reverse=True)
+            return clips[:limit]
+
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(
+                f"Twitch API error ({exc.response.status_code}) fetching clips."
+            ) from exc
+        except Exception as exc:
+            raise ValueError(f"Twitch clips fetch failed: {exc}") from exc
+
     async def close(self) -> None:
         await self._client.aclose()

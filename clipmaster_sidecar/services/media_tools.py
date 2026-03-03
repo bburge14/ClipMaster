@@ -44,7 +44,10 @@ async def download_video(
     output_dir: str | None = None,
     on_progress: Callable[[int, str], Any] | None = None,
 ) -> dict:
-    """Download a video using yt-dlp with progress reporting.
+    """Download a video using yt-dlp with parallel downloading.
+
+    Uses -N 16 for fragment-parallel downloads. If aria2c is available,
+    uses it as an external downloader for even faster speeds.
 
     Returns dict with: file_path, title, duration, format.
     """
@@ -61,6 +64,7 @@ async def download_video(
     cmd = [
         ytdlp,
         "--no-playlist",
+        "-N", "16",  # 16-thread parallel fragment download
         "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "--merge-output-format", "mp4",
         "--newline",
@@ -69,6 +73,15 @@ async def download_video(
         "--print-to-file", "after_move:filepath", os.path.join(output_dir, ".last_download"),
         url,
     ]
+
+    # Use aria2c as external downloader if available (much faster).
+    aria2c = _find_binary("aria2c")
+    if aria2c:
+        cmd[1:1] = [
+            "--external-downloader", aria2c,
+            "--external-downloader-args", "-x 16 -s 16 -k 1M",
+        ]
+        logger.info("Using aria2c for parallel download acceleration")
 
     if on_progress:
         await on_progress(5, "Starting download")
@@ -111,6 +124,107 @@ async def download_video(
     return {
         "file_path": file_path,
         "output_dir": output_dir,
+    }
+
+
+async def download_clip(
+    url: str,
+    start_time: str,
+    end_time: str,
+    output_dir: str | None = None,
+    output_name: str | None = None,
+    on_progress: Callable[[int, str], Any] | None = None,
+) -> dict:
+    """Download only a specific time range from a video (stream seeking).
+
+    Uses FFmpeg to read directly from the stream URL provided by yt-dlp,
+    extracting only the requested portion. Turns a 1-hour download into
+    seconds.
+
+    Args:
+        url: Video URL (YouTube, Twitch, etc.).
+        start_time: Start time in FFmpeg format (e.g. "00:05:30" or "330").
+        end_time: End time in FFmpeg format.
+        output_dir: Where to save the clip.
+        output_name: Optional output filename (without extension).
+
+    Returns dict with: file_path, start_time, end_time.
+    """
+    ytdlp = _find_binary("yt-dlp")
+    ffmpeg = _find_binary("ffmpeg")
+    if not ytdlp:
+        raise FileNotFoundError("yt-dlp not found")
+    if not ffmpeg:
+        raise FileNotFoundError("ffmpeg not found")
+
+    if output_dir is None:
+        output_dir = os.path.join(tempfile.gettempdir(), "clipmaster_clips")
+    os.makedirs(output_dir, exist_ok=True)
+
+    if on_progress:
+        await on_progress(10, "Resolving stream URL")
+
+    # Step 1: Get the direct stream URL from yt-dlp.
+    proc = await asyncio.create_subprocess_exec(
+        ytdlp, "-g",
+        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        url,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        raise RuntimeError(f"yt-dlp -g failed: {stderr.decode()[:300]}")
+
+    stream_urls = stdout.decode().strip().split("\n")
+
+    if on_progress:
+        await on_progress(30, "Extracting clip from stream")
+
+    safe_name = output_name or f"clip_{start_time.replace(':', '')}_{end_time.replace(':', '')}"
+    safe_name = re.sub(r"[^\w\s-]", "", safe_name).strip().replace(" ", "_")
+    output_path = os.path.join(output_dir, f"{safe_name}.mp4")
+
+    if len(stream_urls) >= 2:
+        # Separate video + audio streams — mux together.
+        cmd = [
+            ffmpeg, "-y",
+            "-ss", start_time, "-to", end_time,
+            "-i", stream_urls[0],
+            "-ss", start_time, "-to", end_time,
+            "-i", stream_urls[1],
+            "-c", "copy",
+            "-map", "0:v:0", "-map", "1:a:0",
+            output_path,
+        ]
+    else:
+        # Single combined stream.
+        cmd = [
+            ffmpeg, "-y",
+            "-ss", start_time, "-to", end_time,
+            "-i", stream_urls[0],
+            "-c", "copy",
+            output_path,
+        ]
+
+    proc2 = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr2 = await proc2.communicate()
+
+    if proc2.returncode != 0:
+        raise RuntimeError(f"FFmpeg clip extraction failed: {stderr2.decode()[:300]}")
+
+    if on_progress:
+        await on_progress(95, "Clip extracted")
+
+    return {
+        "file_path": output_path,
+        "start_time": start_time,
+        "end_time": end_time,
     }
 
 

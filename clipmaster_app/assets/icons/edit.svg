@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Three horizontal timeline bars -->
+  <line x1="2" y1="6" x2="22" y2="6"/>
+  <line x1="2" y1="12" x2="22" y2="12"/>
+  <line x1="2" y1="18" x2="22" y2="18"/>
+  <!-- Diamond keyframe on middle bar -->
+  <polygon points="12,8.5 15,12 12,15.5 9,12" fill="white" stroke="none"/>
+</svg>

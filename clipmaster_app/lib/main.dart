@@ -7,10 +7,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'core/ipc/ipc_client.dart';
 import 'core/logging/dev_console.dart';
 import 'core/services/account_service.dart';
+import 'core/services/activity_service.dart';
 import 'core/services/api_key_service.dart';
 import 'core/services/auto_updater.dart';
 import 'core/utils/binary_paths.dart';
 import 'core/utils/env_config.dart';
+import 'features/activity/widgets/activity_page.dart';
 import 'features/dev_console/widgets/dev_console_panel.dart';
 import 'features/fact_shorts/widgets/fact_shorts_page.dart';
 import 'features/onboarding/widgets/onboarding_wizard.dart';
@@ -218,6 +220,7 @@ class _MainShellState extends ConsumerState<MainShell> {
     _NavItem(Icons.movie_creation_outlined, Icons.movie_creation, 'Timeline'),
     _NavItem(Icons.auto_awesome_outlined, Icons.auto_awesome, 'Fact Shorts'),
     _NavItem(Icons.trending_up_outlined, Icons.trending_up, 'Scout'),
+    _NavItem(Icons.downloading_outlined, Icons.downloading, 'Activity'),
     _NavItem(Icons.settings_outlined, Icons.settings, 'Settings'),
   ];
 
@@ -290,9 +293,19 @@ class _MainShellState extends ConsumerState<MainShell> {
                       ...List.generate(_navItems.length, (i) {
                         final item = _navItems[i];
                         final selected = selectedIndex == i;
+                        // Activity tab badge — count unseen + running tasks
+                        int badge = 0;
+                        if (i == 3) {
+                          final tasks = ref.watch(activityProvider);
+                          badge = tasks
+                              .where((t) =>
+                                  t.isRunning ||
+                                  (!t.hasBeenSeen && !t.isRunning))
+                              .length;
+                        }
                         return _buildNavButton(item, selected, () {
                           ref.read(selectedTabProvider.notifier).state = i;
-                        });
+                        }, badge: badge);
                       }),
                       const Spacer(),
                       // Dev console toggle
@@ -324,6 +337,7 @@ class _MainShellState extends ConsumerState<MainShell> {
                       MagneticTimeline(),
                       FactShortsPage(),
                       ViralScoutPage(),
+                      ActivityPage(),
                       SettingsPage(),
                     ],
                   ),
@@ -345,8 +359,9 @@ class _MainShellState extends ConsumerState<MainShell> {
   Widget _buildNavButton(
     _NavItem item,
     bool selected,
-    VoidCallback onTap,
-  ) {
+    VoidCallback onTap, {
+    int badge = 0,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
       child: Material(
@@ -366,12 +381,40 @@ class _MainShellState extends ConsumerState<MainShell> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  selected ? item.activeIcon : item.icon,
-                  size: 22,
-                  color: selected
-                      ? const Color(0xFF6C5CE7)
-                      : Colors.white.withOpacity(0.4),
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Icon(
+                      selected ? item.activeIcon : item.icon,
+                      size: 22,
+                      color: selected
+                          ? const Color(0xFF6C5CE7)
+                          : Colors.white.withOpacity(0.4),
+                    ),
+                    if (badge > 0)
+                      Positioned(
+                        right: -8,
+                        top: -6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF6C5CE7),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          constraints: const BoxConstraints(minWidth: 16),
+                          child: Text(
+                            '$badge',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Text(

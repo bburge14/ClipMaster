@@ -467,6 +467,16 @@ async def _handle_create_short(
     pexels_key = msg.payload.get("pexels_key")
     pixabay_key = msg.payload.get("pixabay_key")
 
+    # Style params from the UI preview (WYSIWYG)
+    font_family = msg.payload.get("font_family", "Inter")
+    font_size = int(msg.payload.get("font_size", 36))
+    title_font_size = int(font_size * 1.5)
+    font_color = msg.payload.get("font_color", "white")
+    title_pos_y = float(msg.payload.get("title_pos_y", 0.08))
+    text_pos_y = float(msg.payload.get("text_pos_y", 0.75))
+    text_shadow = bool(msg.payload.get("text_shadow", True))
+    background_video_url = msg.payload.get("background_video_url", "")
+
     if not text:
         await _send(ws, IpcMessage.error(msg.id, "No text provided."))
         return
@@ -504,33 +514,37 @@ async def _handle_create_short(
     if duration <= 0:
         duration = max(duration_est, 5.0)
 
-    # Step 2: Try to get a stock footage background
-    await _send(ws, IpcMessage.progress(msg.id, "Searching for background footage", 30))
+    # Step 2: Get background video — use user-selected URL or search
+    await _send(ws, IpcMessage.progress(msg.id, "Getting background footage", 30))
     bg_video_path = None
-    if visual_keywords and (pexels_key or pixabay_key):
+
+    # Prefer the specific background the user selected in the UI
+    bg_url = background_video_url
+    if not bg_url and visual_keywords and (pexels_key or pixabay_key):
         for kw in visual_keywords[:3]:
             clips = await stock_footage.search(
                 kw, pexels_key=pexels_key, pixabay_key=pixabay_key, per_source=1,
             )
             if clips:
-                # Download the first clip
-                clip_url = clips[0].get("download_url", "")
-                if clip_url:
-                    try:
-                        import httpx
-                        async with httpx.AsyncClient(timeout=30.0) as client:
-                            resp = await client.get(clip_url)
-                            resp.raise_for_status()
-                            bg_path = os.path.join(
-                                tempfile.gettempdir(),
-                                f"clipmaster_bg_{kw.replace(' ', '_')}.mp4",
-                            )
-                            with open(bg_path, "wb") as f:
-                                f.write(resp.content)
-                            bg_video_path = bg_path
-                            break
-                    except Exception as exc:
-                        logger.warning("Failed to download stock clip: %s", exc)
+                bg_url = clips[0].get("download_url", "")
+                if bg_url:
+                    break
+
+    if bg_url:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(bg_url)
+                resp.raise_for_status()
+                bg_path = os.path.join(
+                    tempfile.gettempdir(),
+                    "clipmaster_bg_selected.mp4",
+                )
+                with open(bg_path, "wb") as f:
+                    f.write(resp.content)
+                bg_video_path = bg_path
+        except Exception as exc:
+            logger.warning("Failed to download stock clip: %s", exc)
 
     # Step 3: Build the video
     await _send(ws, IpcMessage.progress(msg.id, "Rendering video", 50))
@@ -542,6 +556,26 @@ async def _handle_create_short(
     escaped_text = _escape_ffmpeg_text(text)
     escaped_title = _escape_ffmpeg_text(title)
 
+    # Build drawtext filters using UI style params (WYSIWYG)
+    border_opts = f":borderw=3:bordercolor=black" if text_shadow else ""
+    body_border = f":borderw=2:bordercolor=black" if text_shadow else ""
+
+    # Title position: percentage of 1920px height
+    title_y = int(title_pos_y * 1920)
+    # Body text position: percentage of 1920px height
+    body_y = int(text_pos_y * 1920)
+
+    drawtext_title = (
+        f"drawtext=text='{escaped_title}'"
+        f":fontsize={title_font_size}:fontcolor={font_color}"
+        f":x=(w-text_w)/2:y={title_y}{border_opts}"
+    )
+    drawtext_body = (
+        f"drawtext=text='{escaped_text}'"
+        f":fontsize={font_size}:fontcolor={font_color}"
+        f":x=(w-text_w)/2:y={body_y}{body_border}"
+    )
+
     if bg_video_path and os.path.isfile(bg_video_path):
         # Use stock footage as background, scaled to 9:16, with text overlay
         cmd = [
@@ -551,10 +585,8 @@ async def _handle_create_short(
             "-vf", (
                 f"scale=1080:1920:force_original_aspect_ratio=increase,"
                 f"crop=1080:1920,"
-                f"drawtext=text='{escaped_title}':fontsize=56:fontcolor=white:"
-                f"x=(w-text_w)/2:y=200:borderw=3:bordercolor=black,"
-                f"drawtext=text='{escaped_text}':fontsize=36:fontcolor=white:"
-                f"x=(w-text_w)/2:y=(h-text_h)/2:borderw=2:bordercolor=black"
+                f"{drawtext_title},"
+                f"{drawtext_body}"
             ),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "192k",
@@ -570,10 +602,8 @@ async def _handle_create_short(
             "-f", "lavfi",
             "-i", (
                 f"color=c=0x1a1a2e:s=1080x1920:d={duration},"
-                f"drawtext=text='{escaped_title}':fontsize=56:fontcolor=white:"
-                f"x=(w-text_w)/2:y=300:borderw=3:bordercolor=0x6C5CE7,"
-                f"drawtext=text='{escaped_text}':fontsize=36:fontcolor=white:"
-                f"x=(w-text_w)/2:y=(h-text_h)/2:borderw=2:bordercolor=black"
+                f"{drawtext_title},"
+                f"{drawtext_body}"
             ),
             "-i", audio_path,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",

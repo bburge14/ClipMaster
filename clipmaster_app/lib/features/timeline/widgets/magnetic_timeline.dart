@@ -961,10 +961,26 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   }
 
   /// 9:16 phone-frame preview with live video + draggable text overlay.
+  /// Matches the Fact Shorts composer layout: title at top, script body
+  /// at positionY, stock footage or gradient background.
   Widget _buildPhonePreview(ProjectState project) {
     final style = project.captionStyle;
-    final hasText = project.scriptText != null || project.scriptTitle != null;
-    final displayText = project.scriptTitle ?? '';
+    final titleText = project.scriptTitle ?? '';
+    final scriptText = project.scriptText ?? '';
+    final hasTitle = titleText.isNotEmpty;
+    final hasScript = scriptText.isNotEmpty;
+
+    // Check if there's a video-track asset with a URL (stock footage from composer)
+    final videoAssets =
+        project.assets.where((a) => a.track == TimelineTrack.video).toList();
+    final bgUrl = videoAssets.isNotEmpty
+        ? (videoAssets.first.url ?? videoAssets.first.thumbnailUrl ?? '')
+        : '';
+
+    // Auto-load background from URL if no local video is loaded
+    if (bgUrl.isNotEmpty && _previewController == null) {
+      _initPreviewPlayer(bgUrl);
+    }
 
     return SizedBox(
       width: 200,
@@ -1001,129 +1017,161 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   width: 2,
                 ),
               ),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final frameW = constraints.maxWidth;
-                  final frameH = constraints.maxHeight;
+              child: ClipRect(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final frameW = constraints.maxWidth;
+                    final frameH = constraints.maxHeight;
 
-                  return Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // Video layer
-                      if (_previewController != null)
-                        ClipRect(
-                          child: Video(
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // Background layer: video or gradient
+                        if (_previewController != null)
+                          Video(
                             controller: _previewController!,
                             controls: NoVideoControls,
                             fit: BoxFit.cover,
-                          ),
-                        )
-                      else
-                        Center(
-                          child: Icon(Icons.videocam_off,
-                              size: 32,
-                              color: Colors.white.withOpacity(0.08)),
-                        ),
-                      // Draggable text overlay
-                      if (hasText && displayText.isNotEmpty)
-                        Positioned(
-                          left: (style.positionX * frameW) - (frameW * 0.45),
-                          top: (style.positionY * frameH) - 20,
-                          child: GestureDetector(
-                            onPanUpdate: (details) {
-                              final newX =
-                                  (style.positionX + details.delta.dx / frameW)
-                                      .clamp(0.05, 0.95);
-                              final newY =
-                                  (style.positionY + details.delta.dy / frameH)
-                                      .clamp(0.05, 0.95);
-                              ref
-                                  .read(projectProvider.notifier)
-                                  .setCaptionStyle(style.copyWith(
-                                    positionX: newX,
-                                    positionY: newY,
-                                  ));
-                            },
-                            child: Container(
-                              width: frameW * 0.9,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 3),
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: const Color(0xFF6C5CE7)
-                                      .withOpacity(0.4),
-                                  width: 1,
-                                ),
-                                borderRadius: BorderRadius.circular(4),
+                          )
+                        else
+                          Container(
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Color(0xFF1A1A2E),
+                                  Color(0xFF0A0A14),
+                                ],
                               ),
-                              child: Text(
-                                displayText,
-                                textAlign: TextAlign.center,
-                                maxLines: 3,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontFamily: style.fontFamily,
-                                  fontSize: style.fontSize * 0.35,
-                                  color: Color(style.colorHex),
-                                  fontWeight: FontWeight.w700,
-                                  shadows: style.hasBorder
-                                      ? const [
-                                          Shadow(
-                                              color: Colors.black,
-                                              blurRadius: 4),
-                                          Shadow(
-                                              color: Colors.black,
-                                              blurRadius: 8),
-                                        ]
-                                      : null,
+                            ),
+                          ),
+                        // Dark overlay for readability
+                        if (_previewController != null)
+                          Container(color: Colors.black.withOpacity(0.3)),
+                        // Title text (top area — matches Fact Shorts at 8%)
+                        if (hasTitle)
+                          Positioned(
+                            top: frameH * 0.08,
+                            left: 8,
+                            right: 8,
+                            child: Text(
+                              titleText,
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontFamily: style.fontFamily,
+                                fontSize: (style.fontSize * 0.45).clamp(10, 20),
+                                fontWeight: FontWeight.w800,
+                                color: Color(style.colorHex),
+                                shadows: style.hasBorder
+                                    ? const [
+                                        Shadow(
+                                            color: Colors.black, blurRadius: 6),
+                                        Shadow(
+                                            color: Colors.black,
+                                            blurRadius: 12),
+                                      ]
+                                    : null,
+                              ),
+                            ),
+                          ),
+                        // Script body text (draggable position)
+                        if (hasScript)
+                          Positioned(
+                            top: style.positionY * frameH - 30,
+                            left: 8,
+                            right: 8,
+                            child: GestureDetector(
+                              onPanUpdate: (details) {
+                                final newY =
+                                    (style.positionY + details.delta.dy / frameH)
+                                        .clamp(0.15, 0.92);
+                                ref
+                                    .read(projectProvider.notifier)
+                                    .setCaptionStyle(style.copyWith(
+                                      positionY: newY,
+                                    ));
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 3),
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: const Color(0xFF6C5CE7)
+                                        .withOpacity(0.3),
+                                  ),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  scriptText,
+                                  textAlign: TextAlign.center,
+                                  maxLines: 6,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontFamily: style.fontFamily,
+                                    fontSize:
+                                        (style.fontSize * 0.3).clamp(7, 14),
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(style.colorHex),
+                                    height: 1.4,
+                                    shadows: style.hasBorder
+                                        ? const [
+                                            Shadow(
+                                                color: Colors.black,
+                                                blurRadius: 4),
+                                          ]
+                                        : null,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                      // Position presets (top / center / bottom)
-                      if (hasText)
-                        Positioned(
-                          right: 4,
-                          top: 4,
-                          child: Column(
-                            children: [
-                              _posPresetButton(
-                                  Icons.vertical_align_top, 0.5, 0.12, style),
-                              _posPresetButton(
-                                  Icons.vertical_align_center, 0.5, 0.5, style),
-                              _posPresetButton(Icons.vertical_align_bottom,
-                                  0.5, 0.85, style),
-                            ],
+                        // Position presets (top / center / bottom)
+                        if (hasScript)
+                          Positioned(
+                            right: 4,
+                            top: frameH * 0.3,
+                            child: Column(
+                              children: [
+                                _posPresetButton(
+                                    Icons.vertical_align_top, 0.5, 0.25, style),
+                                _posPresetButton(Icons.vertical_align_center,
+                                    0.5, 0.5, style),
+                                _posPresetButton(Icons.vertical_align_bottom,
+                                    0.5, 0.8, style),
+                              ],
+                            ),
                           ),
-                        ),
-                      // Play/pause button
-                      if (_previewPlayer != null)
-                        Positioned(
-                          left: 4,
-                          bottom: 4,
-                          child: GestureDetector(
-                            onTap: () => _previewPlayer!.playOrPause(),
-                            child: Container(
-                              width: 28,
-                              height: 28,
-                              decoration: BoxDecoration(
-                                color: Colors.black54,
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: Icon(
-                                _previewPlaying
-                                    ? Icons.pause
-                                    : Icons.play_arrow,
-                                size: 16,
-                                color: Colors.white70,
+                        // Play/pause button
+                        if (_previewPlayer != null)
+                          Positioned(
+                            left: 4,
+                            bottom: 4,
+                            child: GestureDetector(
+                              onTap: () => _previewPlayer!.playOrPause(),
+                              child: Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: Colors.black54,
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Icon(
+                                  _previewPlaying
+                                      ? Icons.pause
+                                      : Icons.play_arrow,
+                                  size: 16,
+                                  color: Colors.white70,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                    ],
-                  );
-                },
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
           ),

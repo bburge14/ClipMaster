@@ -181,6 +181,9 @@ class ProjectNotifier extends StateNotifier<ProjectState> {
     required TtsVoice voice,
     String? ttsAudioPath,
     String? bgVideoPath,
+    String? bgPreviewUrl,
+    String? bgDownloadUrl,
+    CaptionStyle? captionStyle,
     List<Map<String, dynamic>> stockClips = const [],
   }) {
     final assets = <TimelineAsset>[];
@@ -192,6 +195,15 @@ class ProjectNotifier extends StateNotifier<ProjectState> {
         track: TimelineTrack.video,
         label: 'Background',
         filePath: bgVideoPath,
+      ));
+    } else if (bgPreviewUrl != null && bgPreviewUrl.isNotEmpty) {
+      // Use the stock footage URL the user selected in the composer
+      assets.add(TimelineAsset(
+        id: 'asset_${idCounter++}',
+        track: TimelineTrack.video,
+        label: 'Background',
+        url: bgDownloadUrl ?? bgPreviewUrl,
+        thumbnailUrl: bgPreviewUrl,
       ));
     }
 
@@ -218,6 +230,7 @@ class ProjectNotifier extends StateNotifier<ProjectState> {
     state = state.copyWith(
       assets: assets,
       selectedVoice: voice,
+      captionStyle: captionStyle ?? const CaptionStyle(),
       scriptText: scriptText,
       scriptTitle: title,
     );

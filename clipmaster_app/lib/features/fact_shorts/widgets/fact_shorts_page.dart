@@ -375,6 +375,10 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
 
     try {
       final ipc = ref.read(ipcClientProvider);
+      // Convert color hex to FFmpeg-friendly format (strip alpha, keep RGB)
+      final rgb = _colorHex & 0x00FFFFFF;
+      final ffmpegColor = '0x${rgb.toRadixString(16).padLeft(6, '0')}';
+
       final payload = <String, dynamic>{
         'text': _composerScript,
         'title': _composerTitle,
@@ -382,6 +386,14 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         'voice': _selectedVoice.name,
         'output_dir': shortsDir.path,
         'visual_keywords': _visualKeywords,
+        // Style params matching the UI preview (WYSIWYG)
+        'font_family': _fontFamily,
+        'font_size': _fontSize.toInt(),
+        'font_color': ffmpegColor,
+        'title_pos_y': 0.08,
+        'text_pos_y': _textPosY,
+        'text_shadow': _hasBorder,
+        'background_video_url': _selectedBgDownloadUrl ?? '',
       };
 
       final pexelsKey = apiKeyService.getNextKey(LlmProvider.pexels);
@@ -509,6 +521,16 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             scriptText: _composerScript,
             voice: _selectedVoice,
             ttsAudioPath: ttsAudioPath.isNotEmpty ? ttsAudioPath : null,
+            captionStyle: CaptionStyle(
+              fontFamily: _fontFamily,
+              fontSize: _fontSize,
+              colorHex: _colorHex,
+              hasBorder: _hasBorder,
+              positionX: 0.5,
+              positionY: _textPosY,
+            ),
+            bgPreviewUrl: _selectedBgPreviewUrl,
+            bgDownloadUrl: _selectedBgDownloadUrl,
           );
 
       ref.read(selectedTabProvider.notifier).state = 0;

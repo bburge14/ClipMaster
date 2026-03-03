@@ -175,7 +175,14 @@ class YouTubeSearchService:
                     "YouTube API returned 403. Your API key may be invalid, "
                     "or you've exceeded the daily quota."
                 ) from exc
-            raise
+            logger.error("YouTube search API error %s: %s", exc.response.status_code, exc)
+            raise ValueError(
+                f"YouTube API error ({exc.response.status_code}). "
+                "Check your API key and try again."
+            ) from exc
+        except Exception as exc:
+            logger.error("YouTube search failed: %s", exc)
+            raise ValueError(f"YouTube search failed: {exc}") from exc
 
     def _parse_videos(self, data: dict) -> list[YouTubeVideo]:
         now = datetime.now(timezone.utc)

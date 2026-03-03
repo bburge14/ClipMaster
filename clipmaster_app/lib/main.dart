@@ -2,21 +2,25 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'core/ipc/ipc_client.dart';
 import 'core/logging/dev_console.dart';
 import 'core/services/api_key_service.dart';
 import 'core/services/auto_updater.dart';
 import 'core/utils/binary_paths.dart';
+import 'core/utils/env_config.dart';
 import 'features/dev_console/widgets/dev_console_panel.dart';
 import 'features/fact_shorts/widgets/fact_shorts_page.dart';
 import 'features/timeline/widgets/magnetic_timeline.dart';
-import 'features/api_keys/widgets/api_key_settings.dart';
 import 'features/settings/widgets/settings_page.dart';
 import 'features/viral_scout/widgets/viral_scout_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Load .env config (GitHub token, API keys, etc.).
+  await EnvConfig.load();
 
   // Resolve bundled binary paths (ffmpeg, yt-dlp).
   await BinaryPaths.init();
@@ -36,6 +40,68 @@ class ClipMasterApp extends ConsumerWidget {
         useMaterial3: true,
         colorSchemeSeed: const Color(0xFF6C5CE7),
         brightness: Brightness.dark,
+        textTheme: GoogleFonts.interTextTheme(
+          ThemeData(brightness: Brightness.dark).textTheme,
+        ),
+        cardTheme: CardThemeData(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: Colors.white.withOpacity(0.06)),
+          ),
+          color: const Color(0xFF1E1E2E),
+        ),
+        scaffoldBackgroundColor: const Color(0xFF141420),
+        dividerColor: Colors.white.withOpacity(0.06),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF6C5CE7),
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white.withOpacity(0.04),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF6C5CE7)),
+          ),
+        ),
+        chipTheme: ChipThemeData(
+          backgroundColor: Colors.white.withOpacity(0.06),
+          selectedColor: const Color(0xFF6C5CE7).withOpacity(0.25),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+        navigationRailTheme: NavigationRailThemeData(
+          backgroundColor: const Color(0xFF141420),
+          selectedIconTheme: const IconThemeData(color: Color(0xFF6C5CE7)),
+          selectedLabelTextStyle: const TextStyle(
+            color: Color(0xFF6C5CE7),
+            fontWeight: FontWeight.w600,
+            fontSize: 11,
+          ),
+          unselectedLabelTextStyle: TextStyle(
+            color: Colors.white.withOpacity(0.4),
+            fontSize: 11,
+          ),
+          unselectedIconTheme: IconThemeData(
+            color: Colors.white.withOpacity(0.4),
+          ),
+          indicatorColor: const Color(0xFF6C5CE7).withOpacity(0.15),
+        ),
       ),
       home: const MainShell(),
     );
@@ -84,6 +150,13 @@ class _MainShellState extends ConsumerState<MainShell> {
     }
   }
 
+  static const _navItems = [
+    _NavItem(Icons.movie_edit_outlined, Icons.movie_edit, 'Timeline'),
+    _NavItem(Icons.auto_awesome_outlined, Icons.auto_awesome, 'Fact Shorts'),
+    _NavItem(Icons.trending_up_outlined, Icons.trending_up, 'Scout'),
+    _NavItem(Icons.settings_outlined, Icons.settings, 'Settings'),
+  ];
+
   @override
   Widget build(BuildContext context) {
     final updateCheck = ref.watch(updateCheckProvider);
@@ -103,65 +176,80 @@ class _MainShellState extends ConsumerState<MainShell> {
           Expanded(
             child: Row(
               children: [
-                // Sidebar navigation
-                NavigationRail(
-                  selectedIndex: _selectedIndex,
-                  onDestinationSelected: (index) =>
-                      setState(() => _selectedIndex = index),
-                  labelType: NavigationRailLabelType.all,
-                  leading: const Padding(
-                    padding: EdgeInsets.all(8.0),
-                    child: Text(
-                      'CM',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  trailing: Expanded(
-                    child: Align(
-                      alignment: Alignment.bottomCenter,
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 16.0),
-                        child: IconButton(
-                          icon: Icon(
-                            _devConsoleVisible
-                                ? Icons.terminal
-                                : Icons.terminal_outlined,
+                // Sidebar
+                Container(
+                  width: 80,
+                  color: const Color(0xFF141420),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 20),
+                      // Brand
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              const Color(0xFF6C5CE7).withOpacity(0.2),
+                              const Color(0xFF6C5CE7).withOpacity(0.05),
+                            ],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
                           ),
-                          tooltip: 'Dev Console',
-                          onPressed: () => setState(
-                            () => _devConsoleVisible = !_devConsoleVisible,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          'CM',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF6C5CE7),
+                            letterSpacing: -0.5,
                           ),
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'PRO',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white.withOpacity(0.3),
+                          letterSpacing: 3,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      // Nav items
+                      ...List.generate(_navItems.length, (i) {
+                        final item = _navItems[i];
+                        final selected = _selectedIndex == i;
+                        return _buildNavButton(item, selected, () {
+                          setState(() => _selectedIndex = i);
+                        });
+                      }),
+                      const Spacer(),
+                      // Dev console toggle
+                      _buildNavButton(
+                        const _NavItem(
+                          Icons.terminal_outlined,
+                          Icons.terminal,
+                          'Console',
+                        ),
+                        _devConsoleVisible,
+                        () => setState(
+                          () => _devConsoleVisible = !_devConsoleVisible,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                   ),
-                  destinations: const [
-                    NavigationRailDestination(
-                      icon: Icon(Icons.movie_edit),
-                      label: Text('Timeline'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.auto_awesome),
-                      label: Text('Fact Shorts'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.trending_up),
-                      label: Text('Scout'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.key),
-                      label: Text('API Keys'),
-                    ),
-                    NavigationRailDestination(
-                      icon: Icon(Icons.settings),
-                      label: Text('Settings'),
-                    ),
-                  ],
                 ),
-                const VerticalDivider(thickness: 1, width: 1),
+                Container(
+                  width: 1,
+                  color: Colors.white.withOpacity(0.06),
+                ),
                 // Main content area
                 Expanded(
                   child: _buildPage(),
@@ -180,16 +268,72 @@ class _MainShellState extends ConsumerState<MainShell> {
     );
   }
 
+  Widget _buildNavButton(
+    _NavItem item,
+    bool selected,
+    VoidCallback onTap,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              color: selected
+                  ? const Color(0xFF6C5CE7).withOpacity(0.12)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  selected ? item.activeIcon : item.icon,
+                  size: 22,
+                  color: selected
+                      ? const Color(0xFF6C5CE7)
+                      : Colors.white.withOpacity(0.4),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  item.label,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                    color: selected
+                        ? const Color(0xFF6C5CE7)
+                        : Colors.white.withOpacity(0.4),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildPage() {
     return switch (_selectedIndex) {
       0 => const MagneticTimeline(),
       1 => const FactShortsPage(),
       2 => const ViralScoutPage(),
-      3 => const ApiKeySettings(),
-      4 => const SettingsPage(),
+      3 => const SettingsPage(),
       _ => const SizedBox.shrink(),
     };
   }
+}
+
+class _NavItem {
+  final IconData icon;
+  final IconData activeIcon;
+  final String label;
+  const _NavItem(this.icon, this.activeIcon, this.label);
 }
 
 /// Banner that appears when an update is available.
@@ -211,7 +355,11 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: const Color(0xFF6C5CE7),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF6C5CE7), Color(0xFF8B7CF7)],
+        ),
+      ),
       child: Row(
         children: [
           const Icon(Icons.system_update, size: 18, color: Colors.white),
@@ -221,19 +369,26 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
               _downloadError != null
                   ? 'Update failed: $_downloadError'
                   : _downloading
-                      ? 'Downloading update v${widget.update.version}... $_percent%'
+                      ? 'Downloading v${widget.update.version}... $_percent%'
                       : 'Update available: v${widget.update.version} '
                           '(current: v${AutoUpdater.getInstalledVersion()})',
-              style: const TextStyle(color: Colors.white, fontSize: 13),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
           if (_downloading)
             SizedBox(
               width: 120,
-              child: LinearProgressIndicator(
-                value: _percent / 100,
-                backgroundColor: Colors.white24,
-                valueColor: const AlwaysStoppedAnimation(Colors.white),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: _percent / 100,
+                  backgroundColor: Colors.white24,
+                  valueColor: const AlwaysStoppedAnimation(Colors.white),
+                ),
               ),
             )
           else if (widget.update.hasInstaller)
@@ -244,6 +399,9 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
                 backgroundColor: Colors.white24,
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
               ),
               child: const Text('Update Now'),
             )
@@ -255,6 +413,9 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
                 backgroundColor: Colors.white24,
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
               ),
               child: const Text('View on GitHub'),
             ),
@@ -286,7 +447,6 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
   }
 
   void _openUrl(String url) {
-    // Open the release page in the default browser.
     if (Platform.isWindows) {
       Process.run('start', [url], runInShell: true);
     } else if (Platform.isMacOS) {
@@ -296,4 +456,3 @@ class _UpdateBarState extends ConsumerState<_UpdateBar> {
     }
   }
 }
-

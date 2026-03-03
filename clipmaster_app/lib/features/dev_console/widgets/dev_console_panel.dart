@@ -31,7 +31,7 @@ class _DevConsolePanelState extends ConsumerState<DevConsolePanel> {
     final theme = Theme.of(context);
 
     return Container(
-      color: const Color(0xFF1E1E1E),
+      color: const Color(0xFF0E0E18),
       child: Column(
         children: [
           // Toolbar
@@ -93,7 +93,7 @@ class _DevConsolePanelState extends ConsumerState<DevConsolePanel> {
           // Level filter
           DropdownButton<LogLevel>(
             value: _minLevel,
-            dropdownColor: const Color(0xFF2D2D2D),
+            dropdownColor: const Color(0xFF1E1E2E),
             style: const TextStyle(color: Colors.white70, fontSize: 12),
             underline: const SizedBox(),
             items: LogLevel.values.map((level) {
@@ -108,7 +108,7 @@ class _DevConsolePanelState extends ConsumerState<DevConsolePanel> {
           // Source filter
           DropdownButton<String?>(
             value: _sourceFilter,
-            dropdownColor: const Color(0xFF2D2D2D),
+            dropdownColor: const Color(0xFF1E1E2E),
             style: const TextStyle(color: Colors.white70, fontSize: 12),
             underline: const SizedBox(),
             hint: const Text('All Sources',

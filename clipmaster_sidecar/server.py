@@ -143,9 +143,11 @@ async def _handle_scout_trending(
     platform = msg.payload.get("platform", "youtube")
     limit = msg.payload.get("limit", 20)
 
-    await _send(ws, IpcMessage.progress(msg.id, "Scouting trending", 10))
+    await _send(ws, IpcMessage.progress(msg.id, "Fetching trending page", 10))
+    await _send(ws, IpcMessage.progress(msg.id, "Scraping videos", 30))
     results = await scout.fetch_trending(platform=platform, limit=limit)
-    await _send(ws, IpcMessage.progress(msg.id, "Scouting trending", 100))
+    await _send(ws, IpcMessage.progress(msg.id, "Scoring and ranking", 80))
+    await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
     await _send(ws, IpcMessage.result(msg.id, {"videos": results}))
 
 
@@ -164,81 +166,78 @@ async def _handle_generate_facts(
         )
         return
 
-    await _send(ws, IpcMessage.progress(msg.id, "Generating facts", 10))
+    await _send(ws, IpcMessage.progress(msg.id, "Preparing prompt", 10))
+    await _send(ws, IpcMessage.progress(msg.id, "Calling AI provider", 30))
     facts = await generator.generate(
         category=category, count=count, provider=provider, api_key=api_key
     )
-    await _send(ws, IpcMessage.progress(msg.id, "Generating facts", 100))
+    await _send(ws, IpcMessage.progress(msg.id, "Processing response", 80))
+    await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
     await _send(ws, IpcMessage.result(msg.id, {"facts": facts}))
 
 
 async def _handle_download_video(ws: WebSocket, msg: IpcMessage) -> None:
     """Placeholder: triggers yt-dlp download with progress reporting."""
     url = msg.payload.get("url", "")
-    output_dir = msg.payload.get("output_dir", "./downloads")
-
-    await _send(ws, IpcMessage.progress(msg.id, "Downloading", 0, f"URL: {url}"))
-    # Actual yt-dlp subprocess integration would go here.
     await _send(
         ws,
-        IpcMessage.result(
-            msg.id, {"status": "placeholder", "message": "Download handler not yet wired."}
+        IpcMessage.error(
+            msg.id,
+            "Video download is not yet available. This feature is coming in a future update.",
         ),
     )
 
 
 async def _handle_generate_proxy(ws: WebSocket, msg: IpcMessage) -> None:
     """Placeholder: generates a 720p proxy from a 4K source using FFmpeg."""
-    source = msg.payload.get("source_path", "")
-    await _send(ws, IpcMessage.progress(msg.id, "Generating proxy", 0))
     await _send(
         ws,
-        IpcMessage.result(
-            msg.id, {"status": "placeholder", "message": "Proxy generation not yet wired."}
+        IpcMessage.error(
+            msg.id,
+            "Proxy generation is not yet available. This feature is coming in a future update.",
         ),
     )
 
 
 async def _handle_transcribe(ws: WebSocket, msg: IpcMessage) -> None:
     """Placeholder: runs Faster-Whisper transcription with progress."""
-    audio_path = msg.payload.get("audio_path", "")
-    await _send(ws, IpcMessage.progress(msg.id, "Transcribing", 0))
     await _send(
         ws,
-        IpcMessage.result(
-            msg.id, {"status": "placeholder", "message": "Transcription not yet wired."}
+        IpcMessage.error(
+            msg.id,
+            "Transcription is not yet available. This feature is coming in a future update.",
         ),
     )
 
 
 async def _handle_ffmpeg_render(ws: WebSocket, msg: IpcMessage) -> None:
     """Placeholder: FFmpeg render with h264_nvenc hardware acceleration."""
-    await _send(ws, IpcMessage.progress(msg.id, "Rendering", 0))
     await _send(
         ws,
-        IpcMessage.result(
-            msg.id, {"status": "placeholder", "message": "FFmpeg render not yet wired."}
+        IpcMessage.error(
+            msg.id,
+            "Rendering is not yet available. This feature is coming in a future update.",
         ),
     )
 
 
 async def _handle_generate_tts(ws: WebSocket, msg: IpcMessage) -> None:
     """Placeholder: text-to-speech generation."""
-    await _send(ws, IpcMessage.progress(msg.id, "Generating TTS", 0))
     await _send(
         ws,
-        IpcMessage.result(
-            msg.id, {"status": "placeholder", "message": "TTS generation not yet wired."}
+        IpcMessage.error(
+            msg.id,
+            "Text-to-speech is not yet available. This feature is coming in a future update.",
         ),
     )
 
 
 async def _handle_query_stock_footage(ws: WebSocket, msg: IpcMessage) -> None:
     """Placeholder: stock footage search via Pexels/Pixabay."""
-    await _send(ws, IpcMessage.progress(msg.id, "Searching stock footage", 0))
     await _send(
         ws,
-        IpcMessage.result(
-            msg.id, {"status": "placeholder", "message": "Stock footage search not yet wired."}
+        IpcMessage.error(
+            msg.id,
+            "Stock footage search is not yet available. This feature is coming in a future update.",
         ),
     )

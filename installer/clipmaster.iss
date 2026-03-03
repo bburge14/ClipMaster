@@ -46,9 +46,9 @@ Source: "..\dist\ClipMasterPro\*"; DestDir: "{app}"; Flags: ignoreversion recurs
 
 [Icons]
 ; Start Menu shortcut — launches via the VBS wrapper (no console window).
-Name: "{group}\{#AppName}"; Filename: "{app}\ClipMaster Pro.vbs"; IconFilename: "{app}\{#AppExeName}"
+Name: "{group}\{#AppName}"; Filename: "{app}\ClipMaster Pro.vbs"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\ClipMaster Pro.vbs"; IconFilename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\ClipMaster Pro.vbs"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\ClipMaster Pro.vbs"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent shellexec
+Filename: "{app}\ClipMaster Pro.vbs"; WorkingDir: "{app}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent shellexec

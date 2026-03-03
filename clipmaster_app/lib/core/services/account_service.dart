@@ -69,6 +69,13 @@ class ConnectedAccount {
 class AccountService {
   static const String _storageKey = 'clipmaster_accounts';
 
+  /// Fixed port for OAuth redirects. Twitch requires the redirect_uri to
+  /// exactly match what's registered in the developer console, so we can't
+  /// use a random port. Register http://localhost:17548 in both Google Cloud
+  /// Console and Twitch Developer Console.
+  static const int oauthPort = 17548;
+  static const String oauthRedirectUri = 'http://localhost:$oauthPort';
+
   final FlutterSecureStorage _storage;
   final Map<AccountProvider, ConnectedAccount> _accounts = {};
 
@@ -151,12 +158,9 @@ class AccountService {
       );
     }
 
-    final redirectPort = await _findAvailablePort();
-    final redirectUri = 'http://localhost:$redirectPort';
-
     final authUrl = Uri.https('accounts.google.com', '/o/oauth2/v2/auth', {
       'client_id': clientId,
-      'redirect_uri': redirectUri,
+      'redirect_uri': oauthRedirectUri,
       'response_type': 'code',
       'scope': 'https://www.googleapis.com/auth/youtube.readonly '
           'https://www.googleapis.com/auth/userinfo.profile',
@@ -164,7 +168,7 @@ class AccountService {
       'prompt': 'consent',
     });
 
-    final code = await _runOAuthFlow(authUrl.toString(), redirectPort);
+    final code = await _runOAuthFlow(authUrl.toString(), oauthPort);
 
     // Exchange code for tokens.
     final tokenResponse = await http.post(
@@ -173,7 +177,7 @@ class AccountService {
         'code': code,
         'client_id': clientId,
         'client_secret': clientSecret,
-        'redirect_uri': redirectUri,
+        'redirect_uri': oauthRedirectUri,
         'grant_type': 'authorization_code',
       },
     );
@@ -223,17 +227,14 @@ class AccountService {
       );
     }
 
-    final redirectPort = await _findAvailablePort();
-    final redirectUri = 'http://localhost:$redirectPort';
-
     final authUrl = Uri.https('id.twitch.tv', '/oauth2/authorize', {
       'client_id': clientId,
-      'redirect_uri': redirectUri,
+      'redirect_uri': oauthRedirectUri,
       'response_type': 'code',
       'scope': 'user:read:email channel:read:stream_key',
     });
 
-    final code = await _runOAuthFlow(authUrl.toString(), redirectPort);
+    final code = await _runOAuthFlow(authUrl.toString(), oauthPort);
 
     // Exchange code for tokens.
     final tokenResponse = await http.post(
@@ -242,7 +243,7 @@ class AccountService {
         'code': code,
         'client_id': clientId,
         'client_secret': clientSecret,
-        'redirect_uri': redirectUri,
+        'redirect_uri': oauthRedirectUri,
         'grant_type': 'authorization_code',
       },
     );
@@ -288,14 +289,6 @@ class AccountService {
   }
 
   // ─────────────────── Shared helpers ───────────────────
-
-  /// Find an available port for the local OAuth redirect server.
-  Future<int> _findAvailablePort() async {
-    final server = await ServerSocket.bind('localhost', 0);
-    final port = server.port;
-    await server.close();
-    return port;
-  }
 
   /// Run the full OAuth flow: open browser, catch redirect, return auth code.
   Future<String> _runOAuthFlow(String authUrl, int port) async {

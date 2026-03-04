@@ -1221,23 +1221,54 @@ def _wrap_text(text: str, max_chars: int = 35) -> str:
 def _find_font(preferred_name: str | None = None) -> str | None:
     """Find a TTF font file for FFmpeg drawtext.
 
-    If *preferred_name* is given (e.g. "Inter", "Roboto"), search for
-    that font first before falling back to the standard priority list.
+    Search order:
+    1. Local font cache (previously downloaded Google Fonts)
+    2. Flutter google_fonts cache directories
+    3. System font directories
+    4. Download from Google Fonts API (if preferred_name is a Google Font)
     """
     import os
     import glob
+    import tempfile
 
-    # Common font paths across platforms
-    font_dirs = [
+    # Local cache for downloaded fonts
+    font_cache_dir = os.path.join(tempfile.gettempdir(), "clipmaster_fonts")
+    os.makedirs(font_cache_dir, exist_ok=True)
+
+    # Check cache first
+    if preferred_name:
+        cached = os.path.join(font_cache_dir, f"{preferred_name}-Regular.ttf")
+        if os.path.isfile(cached):
+            logger.info("Using cached font: %s", cached)
+            return cached
+
+    # Flutter google_fonts cache locations
+    flutter_cache_dirs = []
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        if local_app_data:
+            flutter_cache_dirs.append(
+                os.path.join(local_app_data, ".dartServer", ".google_fonts")
+            )
+            flutter_cache_dirs.append(
+                os.path.join(local_app_data, "google_fonts")
+            )
+        app_data = os.environ.get("APPDATA", "")
+        if app_data:
+            flutter_cache_dirs.append(os.path.join(app_data, "google_fonts"))
+    else:
+        home = os.path.expanduser("~")
+        flutter_cache_dirs.append(os.path.join(home, ".cache", "google_fonts"))
+
+    # System font paths
+    font_dirs = flutter_cache_dirs + [
         "/usr/share/fonts",
         "/usr/local/share/fonts",
         os.path.expanduser("~/.fonts"),
         os.path.expanduser("~/.local/share/fonts"),
-        # macOS
         "/System/Library/Fonts",
         "/Library/Fonts",
         os.path.expanduser("~/Library/Fonts"),
-        # Windows
         r"C:\Windows\Fonts",
     ]
 
@@ -1255,7 +1286,6 @@ def _find_font(preferred_name: str | None = None) -> str | None:
         if not os.path.isdir(font_dir):
             continue
         for font_name in preferred:
-            # Search for TTF or OTF files matching the font name
             patterns = [
                 os.path.join(font_dir, "**", f"{font_name}*.ttf"),
                 os.path.join(font_dir, "**", f"{font_name}*.otf"),
@@ -1267,18 +1297,79 @@ def _find_font(preferred_name: str | None = None) -> str | None:
             for pattern in patterns:
                 matches = glob.glob(pattern, recursive=True)
                 if matches:
-                    # Prefer regular weight (not Bold/Italic)
                     regular = [m for m in matches
                                if "Bold" not in os.path.basename(m)
                                and "Italic" not in os.path.basename(m)
                                and "bold" not in os.path.basename(m)
                                and "italic" not in os.path.basename(m)
-                               and not os.path.basename(m).lower().endswith(("i.ttf", "i.otf", "b.ttf", "b.otf", "bi.ttf", "bi.otf", "z.ttf", "z.otf"))]
+                               and not os.path.basename(m).lower().endswith(
+                                   ("i.ttf", "i.otf", "b.ttf", "b.otf",
+                                    "bi.ttf", "bi.otf", "z.ttf", "z.otf"))]
                     best = regular[0] if regular else matches[0]
                     logger.info("Using font: %s", best)
                     return best
 
-    logger.warning("No sans-serif font found, FFmpeg will use default")
+    # Not found on system — download from Google Fonts
+    if preferred_name:
+        downloaded = _download_google_font(preferred_name, font_cache_dir)
+        if downloaded:
+            return downloaded
+
+    logger.warning("No font found for '%s', FFmpeg will use default", preferred_name)
+    return None
+
+
+# Google Fonts direct download URLs (regular weight)
+_GOOGLE_FONT_URLS = {
+    "Inter": "https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfAZ9hiA.woff2",
+    "Roboto": "https://fonts.gstatic.com/s/roboto/v47/KFOMCnqEu92Fr1ME7kSn66aGLdTylUAMQXC89YmC2DPNWubEbGmT.ttf",
+    "Montserrat": "https://fonts.gstatic.com/s/montserrat/v29/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw5aXo.ttf",
+    "Oswald": "https://fonts.gstatic.com/s/oswald/v53/TK3_WkUHHAIjg75cFRf3bXL8LICs1_FvsUZiYA.ttf",
+    "Lato": "https://fonts.gstatic.com/s/lato/v24/S6uyw4BMUTPHjx4wXg.ttf",
+    "Poppins": "https://fonts.gstatic.com/s/poppins/v22/pxiEyp8kv8JHgFVrJJfecg.ttf",
+}
+
+
+def _download_google_font(name: str, cache_dir: str) -> str | None:
+    """Download a Google Font TTF file to local cache."""
+    import os
+    import urllib.request
+
+    url = _GOOGLE_FONT_URLS.get(name)
+    if not url:
+        # Try the Google Fonts CSS API to get the URL dynamically
+        try:
+            css_url = f"https://fonts.googleapis.com/css2?family={name.replace(' ', '+')}"
+            req = urllib.request.Request(css_url, headers={
+                "User-Agent": "Mozilla/5.0",  # Google Fonts requires a browser-like UA
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                css = resp.read().decode("utf-8")
+            # Extract first TTF/woff2 URL from CSS
+            import re
+            match = re.search(r"url\((https://fonts\.gstatic\.com/[^)]+\.ttf)\)", css)
+            if not match:
+                match = re.search(r"url\((https://fonts\.gstatic\.com/[^)]+)\)", css)
+            if match:
+                url = match.group(1)
+        except Exception as exc:
+            logger.warning("Could not fetch Google Fonts CSS for %s: %s", name, exc)
+
+    if not url:
+        return None
+
+    ext = ".woff2" if url.endswith(".woff2") else ".ttf"
+    dest = os.path.join(cache_dir, f"{name}-Regular{ext}")
+
+    try:
+        logger.info("Downloading Google Font %s from %s", name, url[:80])
+        urllib.request.urlretrieve(url, dest)
+        if os.path.isfile(dest) and os.path.getsize(dest) > 1000:
+            logger.info("Downloaded font: %s (%d bytes)", dest, os.path.getsize(dest))
+            return dest
+    except Exception as exc:
+        logger.warning("Failed to download font %s: %s", name, exc)
+
     return None
 
 

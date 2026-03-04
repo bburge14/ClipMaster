@@ -478,8 +478,29 @@ async def _handle_create_short(
     font_color = msg.payload.get("font_color", "white")
     title_pos_y = float(msg.payload.get("title_pos_y", 0.08))
     text_pos_y = float(msg.payload.get("text_pos_y", 0.75))
+    text_pos_x = float(msg.payload.get("text_pos_x", 0.5))
     text_box_w = float(msg.payload.get("text_box_w", 0.85))
     text_shadow = bool(msg.payload.get("text_shadow", True))
+
+    # Separate title/body styling (new)
+    title_color = msg.payload.get("title_color", font_color)
+    title_font_family = msg.payload.get("title_font_family", "")
+    body_color = msg.payload.get("body_color", font_color)
+    body_font_family = msg.payload.get("body_font_family", "")
+
+    # Text box background (new)
+    title_bg_enabled = bool(msg.payload.get("title_bg_enabled", False))
+    title_bg_color = msg.payload.get("title_bg_color", "black@0.5")
+    body_bg_enabled = bool(msg.payload.get("body_bg_enabled", False))
+    body_bg_color = msg.payload.get("body_bg_color", "black@0.5")
+
+    # Category badge (new)
+    category_label = msg.payload.get("category_label", "")
+
+    # Background music/sound clip (new)
+    bg_music_path = msg.payload.get("bg_music_path", "")
+    bg_music_volume = float(msg.payload.get("bg_music_volume", 0.15))
+
     # Multiple background URLs (cycle) or single fallback
     background_video_urls = msg.payload.get("background_video_urls", [])
     background_video_url = msg.payload.get("background_video_url", "")
@@ -623,11 +644,12 @@ async def _handle_create_short(
     wrapped_title = "\n".join(title_lines)
 
     # Word-wrap body text to match the visible text box.
-    # Text box is text_box_w fraction of 1080px. Average char width is
-    # roughly 0.55× the font size for a proportional sans-serif font.
-    usable_px = int(text_box_w * 1080)
+    # Use same 0.52 factor as Dart _wrapText() for consistency.
+    body_box_w_px = int(text_box_w * 1080)
+    # Subtract padding: preview has padding=6 on 270px → ×4 = 24px each side
+    body_usable_px = body_box_w_px - 48
     avg_char_w = max(body_font_size * 0.52, 1)
-    chars_per_line = max(15, int(usable_px / avg_char_w))
+    chars_per_line = max(15, int(body_usable_px / avg_char_w))
     wrapped_body = _wrap_text(text, chars_per_line)
     # Strip any BOM / invisible unicode chars that cause box glyphs in FFmpeg
     clean_title = wrapped_title.encode("ascii", errors="ignore").decode("ascii").strip()
@@ -641,92 +663,199 @@ async def _handle_create_short(
     with open(body_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(clean_body)
 
-    # Copy font to temp dir so we can reference it by bare filename
+    # Copy font(s) to temp dir so we can reference by bare filename
+    import shutil
     font_family = msg.payload.get("font_family", "")
-    font_file = _find_font(preferred_name=font_family if font_family else None)
-    font_opt = ""
-    if font_file:
-        import shutil
-        font_tmp = os.path.join(tmpdir, "cm_font.ttf")
-        try:
-            shutil.copy2(font_file, font_tmp)
-            font_opt = ":fontfile=cm_font.ttf"
-        except Exception:
-            logger.warning("Could not copy font %s to temp dir", font_file)
 
-    # Build drawtext filters
+    # Title font
+    title_font_name = title_font_family if title_font_family else font_family
+    title_font_file = _find_font(preferred_name=title_font_name if title_font_name else None)
+    title_font_opt = ""
+    if title_font_file:
+        font_tmp = os.path.join(tmpdir, "cm_font_title.ttf")
+        try:
+            shutil.copy2(title_font_file, font_tmp)
+            title_font_opt = ":fontfile=cm_font_title.ttf"
+        except Exception:
+            logger.warning("Could not copy title font %s to temp dir", title_font_file)
+
+    # Body font
+    body_font_name = body_font_family if body_font_family else font_family
+    body_font_file = _find_font(preferred_name=body_font_name if body_font_name else None)
+    body_font_opt = ""
+    if body_font_file:
+        font_tmp = os.path.join(tmpdir, "cm_font_body.ttf")
+        try:
+            shutil.copy2(body_font_file, font_tmp)
+            body_font_opt = ":fontfile=cm_font_body.ttf"
+        except Exception:
+            logger.warning("Could not copy body font %s to temp dir", body_font_file)
+
+    # Build drawtext filters — match Flutter preview pixel-for-pixel
     border_opts = ":borderw=3:bordercolor=black" if text_shadow else ""
     body_border = ":borderw=2:bordercolor=black" if text_shadow else ""
 
+    # Use separate colors if provided, else fall back to shared font_color
+    effective_title_color = title_color if title_color else font_color
+    effective_body_color = body_color if body_color else font_color
+
+    # Title Y position: preview uses `top: frameH * title_pos_y`
     title_y = int(title_pos_y * 1920)
-    # Body text: position at box TOP edge (same as preview).
-    # Preview puts box center at text_pos_y, so top = center - boxH/2
+
+    # Body text: preview puts box CENTER at (text_pos_x, text_pos_y),
+    # box top = center_y - boxH/2, then text starts at box top + padding(24px)
     text_box_h = float(msg.payload.get("text_box_h", 0.35))
     body_box_top = int(text_pos_y * 1920 - (text_box_h * 1920) / 2)
-    body_y = max(0, body_box_top)
+    body_y = max(0, body_box_top + 24)  # +24px for padding (6px × 4 scale)
+
+    # Body box X: preview centers box at text_pos_x
+    body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
 
     # Bare filenames — FFmpeg cwd will be set to tmpdir
     drawtext_title = (
         f"drawtext=textfile=cm_title.txt"
-        f":fontsize={title_font_size}:fontcolor={font_color}"
+        f":fontsize={title_font_size}:fontcolor={effective_title_color}"
         f":x=(w-text_w)/2:y={title_y}"
-        f"{font_opt}{border_opts}"
+        f"{title_font_opt}{border_opts}"
     )
     drawtext_body = (
         f"drawtext=textfile=cm_body.txt"
-        f":fontsize={body_font_size}:fontcolor={font_color}"
+        f":fontsize={body_font_size}:fontcolor={effective_body_color}"
         f":x=(w-text_w)/2:y={body_y}"
-        f"{font_opt}{body_border}"
+        f"{body_font_opt}{body_border}"
     )
+
+    # Title text box background (drawbox behind title)
+    drawbox_title_bg = ""
+    if title_bg_enabled:
+        # Title spans full width with padding (left:64, right:64 at 1080px)
+        drawbox_title_bg = (
+            f"drawbox=x=64:y={max(0, title_y - 16)}"
+            f":w=952:h={title_font_size * len(title_lines) + 32}"
+            f":color={title_bg_color}:t=fill,"
+        )
+
+    # Body text box background (drawbox behind body)
+    drawbox_body_bg = ""
+    if body_bg_enabled:
+        body_box_h_px = int(text_box_h * 1920)
+        drawbox_body_bg = (
+            f"drawbox=x={max(0, body_box_left)}"
+            f":y={max(0, body_box_top)}"
+            f":w={body_box_w_px}:h={body_box_h_px}"
+            f":color={body_bg_color}:t=fill,"
+        )
+
+    # Category badge: small text at bottom center (matches preview)
+    drawtext_category = ""
+    if category_label:
+        cat_file = os.path.join(tmpdir, "cm_category.txt")
+        clean_cat = category_label.encode("ascii", errors="ignore").decode("ascii").strip()
+        if not clean_cat:
+            clean_cat = category_label.strip()
+        with open(cat_file, "w", encoding="utf-8", newline="\n") as f:
+            f.write(clean_cat)
+        # Badge text at bottom, centered
+        # Preview: bottom:12, padding h:10, v:3 on 270×480
+        # → 1920 - 48(bottom margin) - 12(badge padding) - 40(font size) ≈ 1820
+        badge_y = 1920 - 48 - 52
+        badge_font_size = 40  # 10px preview × 4
+        # Use drawtext with box=1 for built-in background box
+        drawtext_category = (
+            f",drawtext=textfile=cm_category.txt"
+            f":fontsize={badge_font_size}:fontcolor=white"
+            f":x=(w-text_w)/2:y={badge_y}"
+            f":box=1:boxcolor=0x6C5CE7@0.6:boxborderw=12"
+            f"{title_font_opt}"
+        )
 
     # Ensure all -i / output paths are absolute (cwd will be tmpdir)
     audio_path = os.path.abspath(audio_path)
     output_path = os.path.abspath(output_path).replace("\\", "/")
     if bg_video_path:
         bg_video_path = os.path.abspath(bg_video_path)
+    if bg_music_path:
+        bg_music_path = os.path.abspath(bg_music_path)
 
-    if bg_video_path and os.path.isfile(bg_video_path):
-        # Stock footage background (single or concat) + dark overlay + text
-        vf_parts = []
-        # Only scale/crop if not already done by concat
-        if len(bg_video_paths) <= 1:
-            vf_parts.append(
+    # Build the video filter chain — order matters for WYSIWYG fidelity:
+    # 1. Scale/crop → 2. Dark overlay → 3. Text box backgrounds →
+    # 4. Title text → 5. Body text → 6. Category badge
+    def _build_vf(include_scale: bool) -> str:
+        parts = []
+        if include_scale:
+            parts.append(
                 "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
             )
-        vf_parts.append("drawbox=x=0:y=0:w=iw:h=ih:color=black@0.3:t=fill")
-        vf_parts.append(drawtext_title)
-        vf_parts.append(drawtext_body)
+        parts.append("drawbox=x=0:y=0:w=iw:h=ih:color=black@0.3:t=fill")
+        if drawbox_title_bg:
+            parts.append(drawbox_title_bg.rstrip(","))
+        if drawbox_body_bg:
+            parts.append(drawbox_body_bg.rstrip(","))
+        parts.append(drawtext_title)
+        parts.append(drawtext_body)
+        vf_str = ",".join(parts)
+        if drawtext_category:
+            vf_str += drawtext_category
+        return vf_str
 
+    # Determine audio inputs and mixing
+    has_bg_music = bg_music_path and os.path.isfile(bg_music_path)
+
+    if bg_video_path and os.path.isfile(bg_video_path):
+        vf = _build_vf(include_scale=(len(bg_video_paths) <= 1))
         cmd = [
             ffmpeg, "-y",
             "-stream_loop", "-1", "-i", bg_video_path,
             "-i", audio_path,
-            "-vf", ",".join(vf_parts),
+        ]
+        if has_bg_music:
+            cmd.extend(["-i", bg_music_path])
+            # Mix TTS voice (input 1) with background music (input 2)
+            cmd.extend([
+                "-filter_complex",
+                f"[1:a]volume=1.0[voice];[2:a]volume={bg_music_volume}[music];"
+                f"[voice][music]amix=inputs=2:duration=first[aout]",
+                "-map", "0:v", "-map", "[aout]",
+            ])
+            cmd.extend(["-vf", vf])
+        else:
+            cmd.extend(["-vf", vf])
+        cmd.extend([
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "192k",
             "-t", str(duration),
             "-shortest",
             "-pix_fmt", "yuv420p",
             output_path,
-        ]
+        ])
     else:
         # Solid dark background with text overlay
+        vf = _build_vf(include_scale=False)
         cmd = [
             ffmpeg, "-y",
             "-f", "lavfi",
             "-i", f"color=c=0x1a1a2e:s=1080x1920:d={duration}",
             "-i", audio_path,
-            "-vf", (
-                f"{drawtext_title},"
-                f"{drawtext_body}"
-            ),
+        ]
+        if has_bg_music:
+            cmd.extend(["-i", bg_music_path])
+            cmd.extend([
+                "-filter_complex",
+                f"[1:a]volume=1.0[voice];[2:a]volume={bg_music_volume}[music];"
+                f"[voice][music]amix=inputs=2:duration=first[aout]",
+                "-map", "0:v", "-map", "[aout]",
+            ])
+            cmd.extend(["-vf", vf])
+        else:
+            cmd.extend(["-vf", vf])
+        cmd.extend([
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "192k",
             "-t", str(duration),
             "-shortest",
             "-pix_fmt", "yuv420p",
             output_path,
-        ]
+        ])
 
     # Log filter string separately for debugging
     vf_idx = cmd.index("-vf") if "-vf" in cmd else -1

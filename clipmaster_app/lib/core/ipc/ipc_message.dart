@@ -49,6 +49,7 @@ enum MessageType {
   generateFacts,
   ffmpegRender,
   createShort,
+  previewSnapshot,
 
   // -- Responses (Python -> Flutter) --
   pong,

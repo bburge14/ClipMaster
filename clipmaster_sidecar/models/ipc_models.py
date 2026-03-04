@@ -27,6 +27,7 @@ class MessageType(str, Enum):
     generate_facts = "generateFacts"
     ffmpeg_render = "ffmpegRender"
     create_short = "createShort"
+    preview_snapshot = "previewSnapshot"
 
     # Responses (Python -> Flutter)
     pong = "pong"

@@ -467,26 +467,32 @@ async def _handle_create_short(
     pexels_key = msg.payload.get("pexels_key")
     pixabay_key = msg.payload.get("pixabay_key")
 
-    # Style params from the UI preview (WYSIWYG)
-    font_size = int(msg.payload.get("font_size", 36))
-    # Match the Dart preview scaling exactly:
-    # Preview is 270×480 (1/4 of 1080×1920)
-    # Dart title:  (_fontSize * 0.45).clamp(12, 24) → ×4 for render
-    # Dart body:   (_fontSize * 0.3).clamp(8, 16)   → ×4 for render
-    title_font_size = int(min(max(font_size * 0.45, 12), 24) * 4)
-    body_font_size = int(min(max(font_size * 0.3, 8), 16) * 4)
-    font_color = msg.payload.get("font_color", "white")
+    # Style params — font sizes come directly from the UI in 1080p pixels
+    # (no re-computation needed, exact WYSIWYG)
+    title_font_size = int(msg.payload.get("title_font_size_px", 48))
+    body_font_size = int(msg.payload.get("body_font_size_px", 40))
+    # Legacy fallback: if old-style font_size is sent, compute from it
+    if "font_size" in msg.payload and "title_font_size_px" not in msg.payload:
+        font_size = int(msg.payload["font_size"])
+        title_font_size = int(min(max(font_size * 0.45, 12), 24) * 4)
+        body_font_size = int(min(max(font_size * 0.3, 8), 16) * 4)
+
     title_pos_y = float(msg.payload.get("title_pos_y", 0.08))
     text_pos_y = float(msg.payload.get("text_pos_y", 0.75))
     text_pos_x = float(msg.payload.get("text_pos_x", 0.5))
     text_box_w = float(msg.payload.get("text_box_w", 0.85))
-    text_shadow = bool(msg.payload.get("text_shadow", True))
 
-    # Separate title/body styling (new)
-    title_color = msg.payload.get("title_color", font_color)
+    # Separate title/body styling
+    title_color = msg.payload.get("title_color", "white")
     title_font_family = msg.payload.get("title_font_family", "")
-    body_color = msg.payload.get("body_color", font_color)
+    title_shadow = bool(msg.payload.get("title_shadow", True))
+    body_color = msg.payload.get("body_color", "white")
     body_font_family = msg.payload.get("body_font_family", "")
+    body_shadow = bool(msg.payload.get("body_shadow", True))
+
+    # Slideshow mode
+    slideshow_enabled = bool(msg.payload.get("slideshow_enabled", False))
+    words_per_slide = int(msg.payload.get("words_per_slide", 15))
 
     # Text box background (new)
     title_bg_enabled = bool(msg.payload.get("title_bg_enabled", False))
@@ -650,18 +656,37 @@ async def _handle_create_short(
     body_usable_px = body_box_w_px - 48
     avg_char_w = max(body_font_size * 0.52, 1)
     chars_per_line = max(15, int(body_usable_px / avg_char_w))
-    wrapped_body = _wrap_text(text, chars_per_line)
+
+    # Slideshow mode: split text into separate slide files
+    slide_files: list[str] = []
+    if slideshow_enabled:
+        words = text.split()
+        for si in range(0, len(words), words_per_slide):
+            slide_text = " ".join(words[si:si + words_per_slide])
+            wrapped = _wrap_text(slide_text, chars_per_line)
+            clean = wrapped.encode("ascii", errors="ignore").decode("ascii").strip()
+            if not clean:
+                clean = wrapped.strip()
+            slide_path = os.path.join(tmpdir, f"cm_slide_{len(slide_files)}.txt")
+            with open(slide_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(clean)
+            slide_files.append(f"cm_slide_{len(slide_files)}.txt")
+    else:
+        wrapped_body = _wrap_text(text, chars_per_line)
+
     # Strip any BOM / invisible unicode chars that cause box glyphs in FFmpeg
     clean_title = wrapped_title.encode("ascii", errors="ignore").decode("ascii").strip()
-    clean_body = wrapped_body.encode("ascii", errors="ignore").decode("ascii").strip()
     if not clean_title:
         clean_title = title.strip()
-    if not clean_body:
-        clean_body = wrapped_body.strip()
     with open(title_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(clean_title)
-    with open(body_file, "w", encoding="utf-8", newline="\n") as f:
-        f.write(clean_body)
+
+    if not slideshow_enabled:
+        clean_body = wrapped_body.encode("ascii", errors="ignore").decode("ascii").strip()
+        if not clean_body:
+            clean_body = wrapped_body.strip()
+        with open(body_file, "w", encoding="utf-8", newline="\n") as f:
+            f.write(clean_body)
 
     # Copy font(s) to temp dir so we can reference by bare filename
     import shutil
@@ -692,12 +717,11 @@ async def _handle_create_short(
             logger.warning("Could not copy body font %s to temp dir", body_font_file)
 
     # Build drawtext filters — match Flutter preview pixel-for-pixel
-    border_opts = ":borderw=3:bordercolor=black" if text_shadow else ""
-    body_border = ":borderw=2:bordercolor=black" if text_shadow else ""
+    border_opts = ":borderw=3:bordercolor=black" if title_shadow else ""
+    body_border = ":borderw=2:bordercolor=black" if body_shadow else ""
 
-    # Use separate colors if provided, else fall back to shared font_color
-    effective_title_color = title_color if title_color else font_color
-    effective_body_color = body_color if body_color else font_color
+    effective_title_color = title_color
+    effective_body_color = body_color
 
     # Title Y position: preview uses `top: frameH * title_pos_y`
     title_y = int(title_pos_y * 1920)
@@ -718,12 +742,29 @@ async def _handle_create_short(
         f":x=(w-text_w)/2:y={title_y}"
         f"{title_font_opt}{border_opts}"
     )
-    drawtext_body = (
-        f"drawtext=textfile=cm_body.txt"
-        f":fontsize={body_font_size}:fontcolor={effective_body_color}"
-        f":x=(w-text_w)/2:y={body_y}"
-        f"{body_font_opt}{body_border}"
-    )
+
+    # Body text: single drawtext or multiple for slideshow
+    drawtext_body_parts: list[str] = []
+    if slideshow_enabled and slide_files:
+        # Each slide shown for equal duration
+        slide_dur = duration / len(slide_files) if duration > 0 else 5.0
+        for si, slide_fname in enumerate(slide_files):
+            t_start = si * slide_dur
+            t_end = (si + 1) * slide_dur
+            drawtext_body_parts.append(
+                f"drawtext=textfile={slide_fname}"
+                f":fontsize={body_font_size}:fontcolor={effective_body_color}"
+                f":x=(w-text_w)/2:y={body_y}"
+                f"{body_font_opt}{body_border}"
+                f":enable='between(t,{t_start:.2f},{t_end:.2f})'"
+            )
+    else:
+        drawtext_body_parts.append(
+            f"drawtext=textfile=cm_body.txt"
+            f":fontsize={body_font_size}:fontcolor={effective_body_color}"
+            f":x=(w-text_w)/2:y={body_y}"
+            f"{body_font_opt}{body_border}"
+        )
 
     # Title text box background (drawbox behind title)
     drawbox_title_bg = ""
@@ -779,7 +820,7 @@ async def _handle_create_short(
 
     # Build the video filter chain — order matters for WYSIWYG fidelity:
     # 1. Scale/crop → 2. Dark overlay → 3. Text box backgrounds →
-    # 4. Title text → 5. Body text → 6. Category badge
+    # 4. Title text → 5. Body text(s) → 6. Category badge
     def _build_vf(include_scale: bool) -> str:
         parts = []
         if include_scale:
@@ -792,7 +833,7 @@ async def _handle_create_short(
         if drawbox_body_bg:
             parts.append(drawbox_body_bg.rstrip(","))
         parts.append(drawtext_title)
-        parts.append(drawtext_body)
+        parts.extend(drawtext_body_parts)
         vf_str = ",".join(parts)
         if drawtext_category:
             vf_str += drawtext_category

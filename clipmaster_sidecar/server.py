@@ -642,7 +642,8 @@ async def _handle_create_short(
         f.write(clean_body)
 
     # Copy font to temp dir so we can reference it by bare filename
-    font_file = _find_font()
+    font_family = msg.payload.get("font_family", "")
+    font_file = _find_font(preferred_name=font_family if font_family else None)
     font_opt = ""
     if font_file:
         import shutil
@@ -658,8 +659,11 @@ async def _handle_create_short(
     body_border = ":borderw=2:bordercolor=black" if text_shadow else ""
 
     title_y = int(title_pos_y * 1920)
-    # Center body text vertically around the target Y position
-    body_y_expr = f"{int(text_pos_y * 1920)}-(text_h/2)"
+    # Body text: position at box TOP edge (same as preview).
+    # Preview puts box center at text_pos_y, so top = center - boxH/2
+    text_box_h = float(msg.payload.get("text_box_h", 0.35))
+    body_box_top = int(text_pos_y * 1920 - (text_box_h * 1920) / 2)
+    body_y = max(0, body_box_top)
 
     # Bare filenames — FFmpeg cwd will be set to tmpdir
     drawtext_title = (
@@ -671,7 +675,7 @@ async def _handle_create_short(
     drawtext_body = (
         f"drawtext=textfile=cm_body.txt"
         f":fontsize={body_font_size}:fontcolor={font_color}"
-        f":x=(w-text_w)/2:y={body_y_expr}"
+        f":x=(w-text_w)/2:y={body_y}"
         f"{font_opt}{body_border}"
     )
 
@@ -801,8 +805,12 @@ def _wrap_text(text: str, max_chars: int = 35) -> str:
     return "\n".join(lines)
 
 
-def _find_font() -> str | None:
-    """Find a sans-serif TTF font file for FFmpeg drawtext."""
+def _find_font(preferred_name: str | None = None) -> str | None:
+    """Find a TTF font file for FFmpeg drawtext.
+
+    If *preferred_name* is given (e.g. "Inter", "Roboto"), search for
+    that font first before falling back to the standard priority list.
+    """
     import os
     import glob
 
@@ -820,12 +828,15 @@ def _find_font() -> str | None:
         r"C:\Windows\Fonts",
     ]
 
-    # Preferred sans-serif fonts in priority order
-    preferred = [
+    # User's chosen font goes first, then fallback list
+    preferred = []
+    if preferred_name:
+        preferred.append(preferred_name)
+    preferred.extend([
         "Inter", "Roboto", "Montserrat", "Poppins", "Lato", "Oswald",
         "LiberationSans", "Liberation Sans", "DejaVuSans", "DejaVu Sans",
         "NotoSans", "Noto Sans", "Arial", "Helvetica", "FreeSans",
-    ]
+    ])
 
     for font_dir in font_dirs:
         if not os.path.isdir(font_dir):

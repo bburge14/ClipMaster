@@ -1178,7 +1178,44 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      Expanded(child: Center(child: _buildPhonePreview())),
+                      Expanded(
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(child: _buildPhonePreview()),
+                              const SizedBox(height: 6),
+                              _showRenderPreview
+                                  ? TextButton.icon(
+                                      onPressed: () =>
+                                          setState(() => _showRenderPreview = false),
+                                      icon: const Icon(Icons.edit, size: 14),
+                                      label: const Text('Back to Edit',
+                                          style: TextStyle(fontSize: 11)),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: const Color(0xFF6C5CE7),
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 10, vertical: 4),
+                                      ),
+                                    )
+                                  : TextButton.icon(
+                                      onPressed: () {
+                                        _requestPreviewSnapshot();
+                                        setState(() => _showRenderPreview = true);
+                                      },
+                                      icon: const Icon(Icons.visibility, size: 14),
+                                      label: const Text('Preview Render',
+                                          style: TextStyle(fontSize: 11)),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: Colors.white54,
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 10, vertical: 4),
+                                      ),
+                                    ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -1247,6 +1284,21 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                 final boxLeft = (_textPosX * frameW) - (boxW / 2);
                 final boxTop = (_textPosY * frameH) - (boxH / 2);
 
+                // Scale factor: preview is 270×480 vs render 1080×1920
+                const double scale = 0.25;
+                final previewTitleSize = (_titleFontSize * scale).clamp(8.0, 30.0);
+                final previewBodySize = (_bodyFontSize * scale).clamp(6.0, 20.0);
+
+                // Body text (slideshow-aware)
+                String bodyText;
+                if (_slideshowEnabled) {
+                  final slides = _getSlides();
+                  final idx = (_scrubPosition * slides.length).floor().clamp(0, slides.length - 1);
+                  bodyText = slides.isNotEmpty ? slides[idx] : _composerScript;
+                } else {
+                  bodyText = _composerScript;
+                }
+
                 return Stack(
                   fit: StackFit.expand,
                   children: [
@@ -1268,10 +1320,12 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
 
-                    // ── Layer 2: FFmpeg snapshot overlay (true WYSIWYG) ──
-                    // When available, this shows the exact text rendering
-                    // that will appear in the final video.
-                    if (_snapshotPath != null)
+                    // ── Dark overlay for text readability ──
+                    Container(color: Colors.black.withOpacity(0.3)),
+
+                    // ── Layer 2: FFmpeg snapshot overlay (render verification) ──
+                    // Only shown when user clicks "Preview Render" button.
+                    if (_showRenderPreview && _snapshotPath != null)
                       Positioned.fill(
                         child: Image.file(
                           File(_snapshotPath!),
@@ -1319,19 +1373,40 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         },
                         onPanEnd: (_) => _requestPreviewSnapshot(),
                         child: Container(
-                          height: 30,
+                          padding: _titleBgEnabled
+                              ? const EdgeInsets.symmetric(horizontal: 8, vertical: 4)
+                              : const EdgeInsets.all(2),
                           decoration: BoxDecoration(
+                            color: _titleBgEnabled ? Color(_titleBgColorHex) : null,
                             border: Border.all(
                               color: const Color(0xFFFFD700).withOpacity(0.4),
                               width: 1,
                             ),
                             borderRadius: BorderRadius.circular(4),
                           ),
+                          child: Text(
+                            _composerTitle,
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: _googleFont(
+                              _titleFontFamily,
+                              fontSize: previewTitleSize,
+                              fontWeight: FontWeight.w800,
+                              color: Color(_titleColorHex),
+                              shadows: _titleShadow
+                                  ? [
+                                      const Shadow(color: Colors.black, blurRadius: 6),
+                                      const Shadow(color: Colors.black, blurRadius: 12),
+                                    ]
+                                  : null,
+                            ),
+                          ),
                         ),
                       ),
                     ),
 
-                    // ── Layer 5: Invisible drag zone for body ──
+                    // ── Layer 5: Drag zone for body text ──
                     Positioned(
                       left: boxLeft.clamp(0, frameW - boxW),
                       top: boxTop.clamp(0, frameH - boxH),
@@ -1349,12 +1424,29 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         },
                         onPanEnd: (_) => _requestPreviewSnapshot(),
                         child: Container(
+                          padding: const EdgeInsets.all(6),
                           decoration: BoxDecoration(
+                            color: _bodyBgEnabled ? Color(_bodyBgColorHex) : null,
                             border: Border.all(
                               color: const Color(0xFF6C5CE7).withOpacity(0.5),
                               width: 1.5,
                             ),
                             borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            _wrapText(bodyText, boxW - 12, previewBodySize),
+                            textAlign: TextAlign.center,
+                            overflow: TextOverflow.clip,
+                            style: _googleFont(
+                              _bodyFontFamily,
+                              fontSize: previewBodySize,
+                              fontWeight: FontWeight.w600,
+                              color: Color(_bodyColorHex),
+                              height: 1.4,
+                              shadows: _bodyShadow
+                                  ? [const Shadow(color: Colors.black, blurRadius: 4)]
+                                  : null,
+                            ),
                           ),
                         ),
                       ),
@@ -1473,13 +1565,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          _snapshotPath != null ? 'WYSIWYG' : 'Draft',
+                          _showRenderPreview && _snapshotPath != null
+                              ? 'Render Preview'
+                              : 'Edit Mode',
                           style: TextStyle(
                             fontSize: 8,
                             fontWeight: FontWeight.w600,
-                            color: _snapshotPath != null
+                            color: _showRenderPreview && _snapshotPath != null
                                 ? const Color(0xFF00E676)
-                                : Colors.white54,
+                                : const Color(0xFF6C5CE7),
                           ),
                         ),
                       ),
@@ -1517,6 +1611,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // ── True WYSIWYG preview snapshot (FFmpeg-rendered) ──
   String? _snapshotPath;
   bool _snapshotLoading = false;
+  bool _showRenderPreview = false;
   Timer? _snapshotDebounce;
   String? _bgVideoLocalPath; // cached bg video for server-side snapshot
 

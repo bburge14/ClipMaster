@@ -173,18 +173,19 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         '@${a.toStringAsFixed(2)}';
   }
 
-  /// setState + trigger preview snapshot refresh.
+  /// setState + trigger preview clip refresh.
   void _setStyleAndRefresh(VoidCallback fn) {
     setState(fn);
-    _requestPreviewSnapshot();
+    _requestPreviewClip();
   }
 
   @override
   void dispose() {
-    _snapshotDebounce?.cancel();
+    _previewClipDebounce?.cancel();
     _scriptEditController.dispose();
     _bgSearchController.dispose();
     _voicePreviewPlayer?.dispose();
+    _previewPlayer?.dispose();
     _bgPlayer?.dispose();
     super.dispose();
   }
@@ -326,7 +327,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
 
     // Request a true WYSIWYG preview snapshot
-    _requestPreviewSnapshot();
+    _requestPreviewClip();
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -513,8 +514,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       setState(() => _bgPlaying = true);
     }
 
-    // Cache bg video locally for FFmpeg snapshot, then refresh preview
-    _cacheBgVideoLocally().then((_) => _requestPreviewSnapshot());
+    // Cache bg video locally for FFmpeg preview clip, then refresh
+    _cacheBgVideoLocally().then((_) => _requestPreviewClip());
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -1178,44 +1179,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      Expanded(
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Flexible(child: _buildPhonePreview()),
-                              const SizedBox(height: 6),
-                              _showRenderPreview
-                                  ? TextButton.icon(
-                                      onPressed: () =>
-                                          setState(() => _showRenderPreview = false),
-                                      icon: const Icon(Icons.edit, size: 14),
-                                      label: const Text('Back to Edit',
-                                          style: TextStyle(fontSize: 11)),
-                                      style: TextButton.styleFrom(
-                                        foregroundColor: const Color(0xFF6C5CE7),
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 10, vertical: 4),
-                                      ),
-                                    )
-                                  : TextButton.icon(
-                                      onPressed: () {
-                                        _requestPreviewSnapshot();
-                                        setState(() => _showRenderPreview = true);
-                                      },
-                                      icon: const Icon(Icons.visibility, size: 14),
-                                      label: const Text('Preview Render',
-                                          style: TextStyle(fontSize: 11)),
-                                      style: TextButton.styleFrom(
-                                        foregroundColor: Colors.white54,
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 10, vertical: 4),
-                                      ),
-                                    ),
-                            ],
-                          ),
-                        ),
-                      ),
+                      Expanded(child: Center(child: _buildPhonePreview())),
                     ],
                   ),
                 ),
@@ -1284,26 +1248,18 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                 final boxLeft = (_textPosX * frameW) - (boxW / 2);
                 final boxTop = (_textPosY * frameH) - (boxH / 2);
 
-                // Scale factor: preview is 270×480 vs render 1080×1920
-                const double scale = 0.25;
-                final previewTitleSize = (_titleFontSize * scale).clamp(8.0, 30.0);
-                final previewBodySize = (_bodyFontSize * scale).clamp(6.0, 20.0);
-
-                // Body text (slideshow-aware)
-                String bodyText;
-                if (_slideshowEnabled) {
-                  final slides = _getSlides();
-                  final idx = (_scrubPosition * slides.length).floor().clamp(0, slides.length - 1);
-                  bodyText = slides.isNotEmpty ? slides[idx] : _composerScript;
-                } else {
-                  bodyText = _composerScript;
-                }
-
                 return Stack(
                   fit: StackFit.expand,
                   children: [
-                    // ── Layer 1: Background video (playable) ──
-                    if (_bgController != null)
+                    // ── Layer 1: Video player ──
+                    // Priority: preview clip (FFmpeg-rendered with text) > raw bg > gradient
+                    if (_previewController != null)
+                      Video(
+                        controller: _previewController!,
+                        controls: NoVideoControls,
+                        fit: BoxFit.cover,
+                      )
+                    else if (_bgController != null)
                       Video(
                         controller: _bgController!,
                         controls: NoVideoControls,
@@ -1320,24 +1276,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
 
-                    // ── Dark overlay for text readability ──
-                    Container(color: Colors.black.withOpacity(0.3)),
-
-                    // ── Layer 2: FFmpeg snapshot overlay (render verification) ──
-                    // Only shown when user clicks "Preview Render" button.
-                    if (_showRenderPreview && _snapshotPath != null)
-                      Positioned.fill(
-                        child: Image.file(
-                          File(_snapshotPath!),
-                          fit: BoxFit.cover,
-                          // Force reload when path stays same but content changes
-                          key: ValueKey('$_snapshotPath${File(_snapshotPath!).lastModifiedSync().millisecondsSinceEpoch}'),
-                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                        ),
-                      ),
-
-                    // ── Layer 3: Loading indicator for snapshot ──
-                    if (_snapshotLoading)
+                    // ── Loading indicator for preview clip ──
+                    if (_previewClipLoading)
                       Positioned(
                         top: 4, right: 4,
                         child: Container(
@@ -1356,7 +1296,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
 
-                    // ── Layer 4: Invisible drag zones for title ──
+                    // ── Transparent drag zone for title ──
                     Positioned(
                       top: (_titlePosY * frameH).clamp(0, frameH - 30),
                       left: ((_titlePosX - 0.44) * frameW).clamp(0, frameW * 0.12),
@@ -1369,44 +1309,16 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                             _titlePosY = (_titlePosY + details.delta.dy / frameH)
                                 .clamp(0.02, 0.5);
                           });
-                          _requestPreviewSnapshot();
                         },
-                        onPanEnd: (_) => _requestPreviewSnapshot(),
+                        onPanEnd: (_) => _requestPreviewClip(),
                         child: Container(
-                          padding: _titleBgEnabled
-                              ? const EdgeInsets.symmetric(horizontal: 8, vertical: 4)
-                              : const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            color: _titleBgEnabled ? Color(_titleBgColorHex) : null,
-                            border: Border.all(
-                              color: const Color(0xFFFFD700).withOpacity(0.4),
-                              width: 1,
-                            ),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            _composerTitle,
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: _googleFont(
-                              _titleFontFamily,
-                              fontSize: previewTitleSize,
-                              fontWeight: FontWeight.w800,
-                              color: Color(_titleColorHex),
-                              shadows: _titleShadow
-                                  ? [
-                                      const Shadow(color: Colors.black, blurRadius: 6),
-                                      const Shadow(color: Colors.black, blurRadius: 12),
-                                    ]
-                                  : null,
-                            ),
-                          ),
+                          height: 30,
+                          color: Colors.transparent,
                         ),
                       ),
                     ),
 
-                    // ── Layer 5: Drag zone for body text ──
+                    // ── Transparent drag zone for body ──
                     Positioned(
                       left: boxLeft.clamp(0, frameW - boxW),
                       top: boxTop.clamp(0, frameH - boxH),
@@ -1420,37 +1332,14 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                             _textPosY = (_textPosY + details.delta.dy / frameH)
                                 .clamp(0.1, 0.92);
                           });
-                          _requestPreviewSnapshot();
                         },
-                        onPanEnd: (_) => _requestPreviewSnapshot(),
+                        onPanEnd: (_) => _requestPreviewClip(),
                         child: Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: _bodyBgEnabled ? Color(_bodyBgColorHex) : null,
-                            border: Border.all(
-                              color: const Color(0xFF6C5CE7).withOpacity(0.5),
-                              width: 1.5,
-                            ),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            _wrapText(bodyText, boxW - 12, previewBodySize),
-                            textAlign: TextAlign.center,
-                            overflow: TextOverflow.clip,
-                            style: _googleFont(
-                              _bodyFontFamily,
-                              fontSize: previewBodySize,
-                              fontWeight: FontWeight.w600,
-                              color: Color(_bodyColorHex),
-                              height: 1.4,
-                              shadows: _bodyShadow
-                                  ? [const Shadow(color: Colors.black, blurRadius: 4)]
-                                  : null,
-                            ),
-                          ),
+                          color: Colors.transparent,
                         ),
                       ),
                     ),
+
                     // ── Resize handle: bottom-right corner ──
                     Positioned(
                       left: (boxLeft + boxW - 8).clamp(0, frameW - 16),
@@ -1463,9 +1352,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                             _textBoxH = (_textBoxH + details.delta.dy / frameH)
                                 .clamp(0.1, 0.7);
                           });
-                          _requestPreviewSnapshot();
                         },
-                        onPanEnd: (_) => _requestPreviewSnapshot(),
+                        onPanEnd: (_) => _requestPreviewClip(),
                         child: Container(
                           width: 16,
                           height: 16,
@@ -1512,17 +1400,18 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       ),
 
                     // ── Play / Pause toggle ──
-                    if (_bgPlayer != null)
+                    if (_previewPlayer != null || _bgPlayer != null)
                       Positioned(
                         bottom: 8,
                         left: 8,
                         child: GestureDetector(
                           onTap: () {
-                            if (_bgPlayer == null) return;
+                            final player = _previewPlayer ?? _bgPlayer;
+                            if (player == null) return;
                             if (_bgPlaying) {
-                              _bgPlayer!.pause();
+                              player.pause();
                             } else {
-                              _bgPlayer!.play();
+                              player.play();
                             }
                           },
                           child: Container(
@@ -1555,7 +1444,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       ),
                     ),
 
-                    // ── Snapshot status badge ──
+                    // ── Preview status badge ──
                     Positioned(
                       top: 4, left: 4,
                       child: Container(
@@ -1565,19 +1454,18 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          _showRenderPreview && _snapshotPath != null
-                              ? 'Render Preview'
-                              : 'Edit Mode',
+                          _previewController != null ? 'Live' : 'No preview',
                           style: TextStyle(
                             fontSize: 8,
                             fontWeight: FontWeight.w600,
-                            color: _showRenderPreview && _snapshotPath != null
+                            color: _previewController != null
                                 ? const Color(0xFF00E676)
-                                : const Color(0xFF6C5CE7),
+                                : Colors.white54,
                           ),
                         ),
                       ),
                     ),
+
                     // ── Drag hint ──
                     Positioned(
                       bottom: 8,
@@ -1608,27 +1496,27 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
 
   bool _bgPlaying = true;
 
-  // ── True WYSIWYG preview snapshot (FFmpeg-rendered) ──
-  String? _snapshotPath;
-  bool _snapshotLoading = false;
-  bool _showRenderPreview = false;
-  Timer? _snapshotDebounce;
-  String? _bgVideoLocalPath; // cached bg video for server-side snapshot
+  // ── Live preview clip (FFmpeg-rendered video) ──
+  Player? _previewPlayer;
+  VideoController? _previewController;
+  bool _previewClipLoading = false;
+  Timer? _previewClipDebounce;
+  String? _bgVideoLocalPath; // cached bg video for server-side rendering
 
-  /// Request a preview snapshot from the sidecar (FFmpeg-rendered frame).
-  void _requestPreviewSnapshot() {
-    // Debounce: wait 400ms after last change before requesting
-    _snapshotDebounce?.cancel();
-    _snapshotDebounce = Timer(const Duration(milliseconds: 400), () async {
+  /// Request a preview video clip from the sidecar (FFmpeg-rendered 5-sec MP4).
+  /// This uses the EXACT same drawtext filters as the final render.
+  void _requestPreviewClip() {
+    _previewClipDebounce?.cancel();
+    _previewClipDebounce = Timer(const Duration(milliseconds: 500), () async {
       if (!mounted) return;
       if (_composerTitle.isEmpty && _composerScript.isEmpty) return;
 
-      setState(() => _snapshotLoading = true);
+      setState(() => _previewClipLoading = true);
       try {
         final ipc = ref.read(ipcClientProvider);
         final response = await ipc.send(
           IpcMessage(
-            type: MessageType.previewSnapshot,
+            type: MessageType.previewVideoClip,
             payload: {
               'title': _composerTitle,
               'text': _composerScript,
@@ -1657,23 +1545,35 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                 'bg_video_local_path': _bgVideoLocalPath,
             },
           ),
-          timeout: const Duration(seconds: 10),
+          timeout: const Duration(seconds: 30),
         );
         if (mounted && response.type == MessageType.result) {
-          final path = response.payload['snapshot_path'] as String?;
-          if (path != null && File(path).existsSync()) {
-            setState(() {
-              _snapshotPath = path;
-              _snapshotLoading = false;
-            });
+          final clipPath = response.payload['clip_path'] as String?;
+          if (clipPath != null && File(clipPath).existsSync()) {
+            _loadPreviewClip(clipPath);
             return;
           }
         }
       } catch (e) {
-        // Snapshot is best-effort — don't block the UI
+        // Preview clip is best-effort — don't block the UI
       }
-      if (mounted) setState(() => _snapshotLoading = false);
+      if (mounted) setState(() => _previewClipLoading = false);
     });
+  }
+
+  /// Load the FFmpeg-rendered preview clip into the dedicated preview player.
+  void _loadPreviewClip(String clipPath) {
+    if (_previewPlayer == null) {
+      _previewPlayer = Player();
+      _previewController = VideoController(_previewPlayer!);
+      _previewPlayer!.stream.playing.listen((playing) {
+        if (mounted) setState(() {});
+      });
+    }
+    _previewPlayer!.open(Media(clipPath));
+    _previewPlayer!.setPlaylistMode(PlaylistMode.loop);
+    _previewPlayer!.setVolume(0);
+    if (mounted) setState(() => _previewClipLoading = false);
   }
 
   /// Download the active bg video to a local temp file for FFmpeg snapshot.

@@ -147,6 +147,9 @@ async def _dispatch(
             case MessageType.preview_snapshot:
                 await _handle_preview_snapshot(ws, msg)
 
+            case MessageType.preview_video_clip:
+                await _handle_preview_video_clip(ws, msg)
+
             case _:
                 await _send(
                     ws,
@@ -1170,6 +1173,239 @@ async def _handle_preview_snapshot(
         }))
     except Exception as exc:
         logger.exception("Preview snapshot error")
+        await _send(ws, IpcMessage.error(msg.id, str(exc)))
+
+
+async def _handle_preview_video_clip(
+    ws: WebSocket,
+    msg: IpcMessage,
+) -> None:
+    """Generate a short (5-sec) looping preview video clip using the exact same
+    FFmpeg drawtext filters as the final render — true WYSIWYG video preview."""
+    import os
+    import shutil
+    import tempfile
+
+    ffmpeg = _find_ffmpeg()
+    if not ffmpeg:
+        await _send(ws, IpcMessage.error(msg.id, "FFmpeg not found."))
+        return
+
+    p = msg.payload
+    title = p.get("title", "Untitled Fact")
+    text = p.get("text", "")
+    title_font_size = int(p.get("title_font_size_px", 48))
+    body_font_size = int(p.get("body_font_size_px", 40))
+    title_pos_x = float(p.get("title_pos_x", 0.5))
+    title_pos_y = float(p.get("title_pos_y", 0.08))
+    text_pos_x = float(p.get("text_pos_x", 0.5))
+    text_pos_y = float(p.get("text_pos_y", 0.75))
+    text_box_w = float(p.get("text_box_w", 0.85))
+    text_box_h = float(p.get("text_box_h", 0.35))
+    title_color = p.get("title_color", "white")
+    body_color = p.get("body_color", "white")
+    title_font_family = p.get("title_font_family", "")
+    body_font_family = p.get("body_font_family", "")
+    title_shadow = bool(p.get("title_shadow", True))
+    body_shadow = bool(p.get("body_shadow", True))
+    title_bg_enabled = bool(p.get("title_bg_enabled", False))
+    title_bg_color = p.get("title_bg_color", "black@0.5")
+    body_bg_enabled = bool(p.get("body_bg_enabled", False))
+    body_bg_color = p.get("body_bg_color", "black@0.5")
+    category_label = p.get("category_label", "")
+    slideshow_enabled = bool(p.get("slideshow_enabled", False))
+    words_per_slide = int(p.get("words_per_slide", 15))
+    bg_video_path = p.get("bg_video_local_path", "")
+
+    clip_duration = 5  # seconds
+
+    tmpdir = tempfile.gettempdir()
+    clip_path = os.path.join(tmpdir, "cm_preview_clip.mp4")
+
+    # ── Write text files (same logic as snapshot/render) ──
+    title_usable_px = int(0.88 * 1080)
+    title_avg_char_w = max(title_font_size * 0.55, 1)
+    title_chars = max(10, int(title_usable_px / title_avg_char_w))
+    wrapped_title = _wrap_text(title, title_chars)
+    title_lines = wrapped_title.split("\n")[:2]
+    wrapped_title = "\n".join(title_lines)
+
+    body_box_w_px = int(text_box_w * 1080)
+    body_usable_px = body_box_w_px - 48
+    avg_char_w = max(body_font_size * 0.52, 1)
+    chars_per_line = max(15, int(body_usable_px / avg_char_w))
+
+    clean_title = wrapped_title.encode("ascii", errors="ignore").decode("ascii").strip()
+    if not clean_title:
+        clean_title = title.strip()
+    title_file = os.path.join(tmpdir, "cm_title.txt")
+    with open(title_file, "w", encoding="utf-8", newline="\n") as f:
+        f.write(clean_title)
+
+    if slideshow_enabled:
+        words = text.split()
+        first_slide = " ".join(words[:words_per_slide])
+        wrapped_body = _wrap_text(first_slide, chars_per_line)
+    else:
+        wrapped_body = _wrap_text(text, chars_per_line)
+    clean_body = wrapped_body.encode("ascii", errors="ignore").decode("ascii").strip()
+    if not clean_body:
+        clean_body = text.strip()
+    body_file = os.path.join(tmpdir, "cm_body.txt")
+    with open(body_file, "w", encoding="utf-8", newline="\n") as f:
+        f.write(clean_body)
+
+    # ── Fonts ──
+    font_family = p.get("font_family", "")
+    title_font_name = title_font_family or font_family
+    title_font_file = _find_font(preferred_name=title_font_name or None)
+    title_font_opt = ""
+    if title_font_file:
+        dst = os.path.join(tmpdir, "cm_font_title.ttf")
+        try:
+            shutil.copy2(title_font_file, dst)
+            title_font_opt = ":fontfile=cm_font_title.ttf"
+        except Exception:
+            pass
+
+    body_font_name = body_font_family or font_family
+    body_font_file = _find_font(preferred_name=body_font_name or None)
+    body_font_opt = ""
+    if body_font_file:
+        dst = os.path.join(tmpdir, "cm_font_body.ttf")
+        try:
+            shutil.copy2(body_font_file, dst)
+            body_font_opt = ":fontfile=cm_font_body.ttf"
+        except Exception:
+            pass
+
+    # ── Build filter chain (identical to snapshot/render) ──
+    border_opts = ":borderw=3:bordercolor=black" if title_shadow else ""
+    body_border = ":borderw=2:bordercolor=black" if body_shadow else ""
+
+    title_y = int(title_pos_y * 1920)
+    title_x_expr = f"({int(title_pos_x * 1080)}-text_w/2)"
+
+    body_box_top = int(text_pos_y * 1920 - (text_box_h * 1920) / 2)
+    body_y = max(0, body_box_top + 24)
+    body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
+    body_x_expr = f"({int(text_pos_x * 1080)}-text_w/2)"
+
+    drawtext_title = (
+        f"drawtext=textfile=cm_title.txt"
+        f":fontsize={title_font_size}:fontcolor={title_color}"
+        f":x={title_x_expr}:y={title_y}"
+        f"{title_font_opt}{border_opts}"
+    )
+
+    drawtext_body = (
+        f"drawtext=textfile=cm_body.txt"
+        f":fontsize={body_font_size}:fontcolor={body_color}"
+        f":x={body_x_expr}:y={body_y}"
+        f"{body_font_opt}{body_border}"
+    )
+
+    drawbox_title_bg = ""
+    if title_bg_enabled:
+        title_box_w = 952
+        title_box_x = max(0, int(title_pos_x * 1080 - title_box_w / 2))
+        drawbox_title_bg = (
+            f"drawbox=x={title_box_x}:y={max(0, title_y - 16)}"
+            f":w={title_box_w}:h={title_font_size * len(title_lines) + 32}"
+            f":color={title_bg_color}:t=fill"
+        )
+
+    drawbox_body_bg = ""
+    if body_bg_enabled:
+        body_box_h_px = int(text_box_h * 1920)
+        drawbox_body_bg = (
+            f"drawbox=x={max(0, body_box_left)}"
+            f":y={max(0, body_box_top)}"
+            f":w={body_box_w_px}:h={body_box_h_px}"
+            f":color={body_bg_color}:t=fill"
+        )
+
+    drawtext_category = ""
+    if category_label:
+        cat_file = os.path.join(tmpdir, "cm_category.txt")
+        clean_cat = category_label.encode("ascii", errors="ignore").decode("ascii").strip() or category_label.strip()
+        with open(cat_file, "w", encoding="utf-8", newline="\n") as f:
+            f.write(clean_cat)
+        badge_y = 1920 - 48 - 52
+        badge_font_size = 40
+        drawtext_category = (
+            f",drawtext=textfile=cm_category.txt"
+            f":fontsize={badge_font_size}:fontcolor=white"
+            f":x=(w-text_w)/2:y={badge_y}"
+            f":box=1:boxcolor=0x6C5CE7@0.6:boxborderw=12"
+            f"{title_font_opt}"
+        )
+
+    # Assemble VF
+    vf_parts = []
+    if bg_video_path and os.path.isfile(bg_video_path):
+        vf_parts.append("scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920")
+    vf_parts.append("drawbox=x=0:y=0:w=iw:h=ih:color=black@0.3:t=fill")
+    if drawbox_title_bg:
+        vf_parts.append(drawbox_title_bg)
+    if drawbox_body_bg:
+        vf_parts.append(drawbox_body_bg)
+    vf_parts.append(drawtext_title)
+    vf_parts.append(drawtext_body)
+    vf_str = ",".join(vf_parts)
+    if drawtext_category:
+        vf_str += drawtext_category
+
+    # Build FFmpeg command: 5-second video clip (ultrafast for speed)
+    if bg_video_path and os.path.isfile(bg_video_path):
+        bg_abs = os.path.abspath(bg_video_path)
+        cmd = [
+            ffmpeg, "-y",
+            "-stream_loop", "-1",
+            "-i", bg_abs,
+            "-t", str(clip_duration),
+            "-vf", vf_str,
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "28",
+            "-an",
+            "-pix_fmt", "yuv420p",
+            os.path.abspath(clip_path),
+        ]
+    else:
+        cmd = [
+            ffmpeg, "-y",
+            "-f", "lavfi",
+            "-i", f"color=c=0x1A1A2E:s=1080x1920:d={clip_duration},format=yuv420p",
+            "-t", str(clip_duration),
+            "-vf", vf_str,
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "28",
+            "-an",
+            "-pix_fmt", "yuv420p",
+            os.path.abspath(clip_path),
+        ]
+
+    try:
+        await _send(ws, IpcMessage.progress(msg.id, "Rendering preview clip…", 30))
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=tmpdir,
+        )
+        _, stderr_bytes = await proc.communicate()
+        if proc.returncode != 0:
+            err = stderr_bytes.decode("utf-8", errors="replace")[-500:]
+            logger.error("Preview clip FFmpeg error: %s", err)
+            await _send(ws, IpcMessage.error(msg.id, f"FFmpeg preview clip failed: {err}"))
+            return
+        await _send(ws, IpcMessage.result(msg.id, {
+            "clip_path": os.path.abspath(clip_path),
+        }))
+    except Exception as exc:
+        logger.exception("Preview clip error")
         await _send(ws, IpcMessage.error(msg.id, str(exc)))
 
 

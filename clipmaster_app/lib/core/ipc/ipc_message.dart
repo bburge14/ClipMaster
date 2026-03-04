@@ -50,6 +50,7 @@ enum MessageType {
   ffmpegRender,
   createShort,
   previewSnapshot,
+  previewVideoClip,
 
   // -- Responses (Python -> Flutter) --
   pong,

@@ -106,7 +106,7 @@ class LlmGateway:
             config["url"],
             headers={
                 "x-api-key": req.api_key,
-                "anthropic-version": "2023-06-01",
+                "anthropic-version": "2025-04-01",
                 "content-type": "application/json",
             },
             json={

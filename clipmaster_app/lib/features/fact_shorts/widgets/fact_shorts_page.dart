@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -153,8 +155,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     {'label': 'News Intro', 'path': 'bundled_audio/news_intro.mp3'},
   ];
 
+  /// setState + trigger preview snapshot refresh.
+  void _setStyleAndRefresh(VoidCallback fn) {
+    setState(fn);
+    _requestPreviewSnapshot();
+  }
+
   @override
   void dispose() {
+    _snapshotDebounce?.cancel();
     _scriptEditController.dispose();
     _bgSearchController.dispose();
     _voicePreviewPlayer?.dispose();
@@ -297,6 +306,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     if (_visualKeywords.isNotEmpty) {
       _searchBackgrounds(_visualKeywords.first);
     }
+
+    // Request a true WYSIWYG preview snapshot
+    _requestPreviewSnapshot();
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -459,6 +471,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       _bgPlayer?.dispose();
       _bgPlayer = null;
       _bgController = null;
+      _bgVideoLocalPath = null;
       setState(() {});
       return;
     }
@@ -481,6 +494,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       });
       setState(() => _bgPlaying = true);
     }
+
+    // Cache bg video locally for FFmpeg snapshot, then refresh preview
+    _cacheBgVideoLocally().then((_) => _requestPreviewSnapshot());
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -1211,8 +1227,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // ────────────────────────────────────────────────────────────────
 
   Widget _buildPhonePreview() {
-    // Exactly 1/4 of 1080×1920 — scale factor = 0.25
-    const double scale = 0.25;
     return SizedBox(
       width: 270,
       height: 480,
@@ -1227,30 +1241,16 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               builder: (context, constraints) {
                 final frameW = constraints.maxWidth;
                 final frameH = constraints.maxHeight;
-                // Preview font sizes = render sizes × scale
-                final previewTitleSize = (_titleFontSize * scale).clamp(8.0, 30.0);
-                final previewBodySize = (_bodyFontSize * scale).clamp(6.0, 20.0);
-                // Text box pixel dimensions
+                // Text box pixel dimensions (for drag handles only)
                 final boxW = _textBoxW * frameW;
                 final boxH = _textBoxH * frameH;
                 final boxLeft = (_textPosX * frameW) - (boxW / 2);
                 final boxTop = (_textPosY * frameH) - (boxH / 2);
 
-                // Slideshow: show current slide text
-                String bodyText;
-                if (_slideshowEnabled) {
-                  final slides = _getSlides();
-                  final currentSlide =
-                      (_scrubPosition * slides.length).floor().clamp(0, slides.length - 1);
-                  bodyText = slides.isNotEmpty ? slides[currentSlide] : _composerScript;
-                } else {
-                  bodyText = _composerScript;
-                }
-
                 return Stack(
                   fit: StackFit.expand,
                   children: [
-                    // ── Background layer (playable video) ──
+                    // ── Layer 1: Background video (playable) ──
                     if (_bgController != null)
                       Video(
                         controller: _bgController!,
@@ -1267,10 +1267,42 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                           ),
                         ),
                       ),
-                    // Dark overlay for readability
-                    Container(color: Colors.black.withOpacity(0.3)),
 
-                    // ── Title text (DRAGGABLE) ──
+                    // ── Layer 2: FFmpeg snapshot overlay (true WYSIWYG) ──
+                    // When available, this shows the exact text rendering
+                    // that will appear in the final video.
+                    if (_snapshotPath != null)
+                      Positioned.fill(
+                        child: Image.file(
+                          File(_snapshotPath!),
+                          fit: BoxFit.cover,
+                          // Force reload when path stays same but content changes
+                          key: ValueKey('$_snapshotPath${File(_snapshotPath!).lastModifiedSync().millisecondsSinceEpoch}'),
+                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                        ),
+                      ),
+
+                    // ── Layer 3: Loading indicator for snapshot ──
+                    if (_snapshotLoading)
+                      Positioned(
+                        top: 4, right: 4,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const SizedBox(
+                            width: 12, height: 12,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFF6C5CE7),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                    // ── Layer 4: Invisible drag zones for title ──
                     Positioned(
                       top: (_titlePosY * frameH).clamp(0, frameH - 30),
                       left: ((_titlePosX - 0.44) * frameW).clamp(0, frameW * 0.12),
@@ -1283,45 +1315,23 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                             _titlePosY = (_titlePosY + details.delta.dy / frameH)
                                 .clamp(0.02, 0.5);
                           });
+                          _requestPreviewSnapshot();
                         },
+                        onPanEnd: (_) => _requestPreviewSnapshot(),
                         child: Container(
-                          padding: _titleBgEnabled
-                              ? const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 4)
-                              : const EdgeInsets.all(2),
+                          height: 30,
                           decoration: BoxDecoration(
-                            color: _titleBgEnabled
-                                ? Color(_titleBgColorHex)
-                                : null,
                             border: Border.all(
                               color: const Color(0xFFFFD700).withOpacity(0.4),
                               width: 1,
                             ),
                             borderRadius: BorderRadius.circular(4),
                           ),
-                          child: Text(
-                            _composerTitle,
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: _googleFont(
-                              _titleFontFamily,
-                              fontSize: previewTitleSize,
-                              fontWeight: FontWeight.w800,
-                              color: Color(_titleColorHex),
-                              shadows: _titleShadow
-                                  ? const [
-                                      Shadow(color: Colors.black, blurRadius: 6),
-                                      Shadow(color: Colors.black, blurRadius: 12),
-                                    ]
-                                  : null,
-                            ),
-                          ),
                         ),
                       ),
                     ),
 
-                    // ── Body text box (DRAGGABLE + resizable) ──
+                    // ── Layer 5: Invisible drag zone for body ──
                     Positioned(
                       left: boxLeft.clamp(0, frameW - boxW),
                       top: boxTop.clamp(0, frameH - boxH),
@@ -1335,39 +1345,16 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                             _textPosY = (_textPosY + details.delta.dy / frameH)
                                 .clamp(0.1, 0.92);
                           });
+                          _requestPreviewSnapshot();
                         },
+                        onPanEnd: (_) => _requestPreviewSnapshot(),
                         child: Container(
-                          padding: const EdgeInsets.all(6),
                           decoration: BoxDecoration(
-                            color: _bodyBgEnabled
-                                ? Color(_bodyBgColorHex)
-                                : null,
                             border: Border.all(
                               color: const Color(0xFF6C5CE7).withOpacity(0.5),
                               width: 1.5,
                             ),
                             borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            _wrapText(
-                              bodyText,
-                              boxW - 12,
-                              previewBodySize,
-                            ),
-                            textAlign: TextAlign.center,
-                            overflow: TextOverflow.clip,
-                            style: _googleFont(
-                              _bodyFontFamily,
-                              fontSize: previewBodySize,
-                              fontWeight: FontWeight.w600,
-                              color: Color(_bodyColorHex),
-                              height: 1.4,
-                              shadows: _bodyShadow
-                                  ? const [
-                                      Shadow(color: Colors.black, blurRadius: 4),
-                                    ]
-                                  : null,
-                            ),
                           ),
                         ),
                       ),
@@ -1384,7 +1371,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                             _textBoxH = (_textBoxH + details.delta.dy / frameH)
                                 .clamp(0.1, 0.7);
                           });
+                          _requestPreviewSnapshot();
                         },
+                        onPanEnd: (_) => _requestPreviewSnapshot(),
                         child: Container(
                           width: 16,
                           height: 16,
@@ -1443,7 +1432,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                             } else {
                               _bgPlayer!.play();
                             }
-                            // State updates via the stream listener in _loadActiveBgPreview
                           },
                           child: Container(
                             width: 32,
@@ -1462,30 +1450,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
 
-                    // ── Category badge ──
-                    Positioned(
-                      bottom: 12,
-                      left: 0,
-                      right: 0,
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF6C5CE7).withOpacity(0.6),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            _selectedCategory,
-                            style: const TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white),
-                          ),
-                        ),
-                      ),
-                    ),
-
                     // ── Quick position presets for body (right edge) ──
                     Positioned(
                       right: 4,
@@ -1496,6 +1460,28 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                           _previewPosButton(Icons.vertical_align_center, 0.5),
                           _previewPosButton(Icons.vertical_align_bottom, 0.78),
                         ],
+                      ),
+                    ),
+
+                    // ── Snapshot status badge ──
+                    Positioned(
+                      top: 4, left: 4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          _snapshotPath != null ? 'WYSIWYG' : 'Draft',
+                          style: TextStyle(
+                            fontSize: 8,
+                            fontWeight: FontWeight.w600,
+                            color: _snapshotPath != null
+                                ? const Color(0xFF00E676)
+                                : Colors.white54,
+                          ),
+                        ),
                       ),
                     ),
                     // ── Drag hint ──
@@ -1527,6 +1513,96 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   }
 
   bool _bgPlaying = true;
+
+  // ── True WYSIWYG preview snapshot (FFmpeg-rendered) ──
+  String? _snapshotPath;
+  bool _snapshotLoading = false;
+  Timer? _snapshotDebounce;
+  String? _bgVideoLocalPath; // cached bg video for server-side snapshot
+
+  /// Request a preview snapshot from the sidecar (FFmpeg-rendered frame).
+  void _requestPreviewSnapshot() {
+    // Debounce: wait 400ms after last change before requesting
+    _snapshotDebounce?.cancel();
+    _snapshotDebounce = Timer(const Duration(milliseconds: 400), () async {
+      if (!mounted) return;
+      if (_composerTitle.isEmpty && _composerScript.isEmpty) return;
+
+      setState(() => _snapshotLoading = true);
+      try {
+        final ipc = ref.read(ipcClientProvider);
+        final response = await ipc.send(
+          IpcMessage(
+            type: MessageType.previewSnapshot,
+            payload: {
+              'title': _composerTitle,
+              'text': _composerScript,
+              'title_font_size_px': _titleFontSize.toInt(),
+              'body_font_size_px': _bodyFontSize.toInt(),
+              'title_font_family': _titleFontFamily,
+              'body_font_family': _bodyFontFamily,
+              'title_color': toFfmpegHex(_titleColorHex),
+              'body_color': toFfmpegHex(_bodyColorHex),
+              'title_shadow': _titleShadow,
+              'body_shadow': _bodyShadow,
+              'title_pos_x': _titlePosX,
+              'title_pos_y': _titlePosY,
+              'text_pos_x': _textPosX,
+              'text_pos_y': _textPosY,
+              'text_box_w': _textBoxW,
+              'text_box_h': _textBoxH,
+              'title_bg_enabled': _titleBgEnabled,
+              'title_bg_color': toFfmpegBgColor(_titleBgColorHex),
+              'body_bg_enabled': _bodyBgEnabled,
+              'body_bg_color': toFfmpegBgColor(_bodyBgColorHex),
+              'category_label': _selectedCategory,
+              'slideshow_enabled': _slideshowEnabled,
+              'words_per_slide': _wordsPerSlide,
+              if (_bgVideoLocalPath != null)
+                'bg_video_local_path': _bgVideoLocalPath,
+            },
+          ),
+          timeout: const Duration(seconds: 10),
+        );
+        if (mounted && response.type == MessageType.result) {
+          final path = response.payload['snapshot_path'] as String?;
+          if (path != null && File(path).existsSync()) {
+            setState(() {
+              _snapshotPath = path;
+              _snapshotLoading = false;
+            });
+            return;
+          }
+        }
+      } catch (e) {
+        // Snapshot is best-effort — don't block the UI
+      }
+      if (mounted) setState(() => _snapshotLoading = false);
+    });
+  }
+
+  /// Download the active bg video to a local temp file for FFmpeg snapshot.
+  Future<void> _cacheBgVideoLocally() async {
+    if (_selectedBackgrounds.isEmpty) {
+      _bgVideoLocalPath = null;
+      return;
+    }
+    final clip = _selectedBackgrounds[_activeBgIndex];
+    final videoUrl = clip['download_url'] as String? ?? '';
+    if (videoUrl.isEmpty) return;
+
+    try {
+      final dir = await getTemporaryDirectory();
+      final localPath = '${dir.path}/cm_preview_bg.mp4';
+      final resp = await http.get(Uri.parse(videoUrl));
+      if (resp.statusCode == 200) {
+        await File(localPath).writeAsBytes(resp.bodyBytes);
+        _bgVideoLocalPath = localPath;
+      }
+    } catch (_) {
+      // Non-fatal
+    }
+  }
 
   /// Split body text into slideshow slides (each with _wordsPerSlide words).
   List<String> _getSlides() {
@@ -1564,7 +1640,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   Widget _previewPosButton(IconData icon, double y) {
     final isActive = (_textPosY - y).abs() < 0.08;
     return GestureDetector(
-      onTap: () => setState(() => _textPosY = y),
+      onTap: () => _setStyleAndRefresh(() => _textPosY = y),
       child: Container(
         width: 22,
         height: 22,
@@ -1670,7 +1746,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                     child: Text(f, style: const TextStyle(fontSize: 12))))
                 .toList(),
             onChanged: (v) {
-              if (v != null) setState(() => _titleFontFamily = v);
+              if (v != null) _setStyleAndRefresh(() => _titleFontFamily = v);
             },
           ),
           // Font size (in 1080p pixels, preview scales down)
@@ -1683,7 +1759,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             min: 24,
             max: 96,
             divisions: 18,
-            onChanged: (v) => setState(() => _titleFontSize = v),
+            onChanged: (v) => _setStyleAndRefresh(() => _titleFontSize = v),
           ),
           // Color
           Wrap(
@@ -1691,17 +1767,17 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             runSpacing: 8,
             children: [
               _colorDotFor(0xFFFFFFFF, _titleColorHex,
-                  (c) => setState(() => _titleColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _titleColorHex = c)),
               _colorDotFor(0xFFFFD700, _titleColorHex,
-                  (c) => setState(() => _titleColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _titleColorHex = c)),
               _colorDotFor(0xFF6C5CE7, _titleColorHex,
-                  (c) => setState(() => _titleColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _titleColorHex = c)),
               _colorDotFor(0xFF00C853, _titleColorHex,
-                  (c) => setState(() => _titleColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _titleColorHex = c)),
               _colorDotFor(0xFFFF5252, _titleColorHex,
-                  (c) => setState(() => _titleColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _titleColorHex = c)),
               _colorDotFor(0xFF40C4FF, _titleColorHex,
-                  (c) => setState(() => _titleColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _titleColorHex = c)),
             ],
           ),
           const SizedBox(height: 6),
@@ -1714,7 +1790,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               const Spacer(),
               Switch(
                 value: _titleShadow,
-                onChanged: (v) => setState(() => _titleShadow = v),
+                onChanged: (v) => _setStyleAndRefresh(() => _titleShadow = v),
               ),
             ],
           ),
@@ -1727,7 +1803,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               const Spacer(),
               Switch(
                 value: _titleBgEnabled,
-                onChanged: (v) => setState(() => _titleBgEnabled = v),
+                onChanged: (v) => _setStyleAndRefresh(() => _titleBgEnabled = v),
               ),
             ],
           ),
@@ -1765,7 +1841,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                     child: Text(f, style: const TextStyle(fontSize: 12))))
                 .toList(),
             onChanged: (v) {
-              if (v != null) setState(() => _bodyFontFamily = v);
+              if (v != null) _setStyleAndRefresh(() => _bodyFontFamily = v);
             },
           ),
           // Font size (in 1080p pixels)
@@ -1778,7 +1854,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             min: 20,
             max: 80,
             divisions: 15,
-            onChanged: (v) => setState(() => _bodyFontSize = v),
+            onChanged: (v) => _setStyleAndRefresh(() => _bodyFontSize = v),
           ),
           // Color
           Wrap(
@@ -1786,17 +1862,17 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             runSpacing: 8,
             children: [
               _colorDotFor(0xFFFFFFFF, _bodyColorHex,
-                  (c) => setState(() => _bodyColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _bodyColorHex = c)),
               _colorDotFor(0xFFFFD700, _bodyColorHex,
-                  (c) => setState(() => _bodyColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _bodyColorHex = c)),
               _colorDotFor(0xFF6C5CE7, _bodyColorHex,
-                  (c) => setState(() => _bodyColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _bodyColorHex = c)),
               _colorDotFor(0xFF00C853, _bodyColorHex,
-                  (c) => setState(() => _bodyColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _bodyColorHex = c)),
               _colorDotFor(0xFFFF5252, _bodyColorHex,
-                  (c) => setState(() => _bodyColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _bodyColorHex = c)),
               _colorDotFor(0xFF40C4FF, _bodyColorHex,
-                  (c) => setState(() => _bodyColorHex = c)),
+                  (c) => _setStyleAndRefresh(() => _bodyColorHex = c)),
             ],
           ),
           const SizedBox(height: 6),
@@ -1809,7 +1885,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               const Spacer(),
               Switch(
                 value: _bodyShadow,
-                onChanged: (v) => setState(() => _bodyShadow = v),
+                onChanged: (v) => _setStyleAndRefresh(() => _bodyShadow = v),
               ),
             ],
           ),
@@ -1822,7 +1898,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               const Spacer(),
               Switch(
                 value: _bodyBgEnabled,
-                onChanged: (v) => setState(() => _bodyBgEnabled = v),
+                onChanged: (v) => _setStyleAndRefresh(() => _bodyBgEnabled = v),
               ),
             ],
           ),
@@ -1884,7 +1960,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               ),
               Switch(
                 value: _slideshowEnabled,
-                onChanged: (v) => setState(() => _slideshowEnabled = v),
+                onChanged: (v) => _setStyleAndRefresh(() => _slideshowEnabled = v),
               ),
             ],
           ),

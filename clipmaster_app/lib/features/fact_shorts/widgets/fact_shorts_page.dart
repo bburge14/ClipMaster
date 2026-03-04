@@ -78,6 +78,26 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   double _textBoxW = 0.85;
   double _textBoxH = 0.35;
 
+  // Separate title styling
+  String _titleFontFamily = 'Inter';
+  int _titleColorHex = 0xFFFFFFFF;
+  bool _titleBgEnabled = false;
+  int _titleBgColorHex = 0x80000000; // black @ 50%
+
+  // Separate body styling
+  String _bodyFontFamily = 'Inter';
+  int _bodyColorHex = 0xFFFFFFFF;
+  bool _bodyBgEnabled = false;
+  int _bodyBgColorHex = 0x80000000; // black @ 50%
+
+  // AI model selection
+  LlmProvider? _selectedLlmProvider;
+
+  // Background music / sound clips
+  String? _bgMusicPath;
+  String? _bgMusicLabel;
+  double _bgMusicVolume = 0.15;
+
   @override
   void dispose() {
     _scriptEditController.dispose();
@@ -95,17 +115,32 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     String? apiKey;
     LlmProvider? provider;
 
-    const llmProviders = [
-      LlmProvider.openai,
-      LlmProvider.claude,
-      LlmProvider.gemini
-    ];
-    for (final p in llmProviders) {
-      final key = apiKeyService.getNextKey(p);
+    // Use explicitly selected provider if set, otherwise auto-detect
+    if (_selectedLlmProvider != null) {
+      final key = apiKeyService.getNextKey(_selectedLlmProvider!);
       if (key != null) {
         apiKey = key;
-        provider = p;
-        break;
+        provider = _selectedLlmProvider;
+      } else {
+        setState(() {
+          _error =
+              'No API key for ${_selectedLlmProvider!.name}. Add one in Settings.';
+        });
+        return;
+      }
+    } else {
+      const llmProviders = [
+        LlmProvider.openai,
+        LlmProvider.claude,
+        LlmProvider.gemini
+      ];
+      for (final p in llmProviders) {
+        final key = apiKeyService.getNextKey(p);
+        if (key != null) {
+          apiKey = key;
+          provider = p;
+          break;
+        }
       }
     }
 
@@ -406,6 +441,26 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       final rgb = _colorHex & 0x00FFFFFF;
       final ffmpegColor = '0x${rgb.toRadixString(16).padLeft(6, '0')}';
 
+      // Convert separate colors for title/body
+      final titleRgb = _titleColorHex & 0x00FFFFFF;
+      final bodyRgb = _bodyColorHex & 0x00FFFFFF;
+      final titleFfmpegColor =
+          '0x${titleRgb.toRadixString(16).padLeft(6, '0')}';
+      final bodyFfmpegColor =
+          '0x${bodyRgb.toRadixString(16).padLeft(6, '0')}';
+
+      // Convert background colors: extract ARGB → FFmpeg black@opacity
+      String _toFfmpegBgColor(int hex) {
+        final a = ((hex >> 24) & 0xFF) / 255.0;
+        final r = (hex >> 16) & 0xFF;
+        final g = (hex >> 8) & 0xFF;
+        final b = hex & 0xFF;
+        return '0x${r.toRadixString(16).padLeft(2, '0')}'
+            '${g.toRadixString(16).padLeft(2, '0')}'
+            '${b.toRadixString(16).padLeft(2, '0')}'
+            '@${a.toStringAsFixed(2)}';
+      }
+
       final payload = <String, dynamic>{
         'text': _composerScript,
         'title': _composerTitle,
@@ -419,9 +474,25 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         'font_color': ffmpegColor,
         'title_pos_y': 0.08,
         'text_pos_y': _textPosY,
+        'text_pos_x': _textPosX,
         'text_box_w': _textBoxW,
         'text_box_h': _textBoxH,
         'text_shadow': _hasBorder,
+        // Separate title/body styling
+        'title_color': titleFfmpegColor,
+        'title_font_family': _titleFontFamily,
+        'body_color': bodyFfmpegColor,
+        'body_font_family': _bodyFontFamily,
+        // Text box backgrounds
+        'title_bg_enabled': _titleBgEnabled,
+        'title_bg_color': _toFfmpegBgColor(_titleBgColorHex),
+        'body_bg_enabled': _bodyBgEnabled,
+        'body_bg_color': _toFfmpegBgColor(_bodyBgColorHex),
+        // Category badge
+        'category_label': _selectedCategory,
+        // Background music
+        if (_bgMusicPath != null) 'bg_music_path': _bgMusicPath,
+        'bg_music_volume': _bgMusicVolume,
         // Multiple backgrounds that cycle
         'background_video_urls': _selectedBackgrounds
             .map((b) => b['download_url'] as String? ?? '')
@@ -925,22 +996,36 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       top: frameH * 0.08,
                       left: 16,
                       right: 16,
-                      child: Text(
-                        _composerTitle,
-                        textAlign: TextAlign.center,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontFamily: _fontFamily,
-                          fontSize: (_fontSize * 0.45).clamp(12, 24),
-                          fontWeight: FontWeight.w800,
-                          color: Color(_colorHex),
-                          shadows: _hasBorder
-                              ? const [
-                                  Shadow(color: Colors.black, blurRadius: 6),
-                                  Shadow(color: Colors.black, blurRadius: 12),
-                                ]
-                              : null,
+                      child: Container(
+                        padding: _titleBgEnabled
+                            ? const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4)
+                            : EdgeInsets.zero,
+                        decoration: _titleBgEnabled
+                            ? BoxDecoration(
+                                color: Color(_titleBgColorHex),
+                                borderRadius: BorderRadius.circular(4),
+                              )
+                            : null,
+                        child: Text(
+                          _composerTitle,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: _titleFontFamily,
+                            fontSize: (_fontSize * 0.45).clamp(12, 24),
+                            fontWeight: FontWeight.w800,
+                            color: Color(_titleColorHex),
+                            shadows: _hasBorder
+                                ? const [
+                                    Shadow(
+                                        color: Colors.black, blurRadius: 6),
+                                    Shadow(
+                                        color: Colors.black, blurRadius: 12),
+                                  ]
+                                : null,
+                          ),
                         ),
                       ),
                     ),
@@ -963,6 +1048,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         child: Container(
                           padding: const EdgeInsets.all(6),
                           decoration: BoxDecoration(
+                            color: _bodyBgEnabled
+                                ? Color(_bodyBgColorHex)
+                                : null,
                             border: Border.all(
                               color: const Color(0xFF6C5CE7).withOpacity(0.5),
                               width: 1.5,
@@ -978,14 +1066,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                             textAlign: TextAlign.center,
                             overflow: TextOverflow.clip,
                             style: TextStyle(
-                              fontFamily: _fontFamily,
+                              fontFamily: _bodyFontFamily,
                               fontSize: (_fontSize * 0.3).clamp(8, 16),
                               fontWeight: FontWeight.w600,
-                              color: Color(_colorHex),
+                              color: Color(_bodyColorHex),
                               height: 1.4,
                               shadows: _hasBorder
                                   ? const [
-                                      Shadow(color: Colors.black, blurRadius: 4),
+                                      Shadow(
+                                          color: Colors.black, blurRadius: 4),
                                     ]
                                   : null,
                             ),
@@ -1243,36 +1332,194 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           Divider(color: Colors.white.withOpacity(0.06)),
           const SizedBox(height: 12),
 
-          // ── Text Style section ──
-          _sectionHeader('Text Style', Icons.text_fields),
+          // ── AI Model section ──
+          _sectionHeader('AI Model', Icons.psychology),
+          const SizedBox(height: 8),
+          DropdownButton<LlmProvider?>(
+            value: _selectedLlmProvider,
+            isExpanded: true,
+            hint: Text('Auto (first available)',
+                style: TextStyle(
+                    fontSize: 12, color: Colors.white.withOpacity(0.4))),
+            items: [
+              const DropdownMenuItem<LlmProvider?>(
+                value: null,
+                child: Text('Auto (first available)',
+                    style: TextStyle(fontSize: 12)),
+              ),
+              ...LlmProvider.values
+                  .where((p) =>
+                      p == LlmProvider.openai ||
+                      p == LlmProvider.claude ||
+                      p == LlmProvider.gemini)
+                  .map((p) => DropdownMenuItem(
+                        value: p,
+                        child: Text(
+                          p == LlmProvider.openai
+                              ? 'OpenAI (GPT-4o)'
+                              : p == LlmProvider.claude
+                                  ? 'Claude (Sonnet)'
+                                  : 'Gemini (Flash)',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      )),
+            ],
+            onChanged: (v) => setState(() => _selectedLlmProvider = v),
+          ),
+          const SizedBox(height: 12),
+          Divider(color: Colors.white.withOpacity(0.06)),
+          const SizedBox(height: 12),
+
+          // ── Title Style section ──
+          _sectionHeader('Title Style', Icons.title),
           const SizedBox(height: 8),
           Text('Font',
-              style:
-                  TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
+              style: TextStyle(
+                  fontSize: 10, color: Colors.white.withOpacity(0.4))),
           const SizedBox(height: 4),
           DropdownButton<String>(
-            value: _fontFamily,
+            value: _titleFontFamily,
             isExpanded: true,
-            items: [
-              'Inter',
-              'Roboto',
-              'Montserrat',
-              'Oswald',
-              'Lato',
-              'Poppins'
-            ]
+            items: ['Inter', 'Roboto', 'Montserrat', 'Oswald', 'Lato', 'Poppins']
                 .map((f) => DropdownMenuItem(
                     value: f,
                     child: Text(f, style: const TextStyle(fontSize: 12))))
                 .toList(),
             onChanged: (v) {
-              if (v != null) setState(() => _fontFamily = v);
+              if (v != null) setState(() => _titleFontFamily = v);
             },
           ),
+          const SizedBox(height: 4),
+          Text('Color',
+              style: TextStyle(
+                  fontSize: 10, color: Colors.white.withOpacity(0.4))),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _colorDotFor(0xFFFFFFFF, _titleColorHex,
+                  (c) => setState(() => _titleColorHex = c)),
+              _colorDotFor(0xFFFFD700, _titleColorHex,
+                  (c) => setState(() => _titleColorHex = c)),
+              _colorDotFor(0xFF6C5CE7, _titleColorHex,
+                  (c) => setState(() => _titleColorHex = c)),
+              _colorDotFor(0xFF00C853, _titleColorHex,
+                  (c) => setState(() => _titleColorHex = c)),
+              _colorDotFor(0xFFFF5252, _titleColorHex,
+                  (c) => setState(() => _titleColorHex = c)),
+              _colorDotFor(0xFF40C4FF, _titleColorHex,
+                  (c) => setState(() => _titleColorHex = c)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Text('Title Background',
+                  style: TextStyle(
+                      fontSize: 11, color: Colors.white.withOpacity(0.5))),
+              const Spacer(),
+              Switch(
+                value: _titleBgEnabled,
+                onChanged: (v) => setState(() => _titleBgEnabled = v),
+              ),
+            ],
+          ),
+          if (_titleBgEnabled)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _colorDotFor(0x80000000, _titleBgColorHex,
+                    (c) => setState(() => _titleBgColorHex = c)),
+                _colorDotFor(0x806C5CE7, _titleBgColorHex,
+                    (c) => setState(() => _titleBgColorHex = c)),
+                _colorDotFor(0x80FF5252, _titleBgColorHex,
+                    (c) => setState(() => _titleBgColorHex = c)),
+                _colorDotFor(0x801A1A2E, _titleBgColorHex,
+                    (c) => setState(() => _titleBgColorHex = c)),
+              ],
+            ),
           const SizedBox(height: 8),
+          Divider(color: Colors.white.withOpacity(0.06)),
+          const SizedBox(height: 8),
+
+          // ── Body Style section ──
+          _sectionHeader('Body Style', Icons.text_fields),
+          const SizedBox(height: 8),
+          Text('Font',
+              style: TextStyle(
+                  fontSize: 10, color: Colors.white.withOpacity(0.4))),
+          const SizedBox(height: 4),
+          DropdownButton<String>(
+            value: _bodyFontFamily,
+            isExpanded: true,
+            items: ['Inter', 'Roboto', 'Montserrat', 'Oswald', 'Lato', 'Poppins']
+                .map((f) => DropdownMenuItem(
+                    value: f,
+                    child: Text(f, style: const TextStyle(fontSize: 12))))
+                .toList(),
+            onChanged: (v) {
+              if (v != null) setState(() => _bodyFontFamily = v);
+            },
+          ),
+          const SizedBox(height: 4),
+          Text('Color',
+              style: TextStyle(
+                  fontSize: 10, color: Colors.white.withOpacity(0.4))),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _colorDotFor(0xFFFFFFFF, _bodyColorHex,
+                  (c) => setState(() => _bodyColorHex = c)),
+              _colorDotFor(0xFFFFD700, _bodyColorHex,
+                  (c) => setState(() => _bodyColorHex = c)),
+              _colorDotFor(0xFF6C5CE7, _bodyColorHex,
+                  (c) => setState(() => _bodyColorHex = c)),
+              _colorDotFor(0xFF00C853, _bodyColorHex,
+                  (c) => setState(() => _bodyColorHex = c)),
+              _colorDotFor(0xFFFF5252, _bodyColorHex,
+                  (c) => setState(() => _bodyColorHex = c)),
+              _colorDotFor(0xFF40C4FF, _bodyColorHex,
+                  (c) => setState(() => _bodyColorHex = c)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Text('Body Background',
+                  style: TextStyle(
+                      fontSize: 11, color: Colors.white.withOpacity(0.5))),
+              const Spacer(),
+              Switch(
+                value: _bodyBgEnabled,
+                onChanged: (v) => setState(() => _bodyBgEnabled = v),
+              ),
+            ],
+          ),
+          if (_bodyBgEnabled)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _colorDotFor(0x80000000, _bodyBgColorHex,
+                    (c) => setState(() => _bodyBgColorHex = c)),
+                _colorDotFor(0x806C5CE7, _bodyBgColorHex,
+                    (c) => setState(() => _bodyBgColorHex = c)),
+                _colorDotFor(0x80FF5252, _bodyBgColorHex,
+                    (c) => setState(() => _bodyBgColorHex = c)),
+                _colorDotFor(0x801A1A2E, _bodyBgColorHex,
+                    (c) => setState(() => _bodyBgColorHex = c)),
+              ],
+            ),
+          const SizedBox(height: 8),
+
+          // ── Shared text controls ──
           Text('Size: ${_fontSize.toInt()}px',
-              style:
-                  TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
+              style: TextStyle(
+                  fontSize: 10, color: Colors.white.withOpacity(0.4))),
           Slider(
             value: _fontSize,
             min: 20,
@@ -1280,24 +1527,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             divisions: 26,
             onChanged: (v) => setState(() => _fontSize = v),
           ),
-          const SizedBox(height: 4),
-          Text('Color',
-              style:
-                  TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _colorDot(0xFFFFFFFF),
-              _colorDot(0xFFFFD700),
-              _colorDot(0xFF6C5CE7),
-              _colorDot(0xFF00C853),
-              _colorDot(0xFFFF5252),
-              _colorDot(0xFF40C4FF),
-            ],
-          ),
-          const SizedBox(height: 8),
           Row(
             children: [
               Text('Text Shadow',
@@ -1312,8 +1541,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           ),
           const SizedBox(height: 8),
           Text('Text Box Width: ${(_textBoxW * 100).toInt()}%',
-              style:
-                  TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
+              style: TextStyle(
+                  fontSize: 10, color: Colors.white.withOpacity(0.4))),
           Slider(
             value: _textBoxW,
             min: 0.3,
@@ -1322,8 +1551,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             onChanged: (v) => setState(() => _textBoxW = v),
           ),
           Text('Text Box Height: ${(_textBoxH * 100).toInt()}%',
-              style:
-                  TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
+              style: TextStyle(
+                  fontSize: 10, color: Colors.white.withOpacity(0.4))),
           Slider(
             value: _textBoxH,
             min: 0.1,
@@ -1331,6 +1560,74 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             divisions: 12,
             onChanged: (v) => setState(() => _textBoxH = v),
           ),
+          const SizedBox(height: 12),
+          Divider(color: Colors.white.withOpacity(0.06)),
+          const SizedBox(height: 12),
+
+          // ── Audio / Sound Clips section ──
+          _sectionHeader('Audio', Icons.music_note),
+          const SizedBox(height: 8),
+          if (_bgMusicPath != null) ...[
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.audiotrack,
+                      size: 14, color: Color(0xFF6C5CE7)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _bgMusicLabel ?? 'Audio clip',
+                      style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.white.withOpacity(0.6)),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () => setState(() {
+                      _bgMusicPath = null;
+                      _bgMusicLabel = null;
+                    }),
+                    child: Icon(Icons.close,
+                        size: 14,
+                        color: Colors.white.withOpacity(0.3)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text('Volume: ${(_bgMusicVolume * 100).toInt()}%',
+                style: TextStyle(
+                    fontSize: 10, color: Colors.white.withOpacity(0.4))),
+            Slider(
+              value: _bgMusicVolume,
+              min: 0.0,
+              max: 1.0,
+              divisions: 20,
+              onChanged: (v) => setState(() => _bgMusicVolume = v),
+            ),
+          ] else
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _pickAudioFile,
+                icon: const Icon(Icons.add, size: 14),
+                label: const Text('Add Background Audio',
+                    style: TextStyle(fontSize: 11)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white60,
+                  side: BorderSide(color: Colors.white.withOpacity(0.12)),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 8),
+                ),
+              ),
+            ),
           const SizedBox(height: 12),
           Divider(color: Colors.white.withOpacity(0.06)),
           const SizedBox(height: 12),
@@ -1662,6 +1959,83 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     );
   }
 
+  /// Generic color dot that works with any state variable.
+  Widget _colorDotFor(int hex, int currentHex, ValueChanged<int> onSelect) {
+    final isSelected = hex == currentHex;
+    return GestureDetector(
+      onTap: () => onSelect(hex),
+      child: Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+          color: Color(hex),
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: isSelected ? Colors.white : Colors.white24,
+            width: isSelected ? 2.5 : 1,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickAudioFile() async {
+    // Use file_picker or simple path input for audio files
+    // For now, use a dialog to enter a file path
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add Background Audio'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Enter the full path to an audio file (.mp3, .wav, .ogg)',
+              style: TextStyle(
+                  fontSize: 12, color: Colors.white.withOpacity(0.5)),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                hintText: '/path/to/audio.mp3',
+                isDense: true,
+              ),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result != null && result.isNotEmpty) {
+      final file = File(result);
+      if (await file.exists()) {
+        setState(() {
+          _bgMusicPath = result;
+          _bgMusicLabel = result.split(Platform.pathSeparator).last;
+        });
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('File not found.')),
+          );
+        }
+      }
+    }
+  }
+
   // ────────────────────────────────────────────────────────────────
   //  BOTTOM: TIMELINE SCRUBBER
   // ────────────────────────────────────────────────────────────────
@@ -1692,6 +2066,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                           const Color(0xFF2D824A)),
                       _trackLabel(
                           'Video', Icons.videocam, const Color(0xFF2D5AA0)),
+                      _trackLabel(
+                          'Audio', Icons.music_note, const Color(0xFF6C5CE7)),
                       _trackLabel(
                           'Text', Icons.text_fields, const Color(0xFF82782D)),
                     ],
@@ -1741,6 +2117,11 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                     _selectedBackgrounds.isNotEmpty
                                         ? '${_selectedBackgrounds.length} clip${_selectedBackgrounds.length > 1 ? 's' : ''} (cycling)'
                                         : 'Gradient background'),
+                                // Audio/music track
+                                _trackBar(
+                                    const Color(0xFF6C5CE7),
+                                    trackWidth,
+                                    _bgMusicLabel ?? 'No audio clip'),
                                 // Text track — show segments
                                 _trackBarSegmented(
                                     const Color(0xFF82782D),

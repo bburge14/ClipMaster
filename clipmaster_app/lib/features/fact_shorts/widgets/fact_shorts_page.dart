@@ -50,11 +50,11 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   String? _previewAudioPath;
   bool _voicePlaying = false;
 
-  // Background footage
+  // Background footage — multiple backgrounds that cycle
   List<Map<String, dynamic>> _bgResults = [];
   bool _isSearchingBg = false;
-  String? _selectedBgPreviewUrl;
-  String? _selectedBgDownloadUrl;
+  List<Map<String, dynamic>> _selectedBackgrounds = []; // ordered list
+  int _activeBgIndex = 0; // which background is shown in preview
   Player? _bgPlayer;
   VideoController? _bgController;
 
@@ -73,7 +73,11 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   double _fontSize = 36;
   int _colorHex = 0xFFFFFFFF;
   bool _hasBorder = true;
+  double _textPosX = 0.5;
   double _textPosY = 0.75;
+  // Text box size as fraction of frame (0.0–1.0)
+  double _textBoxW = 0.85;
+  double _textBoxH = 0.35;
 
   @override
   void dispose() {
@@ -323,16 +327,39 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
   }
 
-  void _selectBackground(Map<String, dynamic> clip) {
-    final previewUrl = clip['preview_url'] as String? ?? '';
+  void _toggleBackground(Map<String, dynamic> clip) {
     final downloadUrl = clip['download_url'] as String? ?? '';
 
     setState(() {
-      _selectedBgPreviewUrl = previewUrl;
-      _selectedBgDownloadUrl = downloadUrl;
+      // If already selected, remove it
+      final existingIdx = _selectedBackgrounds.indexWhere(
+          (b) => b['download_url'] == downloadUrl);
+      if (existingIdx >= 0) {
+        _selectedBackgrounds.removeAt(existingIdx);
+        if (_activeBgIndex >= _selectedBackgrounds.length) {
+          _activeBgIndex =
+              _selectedBackgrounds.isEmpty ? 0 : _selectedBackgrounds.length - 1;
+        }
+      } else {
+        _selectedBackgrounds.add(clip);
+        _activeBgIndex = _selectedBackgrounds.length - 1;
+      }
     });
 
-    // Load preview into bg player
+    _loadActiveBgPreview();
+  }
+
+  void _loadActiveBgPreview() {
+    if (_selectedBackgrounds.isEmpty) {
+      _bgPlayer?.dispose();
+      _bgPlayer = null;
+      _bgController = null;
+      setState(() {});
+      return;
+    }
+
+    final clip = _selectedBackgrounds[_activeBgIndex];
+    final previewUrl = clip['preview_url'] as String? ?? '';
     if (previewUrl.isNotEmpty) {
       _bgPlayer?.dispose();
       _bgPlayer = Player();
@@ -340,6 +367,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       _bgPlayer!.open(Media(previewUrl));
       _bgPlayer!.setPlaylistMode(PlaylistMode.loop);
       _bgPlayer!.setVolume(0);
+      setState(() {});
     }
   }
 
@@ -392,8 +420,17 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         'font_color': ffmpegColor,
         'title_pos_y': 0.08,
         'text_pos_y': _textPosY,
+        'text_box_w': _textBoxW,
         'text_shadow': _hasBorder,
-        'background_video_url': _selectedBgDownloadUrl ?? '',
+        // Multiple backgrounds that cycle
+        'background_video_urls': _selectedBackgrounds
+            .map((b) => b['download_url'] as String? ?? '')
+            .where((u) => u.isNotEmpty)
+            .toList(),
+        // Fallback single URL for backwards compat
+        'background_video_url': _selectedBackgrounds.isNotEmpty
+            ? (_selectedBackgrounds.first['download_url'] as String? ?? '')
+            : '',
       };
 
       final pexelsKey = apiKeyService.getNextKey(LlmProvider.pexels);
@@ -526,11 +563,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               fontSize: _fontSize,
               colorHex: _colorHex,
               hasBorder: _hasBorder,
-              positionX: 0.5,
+              positionX: _textPosX,
               positionY: _textPosY,
             ),
-            bgPreviewUrl: _selectedBgPreviewUrl,
-            bgDownloadUrl: _selectedBgDownloadUrl,
+            bgPreviewUrl: _selectedBackgrounds.isNotEmpty
+                ? _selectedBackgrounds.first['preview_url'] as String?
+                : null,
+            bgDownloadUrl: _selectedBackgrounds.isNotEmpty
+                ? _selectedBackgrounds.first['download_url'] as String?
+                : null,
           );
 
       ref.read(selectedTabProvider.notifier).state = 0;
@@ -953,11 +994,16 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               builder: (context, constraints) {
                 final frameW = constraints.maxWidth;
                 final frameH = constraints.maxHeight;
+                // Text box pixel dimensions
+                final boxW = _textBoxW * frameW;
+                final boxH = _textBoxH * frameH;
+                final boxLeft = (_textPosX * frameW) - (boxW / 2);
+                final boxTop = (_textPosY * frameH) - (boxH / 2);
 
                 return Stack(
                   fit: StackFit.expand,
                   children: [
-                    // Background layer
+                    // ── Background layer ──
                     if (_bgController != null)
                       Video(
                         controller: _bgController!,
@@ -976,7 +1022,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       ),
                     // Dark overlay for readability
                     Container(color: Colors.black.withOpacity(0.3)),
-                    // Title text (top area)
+
+                    // ── Title text (top area) ──
                     Positioned(
                       top: frameH * 0.08,
                       left: 16,
@@ -1000,32 +1047,38 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
                     ),
-                    // Script text (draggable position)
+
+                    // ── Resizable text box (draggable + resize handles) ──
                     Positioned(
-                      top: _textPosY * frameH - 40,
-                      left: 12,
-                      right: 12,
+                      left: boxLeft.clamp(0, frameW - boxW),
+                      top: boxTop.clamp(0, frameH - boxH),
+                      width: boxW,
+                      height: boxH,
                       child: GestureDetector(
                         onPanUpdate: (details) {
                           setState(() {
+                            _textPosX = (_textPosX + details.delta.dx / frameW)
+                                .clamp(0.1, 0.9);
                             _textPosY = (_textPosY + details.delta.dy / frameH)
-                                .clamp(0.15, 0.92);
+                                .clamp(0.1, 0.92);
                           });
                         },
                         child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 6),
+                          padding: const EdgeInsets.all(6),
                           decoration: BoxDecoration(
                             border: Border.all(
-                              color: const Color(0xFF6C5CE7).withOpacity(0.3),
+                              color: const Color(0xFF6C5CE7).withOpacity(0.5),
+                              width: 1.5,
                             ),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
                             _composerScript,
                             textAlign: TextAlign.center,
-                            maxLines: 6,
                             overflow: TextOverflow.ellipsis,
+                            maxLines: (boxH / ((_fontSize * 0.3).clamp(8, 16) * 1.5))
+                                .floor()
+                                .clamp(1, 20),
                             style: TextStyle(
                               fontFamily: _fontFamily,
                               fontSize: (_fontSize * 0.3).clamp(8, 16),
@@ -1034,8 +1087,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                               height: 1.4,
                               shadows: _hasBorder
                                   ? const [
-                                      Shadow(
-                                          color: Colors.black, blurRadius: 4),
+                                      Shadow(color: Colors.black, blurRadius: 4),
                                     ]
                                   : null,
                             ),
@@ -1043,7 +1095,65 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
                     ),
-                    // Category badge
+                    // ── Resize handle: bottom-right corner ──
+                    Positioned(
+                      left: (boxLeft + boxW - 8).clamp(0, frameW - 16),
+                      top: (boxTop + boxH - 8).clamp(0, frameH - 16),
+                      child: GestureDetector(
+                        onPanUpdate: (details) {
+                          setState(() {
+                            _textBoxW = (_textBoxW + details.delta.dx / frameW)
+                                .clamp(0.3, 0.95);
+                            _textBoxH = (_textBoxH + details.delta.dy / frameH)
+                                .clamp(0.1, 0.7);
+                          });
+                        },
+                        child: Container(
+                          width: 16,
+                          height: 16,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF6C5CE7),
+                            borderRadius: BorderRadius.circular(3),
+                            border: Border.all(color: Colors.white, width: 1),
+                          ),
+                          child: const Icon(Icons.open_in_full,
+                              size: 10, color: Colors.white),
+                        ),
+                      ),
+                    ),
+
+                    // ── Background indicator (multi-bg) ──
+                    if (_selectedBackgrounds.length > 1)
+                      Positioned(
+                        bottom: 36,
+                        left: 0,
+                        right: 0,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: List.generate(
+                            _selectedBackgrounds.length,
+                            (i) => GestureDetector(
+                              onTap: () {
+                                setState(() => _activeBgIndex = i);
+                                _loadActiveBgPreview();
+                              },
+                              child: Container(
+                                width: i == _activeBgIndex ? 16 : 6,
+                                height: 6,
+                                margin: const EdgeInsets.symmetric(horizontal: 2),
+                                decoration: BoxDecoration(
+                                  color: i == _activeBgIndex
+                                      ? const Color(0xFF6C5CE7)
+                                      : Colors.white38,
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                    // ── Category badge ──
                     Positioned(
                       bottom: 12,
                       left: 0,
@@ -1066,7 +1176,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
                     ),
-                    // Position presets (right edge)
+
+                    // ── Position presets (right edge) ──
                     Positioned(
                       right: 4,
                       top: frameH * 0.3,
@@ -1249,12 +1360,50 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               ),
             ],
           ),
+          const SizedBox(height: 8),
+          Text('Text Box Width: ${(_textBoxW * 100).toInt()}%',
+              style:
+                  TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
+          Slider(
+            value: _textBoxW,
+            min: 0.3,
+            max: 0.95,
+            divisions: 13,
+            onChanged: (v) => setState(() => _textBoxW = v),
+          ),
+          Text('Text Box Height: ${(_textBoxH * 100).toInt()}%',
+              style:
+                  TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
+          Slider(
+            value: _textBoxH,
+            min: 0.1,
+            max: 0.7,
+            divisions: 12,
+            onChanged: (v) => setState(() => _textBoxH = v),
+          ),
           const SizedBox(height: 12),
           Divider(color: Colors.white.withOpacity(0.06)),
           const SizedBox(height: 12),
 
-          // ── Background section ──
-          _sectionHeader('Background', Icons.image),
+          // ── Background section (multi-select) ──
+          Row(
+            children: [
+              _sectionHeader('Backgrounds', Icons.image),
+              const Spacer(),
+              if (_selectedBackgrounds.isNotEmpty)
+                Text(
+                  '${_selectedBackgrounds.length} selected',
+                  style: TextStyle(
+                      fontSize: 10, color: Colors.white.withOpacity(0.3)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Tap to add/remove. Multiple clips cycle during the video.',
+            style: TextStyle(
+                fontSize: 9, color: Colors.white.withOpacity(0.25)),
+          ),
           const SizedBox(height: 8),
           if (_bgResults.isEmpty && !_isSearchingBg)
             Center(
@@ -1292,9 +1441,12 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                 itemBuilder: (context, index) {
                   final clip = _bgResults[index];
                   final url = clip['preview_url'] as String? ?? '';
-                  final isSelected = url == _selectedBgPreviewUrl;
+                  final dlUrl = clip['download_url'] as String? ?? '';
+                  final selectedIdx = _selectedBackgrounds.indexWhere(
+                      (b) => b['download_url'] == dlUrl);
+                  final isSelected = selectedIdx >= 0;
                   return GestureDetector(
-                    onTap: () => _selectBackground(clip),
+                    onTap: () => _toggleBackground(clip),
                     child: Container(
                       width: 80,
                       margin: const EdgeInsets.only(right: 6),
@@ -1309,23 +1461,103 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(6),
-                        child: url.isNotEmpty
-                            ? Image.network(url,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => Container(
-                                    color: Colors.white10,
-                                    child: const Icon(Icons.image,
-                                        color: Colors.white24, size: 16)))
-                            : Container(
-                                color: Colors.white10,
-                                child: const Icon(Icons.image,
-                                    color: Colors.white24, size: 16)),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            if (url.isNotEmpty)
+                              Image.network(url,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Container(
+                                      color: Colors.white10,
+                                      child: const Icon(Icons.image,
+                                          color: Colors.white24, size: 16)))
+                            else
+                              Container(
+                                  color: Colors.white10,
+                                  child: const Icon(Icons.image,
+                                      color: Colors.white24, size: 16)),
+                            // Selection badge with order number
+                            if (isSelected)
+                              Positioned(
+                                top: 4,
+                                right: 4,
+                                child: Container(
+                                  width: 18,
+                                  height: 18,
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFF6C5CE7),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Text(
+                                    '${selectedIdx + 1}',
+                                    style: const TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   );
                 },
               ),
             ),
+          // Selected backgrounds strip (reorderable)
+          if (_selectedBackgrounds.length > 1) ...[
+            const SizedBox(height: 6),
+            SizedBox(
+              height: 40,
+              child: ReorderableListView(
+                scrollDirection: Axis.horizontal,
+                buildDefaultDragHandles: false,
+                onReorder: (oldIndex, newIndex) {
+                  setState(() {
+                    if (newIndex > oldIndex) newIndex -= 1;
+                    final item = _selectedBackgrounds.removeAt(oldIndex);
+                    _selectedBackgrounds.insert(newIndex, item);
+                  });
+                },
+                children: List.generate(_selectedBackgrounds.length, (i) {
+                  final bg = _selectedBackgrounds[i];
+                  final pUrl = bg['preview_url'] as String? ?? '';
+                  return ReorderableDragStartListener(
+                    key: ValueKey('bg_order_$i'),
+                    index: i,
+                    child: Container(
+                      width: 40,
+                      margin: const EdgeInsets.only(right: 4),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: i == _activeBgIndex
+                              ? const Color(0xFF6C5CE7)
+                              : Colors.white12,
+                        ),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: pUrl.isNotEmpty
+                            ? Image.network(pUrl, fit: BoxFit.cover)
+                            : Container(color: Colors.white10),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                'Drag to reorder. Clips play in order.',
+                style: TextStyle(
+                    fontSize: 8, color: Colors.white.withOpacity(0.2)),
+              ),
+            ),
+          ],
           // Keyword chips for searching different backgrounds
           if (_visualKeywords.isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -1556,8 +1788,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                         : 'TTS (${_selectedVoice.label})'),
                                 // Video track
                                 _trackBar(const Color(0xFF2D5AA0), trackWidth,
-                                    _selectedBgPreviewUrl != null
-                                        ? 'Stock footage'
+                                    _selectedBackgrounds.isNotEmpty
+                                        ? '${_selectedBackgrounds.length} clip${_selectedBackgrounds.length > 1 ? 's' : ''} (cycling)'
                                         : 'Gradient background'),
                                 // Text track — show segments
                                 _trackBarSegmented(

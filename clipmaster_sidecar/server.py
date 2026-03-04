@@ -468,13 +468,15 @@ async def _handle_create_short(
     pixabay_key = msg.payload.get("pixabay_key")
 
     # Style params from the UI preview (WYSIWYG)
-    font_family = msg.payload.get("font_family", "Inter")
     font_size = int(msg.payload.get("font_size", 36))
     title_font_size = int(font_size * 1.5)
     font_color = msg.payload.get("font_color", "white")
     title_pos_y = float(msg.payload.get("title_pos_y", 0.08))
     text_pos_y = float(msg.payload.get("text_pos_y", 0.75))
+    text_box_w = float(msg.payload.get("text_box_w", 0.85))
     text_shadow = bool(msg.payload.get("text_shadow", True))
+    # Multiple background URLs (cycle) or single fallback
+    background_video_urls = msg.payload.get("background_video_urls", [])
     background_video_url = msg.payload.get("background_video_url", "")
 
     if not text:
@@ -514,80 +516,145 @@ async def _handle_create_short(
     if duration <= 0:
         duration = max(duration_est, 5.0)
 
-    # Step 2: Get background video — use user-selected URL or search
+    # Step 2: Get background video(s) — download user-selected clips or search
     await _send(ws, IpcMessage.progress(msg.id, "Getting background footage", 30))
-    bg_video_path = None
+    bg_video_paths: list[str] = []
 
-    # Prefer the specific background the user selected in the UI
-    bg_url = background_video_url
-    if not bg_url and visual_keywords and (pexels_key or pixabay_key):
+    # Collect all background URLs
+    bg_urls = [u for u in background_video_urls if u]
+    if not bg_urls and background_video_url:
+        bg_urls = [background_video_url]
+    if not bg_urls and visual_keywords and (pexels_key or pixabay_key):
         for kw in visual_keywords[:3]:
             clips = await stock_footage.search(
                 kw, pexels_key=pexels_key, pixabay_key=pixabay_key, per_source=1,
             )
             if clips:
-                bg_url = clips[0].get("download_url", "")
-                if bg_url:
+                url = clips[0].get("download_url", "")
+                if url:
+                    bg_urls.append(url)
                     break
 
-    if bg_url:
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(bg_url)
-                resp.raise_for_status()
-                bg_path = os.path.join(
-                    tempfile.gettempdir(),
-                    "clipmaster_bg_selected.mp4",
-                )
-                with open(bg_path, "wb") as f:
-                    f.write(resp.content)
-                bg_video_path = bg_path
-        except Exception as exc:
-            logger.warning("Failed to download stock clip: %s", exc)
+    # Download each background clip
+    if bg_urls:
+        import httpx
+        async with httpx.AsyncClient(
+            timeout=60.0, follow_redirects=True,
+        ) as client:
+            for i, bg_url in enumerate(bg_urls):
+                try:
+                    resp = await client.get(bg_url)
+                    resp.raise_for_status()
+                    bg_path = os.path.join(
+                        tempfile.gettempdir(),
+                        f"clipmaster_bg_{i}.mp4",
+                    )
+                    with open(bg_path, "wb") as f:
+                        f.write(resp.content)
+                    bg_video_paths.append(bg_path)
+                    logger.info("Downloaded bg %d: %d bytes", i, len(resp.content))
+                except Exception as exc:
+                    logger.warning("Failed to download bg %d from %s: %s", i, bg_url, exc)
 
-    # Step 3: Build the video
+    # Step 3: If multiple backgrounds, concat them into a single looping bg
     await _send(ws, IpcMessage.progress(msg.id, "Rendering video", 50))
+    bg_video_path = None
+    if len(bg_video_paths) > 1:
+        # Create concat file and merge clips into one background
+        concat_file = os.path.join(tempfile.gettempdir(), "clipmaster_concat.txt")
+        concat_out = os.path.join(tempfile.gettempdir(), "clipmaster_bg_concat.mp4")
+        # Each clip gets equal share of duration, loop through all
+        with open(concat_file, "w") as cf:
+            for bp in bg_video_paths:
+                cf.write(f"file '{bp}'\n")
+        await _send(ws, IpcMessage.progress(msg.id, "Combining backgrounds", 55))
+        concat_cmd = [
+            ffmpeg, "-y",
+            "-f", "concat", "-safe", "0", "-i", concat_file,
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-t", str(duration),
+            "-an",
+            "-pix_fmt", "yuv420p",
+            concat_out,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *concat_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode == 0 and os.path.isfile(concat_out):
+            bg_video_path = concat_out
+            logger.info("Concatenated %d backgrounds", len(bg_video_paths))
+        else:
+            logger.warning("Concat failed, using first bg: %s",
+                           stderr.decode("utf-8", errors="replace")[:200])
+            bg_video_path = bg_video_paths[0]
+    elif len(bg_video_paths) == 1:
+        bg_video_path = bg_video_paths[0]
 
     safe_name = re.sub(r"[^\w\s-]", "", title[:40]).strip().replace(" ", "_")
     output_path = os.path.join(output_dir, f"short_{safe_name}.mp4")
 
-    # Escape text for FFmpeg drawtext filter
-    escaped_text = _escape_ffmpeg_text(text)
-    escaped_title = _escape_ffmpeg_text(title)
+    # Write text to temp files to avoid FFmpeg escaping nightmares
+    title_file = os.path.join(tempfile.gettempdir(), "clipmaster_title.txt")
+    body_file = os.path.join(tempfile.gettempdir(), "clipmaster_body.txt")
 
-    # Build drawtext filters using UI style params (WYSIWYG)
-    border_opts = f":borderw=3:bordercolor=black" if text_shadow else ""
-    body_border = f":borderw=2:bordercolor=black" if text_shadow else ""
+    # Word-wrap body text based on text box width
+    chars_per_line = int(35 * text_box_w / 0.85)  # scale with box width
+    wrapped_body = _wrap_text(text, max(20, chars_per_line))
+    with open(title_file, "w", encoding="utf-8") as f:
+        f.write(title)
+    with open(body_file, "w", encoding="utf-8") as f:
+        f.write(wrapped_body)
 
-    # Title position: percentage of 1920px height
+    # Escape paths for FFmpeg filter syntax (colons / backslashes)
+    title_file_esc = _escape_ffmpeg_path(title_file)
+    body_file_esc = _escape_ffmpeg_path(body_file)
+
+    # Find a usable font — try common sans-serif fonts
+    font_file = _find_font()
+    font_opt = f":fontfile={_escape_ffmpeg_path(font_file)}" if font_file else ""
+
+    # Build drawtext filters
+    border_opts = ":borderw=3:bordercolor=black" if text_shadow else ""
+    body_border = ":borderw=2:bordercolor=black" if text_shadow else ""
+
     title_y = int(title_pos_y * 1920)
-    # Body text position: percentage of 1920px height
-    body_y = int(text_pos_y * 1920)
+    # Center body text vertically around the target Y position
+    body_y_expr = f"{int(text_pos_y * 1920)}-(text_h/2)"
 
     drawtext_title = (
-        f"drawtext=text='{escaped_title}'"
+        f"drawtext=textfile={title_file_esc}"
         f":fontsize={title_font_size}:fontcolor={font_color}"
-        f":x=(w-text_w)/2:y={title_y}{border_opts}"
+        f":x=(w-text_w)/2:y={title_y}"
+        f"{font_opt}{border_opts}"
     )
     drawtext_body = (
-        f"drawtext=text='{escaped_text}'"
+        f"drawtext=textfile={body_file_esc}"
         f":fontsize={font_size}:fontcolor={font_color}"
-        f":x=(w-text_w)/2:y={body_y}{body_border}"
+        f":x=(w-text_w)/2:y={body_y_expr}"
+        f"{font_opt}{body_border}"
     )
 
     if bg_video_path and os.path.isfile(bg_video_path):
-        # Use stock footage as background, scaled to 9:16, with text overlay
+        # Stock footage background (single or concat) + dark overlay + text
+        vf_parts = []
+        # Only scale/crop if not already done by concat
+        if len(bg_video_paths) <= 1:
+            vf_parts.append(
+                "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+            )
+        vf_parts.append("drawbox=x=0:y=0:w=iw:h=ih:color=black@0.3:t=fill")
+        vf_parts.append(drawtext_title)
+        vf_parts.append(drawtext_body)
+
         cmd = [
             ffmpeg, "-y",
             "-stream_loop", "-1", "-i", bg_video_path,
             "-i", audio_path,
-            "-vf", (
-                f"scale=1080:1920:force_original_aspect_ratio=increase,"
-                f"crop=1080:1920,"
-                f"{drawtext_title},"
-                f"{drawtext_body}"
-            ),
+            "-vf", ",".join(vf_parts),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "192k",
             "-t", str(duration),
@@ -596,16 +663,16 @@ async def _handle_create_short(
             output_path,
         ]
     else:
-        # Solid gradient background with text overlay
+        # Solid dark background with text overlay
         cmd = [
             ffmpeg, "-y",
             "-f", "lavfi",
-            "-i", (
-                f"color=c=0x1a1a2e:s=1080x1920:d={duration},"
+            "-i", f"color=c=0x1a1a2e:s=1080x1920:d={duration}",
+            "-i", audio_path,
+            "-vf", (
                 f"{drawtext_title},"
                 f"{drawtext_body}"
             ),
-            "-i", audio_path,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "192k",
             "-t", str(duration),
@@ -614,6 +681,7 @@ async def _handle_create_short(
             output_path,
         ]
 
+    logger.info("FFmpeg command: %s", " ".join(cmd))
     await _send(ws, IpcMessage.progress(msg.id, "Encoding video", 65))
 
     proc = await asyncio.create_subprocess_exec(
@@ -635,6 +703,7 @@ async def _handle_create_short(
         "audio_path": audio_path,
         "duration": duration,
         "has_stock_footage": bg_video_path is not None,
+        "background_count": len(bg_video_paths),
     }))
 
 
@@ -654,26 +723,84 @@ def _find_ffmpeg() -> str | None:
     return None
 
 
-def _escape_ffmpeg_text(text: str) -> str:
-    """Escape text for FFmpeg drawtext filter."""
-    # FFmpeg drawtext requires escaping: ' : \ and newlines
-    text = text.replace("\\", "\\\\\\\\")
-    text = text.replace("'", "\u2019")  # Replace with typographic apostrophe
-    text = text.replace(":", "\\:")
-    text = text.replace("%", "%%")
-    # Wrap long text manually (approx 35 chars per line for 1080px @ fontsize 36)
+def _escape_ffmpeg_path(path: str) -> str:
+    """Escape a file path for use inside FFmpeg filter option values."""
+    # Use forward slashes (works on all platforms in FFmpeg)
+    path = path.replace("\\", "/")
+    # Escape colons (Windows drive letters like C:) and special chars
+    path = path.replace(":", "\\:")
+    path = path.replace("'", "\\'")
+    return path
+
+
+def _wrap_text(text: str, max_chars: int = 35) -> str:
+    """Word-wrap text for FFmpeg textfile (plain text, no escaping needed)."""
     words = text.split()
-    lines = []
+    lines: list[str] = []
     current_line = ""
     for word in words:
-        if len(current_line) + len(word) + 1 > 35:
+        if len(current_line) + len(word) + 1 > max_chars:
             lines.append(current_line)
             current_line = word
         else:
             current_line = f"{current_line} {word}".strip()
     if current_line:
         lines.append(current_line)
-    return "\\n".join(lines)
+    return "\n".join(lines)
+
+
+def _find_font() -> str | None:
+    """Find a sans-serif TTF font file for FFmpeg drawtext."""
+    import os
+    import glob
+
+    # Common font paths across platforms
+    font_dirs = [
+        "/usr/share/fonts",
+        "/usr/local/share/fonts",
+        os.path.expanduser("~/.fonts"),
+        os.path.expanduser("~/.local/share/fonts"),
+        # macOS
+        "/System/Library/Fonts",
+        "/Library/Fonts",
+        os.path.expanduser("~/Library/Fonts"),
+        # Windows
+        r"C:\Windows\Fonts",
+    ]
+
+    # Preferred sans-serif fonts in priority order
+    preferred = [
+        "Inter", "Roboto", "Montserrat", "Poppins", "Lato", "Oswald",
+        "LiberationSans", "Liberation Sans", "DejaVuSans", "DejaVu Sans",
+        "NotoSans", "Noto Sans", "Arial", "Helvetica", "FreeSans",
+    ]
+
+    for font_dir in font_dirs:
+        if not os.path.isdir(font_dir):
+            continue
+        for font_name in preferred:
+            # Search for TTF or OTF files matching the font name
+            patterns = [
+                os.path.join(font_dir, "**", f"{font_name}*.ttf"),
+                os.path.join(font_dir, "**", f"{font_name}*.otf"),
+                os.path.join(font_dir, "**", f"{font_name.replace(' ', '')}*.ttf"),
+                os.path.join(font_dir, "**", f"{font_name.replace(' ', '')}*.otf"),
+                os.path.join(font_dir, "**", f"{font_name.lower()}*.ttf"),
+                os.path.join(font_dir, "**", f"{font_name.lower()}*.otf"),
+            ]
+            for pattern in patterns:
+                matches = glob.glob(pattern, recursive=True)
+                if matches:
+                    # Prefer regular weight (not Bold/Italic)
+                    regular = [m for m in matches
+                               if "Bold" not in m and "Italic" not in m
+                               and "bold" not in m and "italic" not in m]
+                    best = regular[0] if regular else matches[0]
+                    logger.info("Using font: %s", best)
+                    return best
+
+    logger.warning("No sans-serif font found, FFmpeg will use default")
+    return None
 
 
 async def _get_audio_duration(ffmpeg: str, audio_path: str) -> float:

@@ -469,7 +469,12 @@ async def _handle_create_short(
 
     # Style params from the UI preview (WYSIWYG)
     font_size = int(msg.payload.get("font_size", 36))
-    title_font_size = int(font_size * 1.5)
+    # Match the Dart preview scaling exactly:
+    # Preview is 270×480 (1/4 of 1080×1920)
+    # Dart title:  (_fontSize * 0.45).clamp(12, 24) → ×4 for render
+    # Dart body:   (_fontSize * 0.3).clamp(8, 16)   → ×4 for render
+    title_font_size = int(min(max(font_size * 0.45, 12), 24) * 4)
+    body_font_size = int(min(max(font_size * 0.3, 8), 16) * 4)
     font_color = msg.payload.get("font_color", "white")
     title_pos_y = float(msg.payload.get("title_pos_y", 0.08))
     text_pos_y = float(msg.payload.get("text_pos_y", 0.75))
@@ -607,13 +612,34 @@ async def _handle_create_short(
     title_file = os.path.join(tmpdir, "cm_title.txt")
     body_file = os.path.join(tmpdir, "cm_body.txt")
 
-    # Word-wrap body text based on text box width
-    chars_per_line = int(35 * text_box_w / 0.85)  # scale with box width
-    wrapped_body = _wrap_text(text, max(20, chars_per_line))
-    with open(title_file, "w", encoding="utf-8") as f:
-        f.write(title)
-    with open(body_file, "w", encoding="utf-8") as f:
-        f.write(wrapped_body)
+    # Word-wrap title: preview shows left:16, right:16 on 270px → (270-32)/270 ≈ 88%
+    # On 1080px canvas that's ~952px usable. Wrap to max 2 lines.
+    title_usable_px = int(0.88 * 1080)
+    title_avg_char_w = max(title_font_size * 0.55, 1)
+    title_chars = max(10, int(title_usable_px / title_avg_char_w))
+    wrapped_title = _wrap_text(title, title_chars)
+    # Cap at 2 lines like the preview
+    title_lines = wrapped_title.split("\n")[:2]
+    wrapped_title = "\n".join(title_lines)
+
+    # Word-wrap body text to match the visible text box.
+    # Text box is text_box_w fraction of 1080px. Average char width is
+    # roughly 0.55× the font size for a proportional sans-serif font.
+    usable_px = int(text_box_w * 1080)
+    avg_char_w = max(body_font_size * 0.52, 1)
+    chars_per_line = max(15, int(usable_px / avg_char_w))
+    wrapped_body = _wrap_text(text, chars_per_line)
+    # Strip any BOM / invisible unicode chars that cause box glyphs in FFmpeg
+    clean_title = wrapped_title.encode("ascii", errors="ignore").decode("ascii").strip()
+    clean_body = wrapped_body.encode("ascii", errors="ignore").decode("ascii").strip()
+    if not clean_title:
+        clean_title = title.strip()
+    if not clean_body:
+        clean_body = wrapped_body.strip()
+    with open(title_file, "w", encoding="utf-8", newline="\n") as f:
+        f.write(clean_title)
+    with open(body_file, "w", encoding="utf-8", newline="\n") as f:
+        f.write(clean_body)
 
     # Copy font to temp dir so we can reference it by bare filename
     font_file = _find_font()
@@ -644,7 +670,7 @@ async def _handle_create_short(
     )
     drawtext_body = (
         f"drawtext=textfile=cm_body.txt"
-        f":fontsize={font_size}:fontcolor={font_color}"
+        f":fontsize={body_font_size}:fontcolor={font_color}"
         f":x=(w-text_w)/2:y={body_y_expr}"
         f"{font_opt}{body_border}"
     )

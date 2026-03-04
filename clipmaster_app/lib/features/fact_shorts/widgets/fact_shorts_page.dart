@@ -28,9 +28,22 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   bool _isGenerating = false;
   String _progressStage = '';
   int _progressPercent = 0;
-  List<Map<String, dynamic>> _facts = [];
   int? _selectedFactIndex;
   String? _error;
+
+  // Multi-model fact generation: provider → list of facts
+  final Map<LlmProvider, List<Map<String, dynamic>>> _modelFacts = {};
+  final Map<LlmProvider, bool> _modelLoading = {};
+  final Map<LlmProvider, String?> _modelErrors = {};
+  // Which providers to use (user toggles in left panel)
+  final Set<LlmProvider> _enabledProviders = {
+    LlmProvider.openai,
+    LlmProvider.claude,
+    LlmProvider.gemini,
+  };
+
+  // Flattened selected fact (from any model)
+  LlmProvider? _selectedFactProvider;
 
   // ── Composer state (active when a fact is selected) ──
   String _composerTitle = '';
@@ -56,51 +69,60 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   int _activeBgIndex = 0; // which background is shown in preview
   Player? _bgPlayer;
   VideoController? _bgController;
+  final _bgSearchController = TextEditingController(); // manual search
 
   // Timeline scrubber
   double _scrubPosition = 0.0;
   double _estimatedDuration = 30.0;
 
-  // Music (placeholder for future)
-  String? _selectedMusicLabel;
-
   // Rendering
   bool _isRendering = false;
 
-  // Caption style for this composer
-  String _fontFamily = 'Inter';
-  double _fontSize = 36;
-  int _colorHex = 0xFFFFFFFF;
-  bool _hasBorder = true;
+  // ── TITLE styling (fully independent) ──
+  String _titleFontFamily = 'Inter';
+  double _titleFontSize = 48; // in 1080p pixels
+  int _titleColorHex = 0xFFFFFFFF;
+  bool _titleShadow = true;
+  bool _titleBgEnabled = false;
+  int _titleBgColorHex = 0x80000000;
+
+  // ── BODY styling (fully independent) ──
+  String _bodyFontFamily = 'Inter';
+  double _bodyFontSize = 40; // in 1080p pixels
+  int _bodyColorHex = 0xFFFFFFFF;
+  bool _bodyShadow = true;
+  bool _bodyBgEnabled = false;
+  int _bodyBgColorHex = 0x80000000;
+
+  // Text position + box size
   double _textPosX = 0.5;
   double _textPosY = 0.75;
-  // Text box size as fraction of frame (0.0–1.0)
   double _textBoxW = 0.85;
   double _textBoxH = 0.35;
 
-  // Separate title styling
-  String _titleFontFamily = 'Inter';
-  int _titleColorHex = 0xFFFFFFFF;
-  bool _titleBgEnabled = false;
-  int _titleBgColorHex = 0x80000000; // black @ 50%
+  // ── Text slideshow: split body into sequential slides ──
+  bool _slideshowEnabled = false;
+  int _wordsPerSlide = 15;
 
-  // Separate body styling
-  String _bodyFontFamily = 'Inter';
-  int _bodyColorHex = 0xFFFFFFFF;
-  bool _bodyBgEnabled = false;
-  int _bodyBgColorHex = 0x80000000; // black @ 50%
-
-  // AI model selection
-  LlmProvider? _selectedLlmProvider;
-
-  // Background music / sound clips
+  // ── Background music / sound clips ──
   String? _bgMusicPath;
   String? _bgMusicLabel;
   double _bgMusicVolume = 0.15;
 
+  // Royalty-free audio presets
+  static const _royaltyFreeAudio = [
+    {'label': 'Ambient Chill', 'path': 'bundled_audio/ambient_chill.mp3'},
+    {'label': 'Cinematic Rise', 'path': 'bundled_audio/cinematic_rise.mp3'},
+    {'label': 'Lo-fi Beat', 'path': 'bundled_audio/lofi_beat.mp3'},
+    {'label': 'Epic Drums', 'path': 'bundled_audio/epic_drums.mp3'},
+    {'label': 'Soft Piano', 'path': 'bundled_audio/soft_piano.mp3'},
+    {'label': 'News Intro', 'path': 'bundled_audio/news_intro.mp3'},
+  ];
+
   @override
   void dispose() {
     _scriptEditController.dispose();
+    _bgSearchController.dispose();
     _voicePreviewPlayer?.dispose();
     _bgPlayer?.dispose();
     super.dispose();
@@ -110,44 +132,21 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   //  FACT GENERATION
   // ════════════════════════════════════════════════════════════════
 
+  /// Generate facts from all enabled providers in parallel.
   Future<void> _generate() async {
     final apiKeyService = ref.read(apiKeyServiceProvider);
-    String? apiKey;
-    LlmProvider? provider;
 
-    // Use explicitly selected provider if set, otherwise auto-detect
-    if (_selectedLlmProvider != null) {
-      final key = apiKeyService.getNextKey(_selectedLlmProvider!);
-      if (key != null) {
-        apiKey = key;
-        provider = _selectedLlmProvider;
-      } else {
-        setState(() {
-          _error =
-              'No API key for ${_selectedLlmProvider!.name}. Add one in Settings.';
-        });
-        return;
-      }
-    } else {
-      const llmProviders = [
-        LlmProvider.openai,
-        LlmProvider.claude,
-        LlmProvider.gemini
-      ];
-      for (final p in llmProviders) {
-        final key = apiKeyService.getNextKey(p);
-        if (key != null) {
-          apiKey = key;
-          provider = p;
-          break;
-        }
-      }
+    // Find which providers have keys AND are enabled
+    final toGenerate = <LlmProvider, String>{};
+    for (final p in _enabledProviders) {
+      final key = apiKeyService.getNextKey(p);
+      if (key != null) toGenerate[p] = key;
     }
 
-    if (apiKey == null || provider == null) {
+    if (toGenerate.isEmpty) {
       setState(() {
-        _error = 'No API keys configured. Go to Settings and add one '
-            '(OpenAI, Claude, or Gemini).';
+        _error = 'No API keys configured for enabled models. '
+            'Go to Settings and add one (OpenAI, Claude, or Gemini).';
       });
       return;
     }
@@ -155,14 +154,34 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     setState(() {
       _isGenerating = true;
       _error = null;
-      _facts = [];
+      _modelFacts.clear();
+      _modelErrors.clear();
       _selectedFactIndex = null;
+      _selectedFactProvider = null;
       _progressStage = 'Starting';
       _progressPercent = 0;
+      for (final p in toGenerate.keys) {
+        _modelLoading[p] = true;
+      }
     });
 
+    final ipc = ref.read(ipcClientProvider);
+
+    // Fire requests in parallel
+    final futures = <Future<void>>[];
+    for (final entry in toGenerate.entries) {
+      futures.add(_generateForProvider(ipc, entry.key, entry.value));
+    }
+    await Future.wait(futures);
+
+    if (mounted) {
+      setState(() => _isGenerating = false);
+    }
+  }
+
+  Future<void> _generateForProvider(
+      IpcClient ipc, LlmProvider provider, String apiKey) async {
     try {
-      final ipc = ref.read(ipcClientProvider);
       final response = await ipc.send(
         IpcMessage(
           type: MessageType.generateFacts,
@@ -185,33 +204,51 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         },
       );
 
+      if (!mounted) return;
+
       if (response.type == MessageType.error) {
         setState(() {
-          _isGenerating = false;
-          _error = response.payload['message'] as String? ?? 'Unknown error';
+          _modelLoading[provider] = false;
+          _modelErrors[provider] =
+              response.payload['message'] as String? ?? 'Unknown error';
         });
       } else {
         final factList = (response.payload['facts'] as List<dynamic>? ?? [])
             .cast<Map<String, dynamic>>();
         setState(() {
-          _isGenerating = false;
-          _facts = factList;
+          _modelLoading[provider] = false;
+          _modelFacts[provider] = factList;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _isGenerating = false;
-          _error = e.toString();
+          _modelLoading[provider] = false;
+          _modelErrors[provider] = e.toString();
         });
       }
     }
   }
 
-  void _selectFact(int index) {
-    final fact = _facts[index];
+  /// Get all facts from all models, flattened.
+  List<Map<String, dynamic>> get _allFacts {
+    return _modelFacts.values.expand((list) => list).toList();
+  }
+
+  void _selectFact(int index, {LlmProvider? provider}) {
+    // Get facts from the specific provider, or fall back to all
+    List<Map<String, dynamic>> facts;
+    if (provider != null && _modelFacts.containsKey(provider)) {
+      facts = _modelFacts[provider]!;
+    } else {
+      facts = _allFacts;
+    }
+    if (index < 0 || index >= facts.length) return;
+    final fact = facts[index];
+
     setState(() {
       _selectedFactIndex = index;
+      _selectedFactProvider = provider;
       _composerTitle = fact['title'] as String? ?? 'Untitled';
       _composerScript = fact['fact'] as String? ?? '';
       _visualKeywords =
@@ -220,12 +257,12 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       _scrubPosition = 0;
       _estimatedDuration =
           (_composerScript.split(' ').length / 2.5).clamp(10, 90);
-
-      // Auto-search for background footage
-      if (_visualKeywords.isNotEmpty) {
-        _searchBackgrounds(_visualKeywords.first);
-      }
     });
+
+    // Auto-search for background footage using first visual keyword
+    if (_visualKeywords.isNotEmpty) {
+      _searchBackgrounds(_visualKeywords.first);
+    }
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -437,20 +474,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
 
     try {
       final ipc = ref.read(ipcClientProvider);
-      // Convert color hex to FFmpeg-friendly format (strip alpha, keep RGB)
-      final rgb = _colorHex & 0x00FFFFFF;
-      final ffmpegColor = '0x${rgb.toRadixString(16).padLeft(6, '0')}';
 
-      // Convert separate colors for title/body
-      final titleRgb = _titleColorHex & 0x00FFFFFF;
-      final bodyRgb = _bodyColorHex & 0x00FFFFFF;
-      final titleFfmpegColor =
-          '0x${titleRgb.toRadixString(16).padLeft(6, '0')}';
-      final bodyFfmpegColor =
-          '0x${bodyRgb.toRadixString(16).padLeft(6, '0')}';
+      // Convert colors to FFmpeg hex (strip alpha)
+      String toFfmpegHex(int argb) {
+        final rgb = argb & 0x00FFFFFF;
+        return '0x${rgb.toRadixString(16).padLeft(6, '0')}';
+      }
 
-      // Convert background colors: extract ARGB → FFmpeg black@opacity
-      String _toFfmpegBgColor(int hex) {
+      // Convert background colors: ARGB → FFmpeg color@opacity
+      String toFfmpegBgColor(int hex) {
         final a = ((hex >> 24) & 0xFF) / 255.0;
         final r = (hex >> 16) & 0xFF;
         final g = (hex >> 8) & 0xFF;
@@ -468,37 +500,38 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         'voice': _selectedVoice.name,
         'output_dir': shortsDir.path,
         'visual_keywords': _visualKeywords,
-        // Style params matching the UI preview (WYSIWYG)
-        'font_family': _fontFamily,
-        'font_size': _fontSize.toInt(),
-        'font_color': ffmpegColor,
+        // Send actual pixel font sizes directly (no re-computation in server)
+        'title_font_size_px': _titleFontSize.toInt(),
+        'body_font_size_px': _bodyFontSize.toInt(),
+        'title_font_family': _titleFontFamily,
+        'body_font_family': _bodyFontFamily,
+        'title_color': toFfmpegHex(_titleColorHex),
+        'body_color': toFfmpegHex(_bodyColorHex),
+        'title_shadow': _titleShadow,
+        'body_shadow': _bodyShadow,
         'title_pos_y': 0.08,
         'text_pos_y': _textPosY,
         'text_pos_x': _textPosX,
         'text_box_w': _textBoxW,
         'text_box_h': _textBoxH,
-        'text_shadow': _hasBorder,
-        // Separate title/body styling
-        'title_color': titleFfmpegColor,
-        'title_font_family': _titleFontFamily,
-        'body_color': bodyFfmpegColor,
-        'body_font_family': _bodyFontFamily,
         // Text box backgrounds
         'title_bg_enabled': _titleBgEnabled,
-        'title_bg_color': _toFfmpegBgColor(_titleBgColorHex),
+        'title_bg_color': toFfmpegBgColor(_titleBgColorHex),
         'body_bg_enabled': _bodyBgEnabled,
-        'body_bg_color': _toFfmpegBgColor(_bodyBgColorHex),
+        'body_bg_color': toFfmpegBgColor(_bodyBgColorHex),
         // Category badge
         'category_label': _selectedCategory,
+        // Slideshow mode
+        'slideshow_enabled': _slideshowEnabled,
+        'words_per_slide': _wordsPerSlide,
         // Background music
         if (_bgMusicPath != null) 'bg_music_path': _bgMusicPath,
         'bg_music_volume': _bgMusicVolume,
-        // Multiple backgrounds that cycle
+        // Multiple backgrounds
         'background_video_urls': _selectedBackgrounds
             .map((b) => b['download_url'] as String? ?? '')
             .where((u) => u.isNotEmpty)
             .toList(),
-        // Fallback single URL for backwards compat
         'background_video_url': _selectedBackgrounds.isNotEmpty
             ? (_selectedBackgrounds.first['download_url'] as String? ?? '')
             : '',
@@ -613,6 +646,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
 
   Widget _buildFactListPanel() {
     final isCompact = _selectedFactIndex != null;
+    final apiKeyService = ref.read(apiKeyServiceProvider);
 
     return Container(
       color: const Color(0xFF141420),
@@ -656,7 +690,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               runSpacing: 4,
               children: _categories.map((cat) {
                 return ChoiceChip(
-                  label: Text(cat, style: TextStyle(fontSize: isCompact ? 11 : 13)),
+                  label:
+                      Text(cat, style: TextStyle(fontSize: isCompact ? 11 : 13)),
                   selected: _selectedCategory == cat,
                   onSelected: (_) => setState(() => _selectedCategory = cat),
                   visualDensity: isCompact
@@ -667,6 +702,59 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             ),
           ),
           const SizedBox(height: 8),
+
+          // ── AI Model toggles ──
+          if (!isCompact) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text('AI Models',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white.withOpacity(0.4))),
+            ),
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [LlmProvider.openai, LlmProvider.claude, LlmProvider.gemini]
+                    .map((p) {
+                  final hasKey = apiKeyService.getNextKey(p) != null;
+                  final enabled = _enabledProviders.contains(p);
+                  final label = p == LlmProvider.openai
+                      ? 'GPT-4o'
+                      : p == LlmProvider.claude
+                          ? 'Claude'
+                          : 'Gemini';
+                  return FilterChip(
+                    label: Text(label, style: const TextStyle(fontSize: 10)),
+                    selected: enabled,
+                    onSelected: hasKey
+                        ? (v) {
+                            setState(() {
+                              if (v) {
+                                _enabledProviders.add(p);
+                              } else if (_enabledProviders.length > 1) {
+                                _enabledProviders.remove(p);
+                              }
+                            });
+                          }
+                        : null,
+                    avatar: hasKey
+                        ? null
+                        : Icon(Icons.key_off, size: 12,
+                            color: Colors.white.withOpacity(0.2)),
+                    tooltip: hasKey ? null : 'No API key configured',
+                    visualDensity: VisualDensity.compact,
+                  );
+                }).toList(),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+
           // Controls
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -710,28 +798,35 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     );
   }
 
-  Widget _buildFactListContent(bool isCompact) {
-    if (_isGenerating && _facts.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Colors.white.withOpacity(0.4),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text('$_progressStage...',
-                style: TextStyle(
-                    fontSize: 12, color: Colors.white.withOpacity(0.4))),
-          ],
-        ),
-      );
+  String _providerLabel(LlmProvider p) {
+    switch (p) {
+      case LlmProvider.openai:
+        return 'GPT-4o';
+      case LlmProvider.claude:
+        return 'Claude';
+      case LlmProvider.gemini:
+        return 'Gemini';
+      default:
+        return p.name;
     }
+  }
+
+  Color _providerColor(LlmProvider p) {
+    switch (p) {
+      case LlmProvider.openai:
+        return const Color(0xFF10A37F);
+      case LlmProvider.claude:
+        return const Color(0xFFD97757);
+      case LlmProvider.gemini:
+        return const Color(0xFF4285F4);
+      default:
+        return const Color(0xFF6C5CE7);
+    }
+  }
+
+  Widget _buildFactListContent(bool isCompact) {
+    final hasAnyFacts = _modelFacts.values.any((f) => f.isNotEmpty);
+    final anyLoading = _modelLoading.values.any((v) => v);
 
     if (_error != null) {
       return Padding(
@@ -754,7 +849,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       );
     }
 
-    if (_facts.isEmpty) {
+    if (!hasAnyFacts && !anyLoading) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -775,95 +870,153 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       );
     }
 
-    return ListView.builder(
+    // Show facts grouped by model provider
+    return ListView(
       padding: const EdgeInsets.all(8),
-      itemCount: _facts.length,
-      itemBuilder: (context, index) {
-        final fact = _facts[index];
-        final title = fact['title'] as String? ?? 'Untitled';
-        final isSelected = _selectedFactIndex == index;
-
-        return Card(
-          margin: const EdgeInsets.only(bottom: 6),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-            side: isSelected
-                ? const BorderSide(color: Color(0xFF6C5CE7), width: 2)
-                : BorderSide.none,
-          ),
-          color: isSelected
-              ? const Color(0xFF6C5CE7).withOpacity(0.08)
-              : null,
-          child: InkWell(
-            onTap: () => _selectFact(index),
-            borderRadius: BorderRadius.circular(10),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  Container(
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? const Color(0xFF6C5CE7)
-                          : Colors.white10,
-                      shape: BoxShape.circle,
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      '${index + 1}',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 11,
-                        color: isSelected ? Colors.white : Colors.white54,
-                      ),
+      children: [
+        for (final provider in _enabledProviders) ...[
+          // Provider section header
+          Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 6, left: 4),
+            child: Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: _providerColor(provider),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _providerLabel(provider),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: _providerColor(provider),
+                  ),
+                ),
+                const Spacer(),
+                if (_modelLoading[provider] == true)
+                  SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.5,
+                      color: _providerColor(provider).withOpacity(0.5),
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(title,
-                            style: const TextStyle(
-                                fontSize: 13, fontWeight: FontWeight.w600),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis),
-                        if (!isCompact) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            fact['fact'] as String? ?? '',
-                            style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.white.withOpacity(0.4)),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ],
-                    ),
+                if (_modelErrors[provider] != null)
+                  Tooltip(
+                    message: _modelErrors[provider]!,
+                    child: Icon(Icons.warning_amber,
+                        size: 14, color: Colors.amber.withOpacity(0.6)),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.content_copy, size: 14),
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(
-                          text: fact['fact'] as String? ?? ''));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                            content: Text('Copied'),
-                            duration: Duration(seconds: 1)),
-                      );
-                    },
-                    style:
-                        IconButton.styleFrom(foregroundColor: Colors.white38),
-                  ),
-                ],
-              ),
+              ],
             ),
           ),
-        );
-      },
+          // Facts from this model
+          if (_modelFacts[provider] != null)
+            for (var i = 0; i < _modelFacts[provider]!.length; i++)
+              _buildFactCard(
+                  _modelFacts[provider]![i], i, provider, isCompact),
+          if (_modelFacts[provider] == null && _modelLoading[provider] != true)
+            Padding(
+              padding: const EdgeInsets.only(left: 16, bottom: 8),
+              child: Text('No results',
+                  style: TextStyle(
+                      fontSize: 10, color: Colors.white.withOpacity(0.2))),
+            ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildFactCard(Map<String, dynamic> fact, int index,
+      LlmProvider provider, bool isCompact) {
+    final title = fact['title'] as String? ?? 'Untitled';
+    final isSelected =
+        _selectedFactIndex == index && _selectedFactProvider == provider;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 6),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: isSelected
+            ? BorderSide(color: _providerColor(provider), width: 2)
+            : BorderSide.none,
+      ),
+      color: isSelected
+          ? _providerColor(provider).withOpacity(0.08)
+          : null,
+      child: InkWell(
+        onTap: () => _selectFact(index, provider: provider),
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? _providerColor(provider)
+                      : Colors.white10,
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  '${index + 1}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                    color: isSelected ? Colors.white : Colors.white54,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                    if (!isCompact) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        fact['fact'] as String? ?? '',
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.white.withOpacity(0.4)),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.content_copy, size: 14),
+                onPressed: () {
+                  Clipboard.setData(
+                      ClipboardData(text: fact['fact'] as String? ?? ''));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Copied'),
+                        duration: Duration(seconds: 1)),
+                  );
+                },
+                style: IconButton.styleFrom(foregroundColor: Colors.white38),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -946,8 +1099,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // ────────────────────────────────────────────────────────────────
 
   Widget _buildPhonePreview() {
-    // Exactly 1/4 of 1080×1920 — the ×4 scale factor in the server
-    // relies on this being precisely 270×480.
+    // Exactly 1/4 of 1080×1920 — scale factor = 0.25
+    const double scale = 0.25;
     return SizedBox(
       width: 270,
       height: 480,
@@ -962,16 +1115,30 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               builder: (context, constraints) {
                 final frameW = constraints.maxWidth;
                 final frameH = constraints.maxHeight;
+                // Preview font sizes = render sizes × scale
+                final previewTitleSize = (_titleFontSize * scale).clamp(8.0, 30.0);
+                final previewBodySize = (_bodyFontSize * scale).clamp(6.0, 20.0);
                 // Text box pixel dimensions
                 final boxW = _textBoxW * frameW;
                 final boxH = _textBoxH * frameH;
                 final boxLeft = (_textPosX * frameW) - (boxW / 2);
                 final boxTop = (_textPosY * frameH) - (boxH / 2);
 
+                // Slideshow: show current slide text
+                String bodyText;
+                if (_slideshowEnabled) {
+                  final slides = _getSlides();
+                  final currentSlide =
+                      (_scrubPosition * slides.length).floor().clamp(0, slides.length - 1);
+                  bodyText = slides.isNotEmpty ? slides[currentSlide] : _composerScript;
+                } else {
+                  bodyText = _composerScript;
+                }
+
                 return Stack(
                   fit: StackFit.expand,
                   children: [
-                    // ── Background layer ──
+                    // ── Background layer (playable video) ──
                     if (_bgController != null)
                       Video(
                         controller: _bgController!,
@@ -1014,15 +1181,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontFamily: _titleFontFamily,
-                            fontSize: (_fontSize * 0.45).clamp(12, 24),
+                            fontSize: previewTitleSize,
                             fontWeight: FontWeight.w800,
                             color: Color(_titleColorHex),
-                            shadows: _hasBorder
+                            shadows: _titleShadow
                                 ? const [
-                                    Shadow(
-                                        color: Colors.black, blurRadius: 6),
-                                    Shadow(
-                                        color: Colors.black, blurRadius: 12),
+                                    Shadow(color: Colors.black, blurRadius: 6),
+                                    Shadow(color: Colors.black, blurRadius: 12),
                                   ]
                                 : null,
                           ),
@@ -1059,22 +1224,21 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                           ),
                           child: Text(
                             _wrapText(
-                              _composerScript,
-                              boxW - 12, // subtract padding
-                              (_fontSize * 0.3).clamp(8, 16),
+                              bodyText,
+                              boxW - 12,
+                              previewBodySize,
                             ),
                             textAlign: TextAlign.center,
                             overflow: TextOverflow.clip,
                             style: TextStyle(
                               fontFamily: _bodyFontFamily,
-                              fontSize: (_fontSize * 0.3).clamp(8, 16),
+                              fontSize: previewBodySize,
                               fontWeight: FontWeight.w600,
                               color: Color(_bodyColorHex),
                               height: 1.4,
-                              shadows: _hasBorder
+                              shadows: _bodyShadow
                                   ? const [
-                                      Shadow(
-                                          color: Colors.black, blurRadius: 4),
+                                      Shadow(color: Colors.black, blurRadius: 4),
                                     ]
                                   : null,
                             ),
@@ -1217,6 +1381,18 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
 
   bool _bgPlaying = true;
 
+  /// Split body text into slideshow slides (each with _wordsPerSlide words).
+  List<String> _getSlides() {
+    final words = _composerScript.split(' ');
+    if (words.isEmpty) return [_composerScript];
+    final slides = <String>[];
+    for (var i = 0; i < words.length; i += _wordsPerSlide) {
+      final end = (i + _wordsPerSlide).clamp(0, words.length);
+      slides.add(words.sublist(i, end).join(' '));
+    }
+    return slides;
+  }
+
   /// Word-wrap text identically to the Python server's _wrap_text().
   /// This ensures the preview shows the same line breaks as the render.
   String _wrapText(String text, double boxWidthPx, double fontSizePx) {
@@ -1332,51 +1508,12 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           Divider(color: Colors.white.withOpacity(0.06)),
           const SizedBox(height: 12),
 
-          // ── AI Model section ──
-          _sectionHeader('AI Model', Icons.psychology),
-          const SizedBox(height: 8),
-          DropdownButton<LlmProvider?>(
-            value: _selectedLlmProvider,
-            isExpanded: true,
-            hint: Text('Auto (first available)',
-                style: TextStyle(
-                    fontSize: 12, color: Colors.white.withOpacity(0.4))),
-            items: [
-              const DropdownMenuItem<LlmProvider?>(
-                value: null,
-                child: Text('Auto (first available)',
-                    style: TextStyle(fontSize: 12)),
-              ),
-              ...LlmProvider.values
-                  .where((p) =>
-                      p == LlmProvider.openai ||
-                      p == LlmProvider.claude ||
-                      p == LlmProvider.gemini)
-                  .map((p) => DropdownMenuItem(
-                        value: p,
-                        child: Text(
-                          p == LlmProvider.openai
-                              ? 'OpenAI (GPT-4o)'
-                              : p == LlmProvider.claude
-                                  ? 'Claude (Sonnet)'
-                                  : 'Gemini (Flash)',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      )),
-            ],
-            onChanged: (v) => setState(() => _selectedLlmProvider = v),
-          ),
-          const SizedBox(height: 12),
-          Divider(color: Colors.white.withOpacity(0.06)),
-          const SizedBox(height: 12),
-
-          // ── Title Style section ──
+          // ══════════════════════════════════════
+          // ── TITLE STYLE (fully independent) ──
+          // ══════════════════════════════════════
           _sectionHeader('Title Style', Icons.title),
           const SizedBox(height: 8),
-          Text('Font',
-              style: TextStyle(
-                  fontSize: 10, color: Colors.white.withOpacity(0.4))),
-          const SizedBox(height: 4),
+          // Font family
           DropdownButton<String>(
             value: _titleFontFamily,
             isExpanded: true,
@@ -1389,11 +1526,19 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               if (v != null) setState(() => _titleFontFamily = v);
             },
           ),
+          // Font size (in 1080p pixels, preview scales down)
           const SizedBox(height: 4),
-          Text('Color',
+          Text('Size: ${_titleFontSize.toInt()}px',
               style: TextStyle(
                   fontSize: 10, color: Colors.white.withOpacity(0.4))),
-          const SizedBox(height: 6),
+          Slider(
+            value: _titleFontSize,
+            min: 24,
+            max: 96,
+            divisions: 18,
+            onChanged: (v) => setState(() => _titleFontSize = v),
+          ),
+          // Color
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -1413,9 +1558,23 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             ],
           ),
           const SizedBox(height: 6),
+          // Shadow toggle
           Row(
             children: [
-              Text('Title Background',
+              Text('Shadow',
+                  style: TextStyle(
+                      fontSize: 11, color: Colors.white.withOpacity(0.5))),
+              const Spacer(),
+              Switch(
+                value: _titleShadow,
+                onChanged: (v) => setState(() => _titleShadow = v),
+              ),
+            ],
+          ),
+          // Background
+          Row(
+            children: [
+              Text('Background',
                   style: TextStyle(
                       fontSize: 11, color: Colors.white.withOpacity(0.5))),
               const Spacer(),
@@ -1444,13 +1603,12 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           Divider(color: Colors.white.withOpacity(0.06)),
           const SizedBox(height: 8),
 
-          // ── Body Style section ──
+          // ══════════════════════════════════════
+          // ── BODY STYLE (fully independent) ──
+          // ══════════════════════════════════════
           _sectionHeader('Body Style', Icons.text_fields),
           const SizedBox(height: 8),
-          Text('Font',
-              style: TextStyle(
-                  fontSize: 10, color: Colors.white.withOpacity(0.4))),
-          const SizedBox(height: 4),
+          // Font family
           DropdownButton<String>(
             value: _bodyFontFamily,
             isExpanded: true,
@@ -1463,11 +1621,19 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               if (v != null) setState(() => _bodyFontFamily = v);
             },
           ),
+          // Font size (in 1080p pixels)
           const SizedBox(height: 4),
-          Text('Color',
+          Text('Size: ${_bodyFontSize.toInt()}px',
               style: TextStyle(
                   fontSize: 10, color: Colors.white.withOpacity(0.4))),
-          const SizedBox(height: 6),
+          Slider(
+            value: _bodyFontSize,
+            min: 20,
+            max: 80,
+            divisions: 15,
+            onChanged: (v) => setState(() => _bodyFontSize = v),
+          ),
+          // Color
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -1487,9 +1653,23 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             ],
           ),
           const SizedBox(height: 6),
+          // Shadow toggle
           Row(
             children: [
-              Text('Body Background',
+              Text('Shadow',
+                  style: TextStyle(
+                      fontSize: 11, color: Colors.white.withOpacity(0.5))),
+              const Spacer(),
+              Switch(
+                value: _bodyShadow,
+                onChanged: (v) => setState(() => _bodyShadow = v),
+              ),
+            ],
+          ),
+          // Background
+          Row(
+            children: [
+              Text('Background',
                   style: TextStyle(
                       fontSize: 11, color: Colors.white.withOpacity(0.5))),
               const Spacer(),
@@ -1516,30 +1696,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             ),
           const SizedBox(height: 8),
 
-          // ── Shared text controls ──
-          Text('Size: ${_fontSize.toInt()}px',
-              style: TextStyle(
-                  fontSize: 10, color: Colors.white.withOpacity(0.4))),
-          Slider(
-            value: _fontSize,
-            min: 20,
-            max: 72,
-            divisions: 26,
-            onChanged: (v) => setState(() => _fontSize = v),
-          ),
-          Row(
-            children: [
-              Text('Text Shadow',
-                  style: TextStyle(
-                      fontSize: 11, color: Colors.white.withOpacity(0.5))),
-              const Spacer(),
-              Switch(
-                value: _hasBorder,
-                onChanged: (v) => setState(() => _hasBorder = v),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
+          // ── Text Box Layout ──
           Text('Text Box Width: ${(_textBoxW * 100).toInt()}%',
               style: TextStyle(
                   fontSize: 10, color: Colors.white.withOpacity(0.4))),
@@ -1560,11 +1717,55 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             divisions: 12,
             onChanged: (v) => setState(() => _textBoxH = v),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           Divider(color: Colors.white.withOpacity(0.06)),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
 
-          // ── Audio / Sound Clips section ──
+          // ══════════════════════════════════════
+          // ── TEXT SLIDESHOW ──
+          // ══════════════════════════════════════
+          _sectionHeader('Text Slides', Icons.slideshow),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Split body into sequential slides',
+                  style: TextStyle(
+                      fontSize: 10, color: Colors.white.withOpacity(0.35)),
+                ),
+              ),
+              Switch(
+                value: _slideshowEnabled,
+                onChanged: (v) => setState(() => _slideshowEnabled = v),
+              ),
+            ],
+          ),
+          if (_slideshowEnabled) ...[
+            Text('Words per slide: $_wordsPerSlide',
+                style: TextStyle(
+                    fontSize: 10, color: Colors.white.withOpacity(0.4))),
+            Slider(
+              value: _wordsPerSlide.toDouble(),
+              min: 5,
+              max: 40,
+              divisions: 7,
+              onChanged: (v) =>
+                  setState(() => _wordsPerSlide = v.toInt()),
+            ),
+            Text(
+              '${_getSlides().length} slides total',
+              style: TextStyle(
+                  fontSize: 10, color: Colors.white.withOpacity(0.3)),
+            ),
+          ],
+          const SizedBox(height: 8),
+          Divider(color: Colors.white.withOpacity(0.06)),
+          const SizedBox(height: 8),
+
+          // ══════════════════════════════════════
+          // ── AUDIO / SOUND CLIPS ──
+          // ══════════════════════════════════════
           _sectionHeader('Audio', Icons.music_note),
           const SizedBox(height: 8),
           if (_bgMusicPath != null) ...[
@@ -1612,13 +1813,42 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               divisions: 20,
               onChanged: (v) => setState(() => _bgMusicVolume = v),
             ),
-          ] else
+          ] else ...[
+            // Royalty-free audio presets
+            Text('Royalty-Free',
+                style: TextStyle(
+                    fontSize: 10, color: Colors.white.withOpacity(0.35))),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: _royaltyFreeAudio.map((audio) {
+                return ActionChip(
+                  label: Text(audio['label']!,
+                      style: const TextStyle(fontSize: 9)),
+                  onPressed: () {
+                    setState(() {
+                      _bgMusicPath = audio['path'];
+                      _bgMusicLabel = audio['label'];
+                    });
+                  },
+                  avatar: const Icon(Icons.music_note, size: 10),
+                  backgroundColor:
+                      const Color(0xFF6C5CE7).withOpacity(0.08),
+                  side: BorderSide(
+                      color: const Color(0xFF6C5CE7).withOpacity(0.15)),
+                  visualDensity: VisualDensity.compact,
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
+            // Custom audio import
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: _pickAudioFile,
-                icon: const Icon(Icons.add, size: 14),
-                label: const Text('Add Background Audio',
+                icon: const Icon(Icons.folder_open, size: 14),
+                label: const Text('Import Your Own Audio',
                     style: TextStyle(fontSize: 11)),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.white60,
@@ -1628,6 +1858,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                 ),
               ),
             ),
+          ],
           const SizedBox(height: 12),
           Divider(color: Colors.white.withOpacity(0.06)),
           const SizedBox(height: 12),
@@ -1647,9 +1878,53 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Tap to add/remove. Multiple clips cycle during the video.',
+            'Auto-searched from AI keywords. Tap to add/remove.',
             style: TextStyle(
                 fontSize: 9, color: Colors.white.withOpacity(0.25)),
+          ),
+          const SizedBox(height: 6),
+          // ── Manual search bar ──
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _bgSearchController,
+                  decoration: InputDecoration(
+                    hintText: 'Search videos...',
+                    hintStyle: TextStyle(
+                        fontSize: 11, color: Colors.white.withOpacity(0.2)),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 8),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide:
+                            BorderSide(color: Colors.white.withOpacity(0.1))),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide:
+                            BorderSide(color: Colors.white.withOpacity(0.08))),
+                  ),
+                  style: const TextStyle(fontSize: 11),
+                  onSubmitted: (v) {
+                    if (v.trim().isNotEmpty) _searchBackgrounds(v.trim());
+                  },
+                ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.search, size: 16),
+                onPressed: () {
+                  final q = _bgSearchController.text.trim();
+                  if (q.isNotEmpty) _searchBackgrounds(q);
+                },
+                style: IconButton.styleFrom(
+                  foregroundColor: Colors.white54,
+                  padding: EdgeInsets.zero,
+                  minimumSize: const Size(32, 32),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           if (_bgResults.isEmpty && !_isSearchingBg)
@@ -1658,8 +1933,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Text(
                   _visualKeywords.isEmpty
-                      ? 'No keywords available'
-                      : 'Searching for backgrounds...',
+                      ? 'Search for background videos above'
+                      : 'No results yet',
                   style: TextStyle(
                       fontSize: 11, color: Colors.white.withOpacity(0.2)),
                 ),
@@ -1937,25 +2212,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                 fontWeight: FontWeight.w700,
                 color: Colors.white.withOpacity(0.5))),
       ],
-    );
-  }
-
-  Widget _colorDot(int hex) {
-    final isSelected = hex == _colorHex;
-    return GestureDetector(
-      onTap: () => setState(() => _colorHex = hex),
-      child: Container(
-        width: 28,
-        height: 28,
-        decoration: BoxDecoration(
-          color: Color(hex),
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: isSelected ? Colors.white : Colors.white24,
-            width: isSelected ? 3 : 1,
-          ),
-        ),
-      ),
     );
   }
 

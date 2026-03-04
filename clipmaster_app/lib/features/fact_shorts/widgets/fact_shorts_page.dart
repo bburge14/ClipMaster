@@ -19,7 +19,7 @@ const _categories = ['Space', 'History', 'Science', 'Technology', 'Nature'];
 
 /// Resolve a font family name to a Google Fonts TextStyle.
 TextStyle _googleFont(String family, {double? fontSize, FontWeight? fontWeight,
-    Color? color, List<Shadow>? shadows, double? height}) {
+    FontStyle? fontStyle, Color? color, List<Shadow>? shadows, double? height}) {
   final getter = <String, TextStyle Function({
     TextStyle? textStyle, Color? color, Color? backgroundColor,
     double? fontSize, FontWeight? fontWeight, FontStyle? fontStyle,
@@ -40,6 +40,7 @@ TextStyle _googleFont(String family, {double? fontSize, FontWeight? fontWeight,
   return fn(
     fontSize: fontSize,
     fontWeight: fontWeight,
+    fontStyle: fontStyle,
     color: color,
     shadows: shadows,
     height: height,
@@ -115,16 +116,27 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   double _titleFontSize = 48; // in 1080p pixels
   int _titleColorHex = 0xFFFFFFFF;
   bool _titleShadow = true;
+  bool _titleBold = false;
+  bool _titleItalic = false;
+  String _titleAlign = 'center'; // left, center, right
   bool _titleBgEnabled = false;
-  int _titleBgColorHex = 0x80000000;
+  int _titleBgColorHex = 0xFF000000; // solid color (RGB)
+  double _titleBgOpacity = 0.5;      // separate opacity slider
 
   // ── BODY styling (fully independent) ──
   String _bodyFontFamily = 'Inter';
   double _bodyFontSize = 40; // in 1080p pixels
   int _bodyColorHex = 0xFFFFFFFF;
   bool _bodyShadow = true;
+  bool _bodyBold = false;
+  bool _bodyItalic = false;
+  String _bodyAlign = 'center'; // left, center, right
   bool _bodyBgEnabled = false;
-  int _bodyBgColorHex = 0x80000000;
+  int _bodyBgColorHex = 0xFF000000; // solid color (RGB)
+  double _bodyBgOpacity = 0.5;      // separate opacity slider
+
+  // Preview mode toggle
+  bool _livePreviewMode = false;
 
   // Title position (draggable independently)
   double _titlePosX = 0.5;
@@ -173,10 +185,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         '@${a.toStringAsFixed(2)}';
   }
 
-  /// setState + trigger preview clip refresh.
+  /// Combine a solid color hex with a separate opacity value.
+  static int _bgWithOpacity(int colorHex, double opacity) {
+    return ((opacity * 255).round() << 24) | (colorHex & 0x00FFFFFF);
+  }
+
+  /// setState + refresh. Only triggers FFmpeg clip if in live preview mode.
   void _setStyleAndRefresh(VoidCallback fn) {
     setState(fn);
-    _requestPreviewClip();
+    if (_livePreviewMode) _requestPreviewClip();
   }
 
   @override
@@ -525,6 +542,54 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   Future<void> _renderShort() async {
     if (_composerScript.isEmpty) return;
 
+    // Ask user for video name before rendering
+    final nameController = TextEditingController(
+      text: _composerTitle.isNotEmpty
+          ? _composerTitle.replaceAll(RegExp(r'[^\w\s-]'), '').trim()
+          : 'Untitled Short',
+    );
+    final videoName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: const Text('Name Your Video',
+            style: TextStyle(color: Colors.white, fontSize: 16)),
+        content: TextField(
+          controller: nameController,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Enter video name...',
+            hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+            enabledBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Colors.white.withOpacity(0.2)),
+            ),
+            focusedBorder: const UnderlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFF6C5CE7)),
+            ),
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel',
+                style: TextStyle(color: Colors.white.withOpacity(0.5))),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, nameController.text),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF6C5CE7),
+            ),
+            child: const Text('Render'),
+          ),
+        ],
+      ),
+    );
+    nameController.dispose();
+    if (videoName == null || videoName.trim().isEmpty) return;
+    final safeVideoName = videoName.trim().replaceAll(RegExp(r'[^\w\s-]'), '');
+
     final apiKeyService = ref.read(apiKeyServiceProvider);
     final openaiKey = apiKeyService.getNextKey(LlmProvider.openai);
     if (openaiKey == null) {
@@ -557,6 +622,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         'api_key': openaiKey,
         'voice': _selectedVoice.name,
         'output_dir': shortsDir.path,
+        'output_name': safeVideoName,
         'visual_keywords': _visualKeywords,
         // Send actual pixel font sizes directly (no re-computation in server)
         'title_font_size_px': _titleFontSize.toInt(),
@@ -567,6 +633,12 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         'body_color': toFfmpegHex(_bodyColorHex),
         'title_shadow': _titleShadow,
         'body_shadow': _bodyShadow,
+        'title_bold': _titleBold,
+        'title_italic': _titleItalic,
+        'body_bold': _bodyBold,
+        'body_italic': _bodyItalic,
+        'title_align': _titleAlign,
+        'body_align': _bodyAlign,
         'title_pos_x': _titlePosX,
         'title_pos_y': _titlePosY,
         'text_pos_y': _textPosY,
@@ -575,9 +647,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         'text_box_h': _textBoxH,
         // Text box backgrounds
         'title_bg_enabled': _titleBgEnabled,
-        'title_bg_color': toFfmpegBgColor(_titleBgColorHex),
+        'title_bg_color': toFfmpegBgColor(_bgWithOpacity(_titleBgColorHex, _titleBgOpacity)),
         'body_bg_enabled': _bodyBgEnabled,
-        'body_bg_color': toFfmpegBgColor(_bodyBgColorHex),
+        'body_bg_color': toFfmpegBgColor(_bgWithOpacity(_bodyBgColorHex, _bodyBgOpacity)),
         // Category badge
         'category_label': _selectedCategory,
         // Slideshow mode
@@ -1179,7 +1251,38 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      Expanded(child: Center(child: _buildPhonePreview())),
+                      Expanded(
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(child: _buildPhonePreview()),
+                              const SizedBox(height: 6),
+                              TextButton.icon(
+                                onPressed: () {
+                                  if (!_livePreviewMode) _requestPreviewClip();
+                                  setState(() => _livePreviewMode = !_livePreviewMode);
+                                },
+                                icon: Icon(
+                                  _livePreviewMode ? Icons.edit : Icons.play_circle,
+                                  size: 14,
+                                ),
+                                label: Text(
+                                  _livePreviewMode ? 'Edit Mode' : 'Live Preview',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: _livePreviewMode
+                                      ? const Color(0xFF6C5CE7)
+                                      : Colors.white54,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 4),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -1242,18 +1345,38 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               builder: (context, constraints) {
                 final frameW = constraints.maxWidth;
                 final frameH = constraints.maxHeight;
-                // Text box pixel dimensions (for drag handles only)
+                // Text box pixel dimensions (for drag handles)
                 final boxW = _textBoxW * frameW;
                 final boxH = _textBoxH * frameH;
                 final boxLeft = (_textPosX * frameW) - (boxW / 2);
                 final boxTop = (_textPosY * frameH) - (boxH / 2);
 
+                // Scale factor for edit mode text (270×480 vs 1080×1920)
+                const double scale = 0.25;
+                final previewTitleSize = (_titleFontSize * scale).clamp(8.0, 30.0);
+                final previewBodySize = (_bodyFontSize * scale).clamp(6.0, 20.0);
+
+                // Body text (slideshow-aware)
+                String bodyText;
+                if (_slideshowEnabled) {
+                  final slides = _getSlides();
+                  final idx = (_scrubPosition * slides.length).floor().clamp(0, slides.length - 1);
+                  bodyText = slides.isNotEmpty ? slides[idx] : _composerScript;
+                } else {
+                  bodyText = _composerScript;
+                }
+
+                // Alignment for edit mode
+                TextAlign titleTextAlign = _titleAlign == 'left' ? TextAlign.left
+                    : _titleAlign == 'right' ? TextAlign.right : TextAlign.center;
+                TextAlign bodyTextAlign = _bodyAlign == 'left' ? TextAlign.left
+                    : _bodyAlign == 'right' ? TextAlign.right : TextAlign.center;
+
                 return Stack(
                   fit: StackFit.expand,
                   children: [
-                    // ── Layer 1: Video player ──
-                    // Priority: preview clip (FFmpeg-rendered with text) > raw bg > gradient
-                    if (_previewController != null)
+                    // ── Layer 1: Video ──
+                    if (_livePreviewMode && _previewController != null)
                       Video(
                         controller: _previewController!,
                         controls: NoVideoControls,
@@ -1276,8 +1399,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
 
+                    // ── Edit mode: dark overlay + styled text ──
+                    if (!_livePreviewMode) ...[
+                      Container(color: Colors.black.withOpacity(0.3)),
+                    ],
+
                     // ── Loading indicator for preview clip ──
-                    if (_previewClipLoading)
+                    if (_livePreviewMode && _previewClipLoading)
                       Positioned(
                         top: 4, right: 4,
                         child: Container(
@@ -1296,12 +1424,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
 
-                    // ── Transparent drag zone for title ──
+                    // ── Title drag zone ──
                     Positioned(
                       top: (_titlePosY * frameH).clamp(0, frameH - 30),
                       left: ((_titlePosX - 0.44) * frameW).clamp(0, frameW * 0.12),
                       right: ((1.0 - _titlePosX - 0.44) * frameW).clamp(0, frameW * 0.12),
                       child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
                         onPanUpdate: (details) {
                           setState(() {
                             _titlePosX = (_titlePosX + details.delta.dx / frameW)
@@ -1310,21 +1439,53 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                 .clamp(0.02, 0.5);
                           });
                         },
-                        onPanEnd: (_) => _requestPreviewClip(),
-                        child: Container(
-                          height: 30,
-                          color: Colors.transparent,
-                        ),
+                        onPanEnd: (_) {
+                          if (_livePreviewMode) _requestPreviewClip();
+                        },
+                        child: _livePreviewMode
+                          ? Container(height: 30, color: Colors.transparent)
+                          : Container(
+                              padding: _titleBgEnabled
+                                  ? const EdgeInsets.symmetric(horizontal: 8, vertical: 4)
+                                  : EdgeInsets.zero,
+                              decoration: BoxDecoration(
+                                color: _titleBgEnabled
+                                    ? Color(_bgWithOpacity(_titleBgColorHex, _titleBgOpacity))
+                                    : null,
+                                border: Border.all(color: const Color(0xFFFFD700).withOpacity(0.4), width: 1),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                _composerTitle,
+                                textAlign: titleTextAlign,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: _googleFont(
+                                  _titleFontFamily,
+                                  fontSize: previewTitleSize,
+                                  fontWeight: _titleBold ? FontWeight.w800 : FontWeight.w600,
+                                  fontStyle: _titleItalic ? FontStyle.italic : null,
+                                  color: Color(_titleColorHex),
+                                  shadows: _titleShadow
+                                      ? [
+                                          const Shadow(color: Colors.black, blurRadius: 6),
+                                          const Shadow(color: Colors.black, blurRadius: 12),
+                                        ]
+                                      : null,
+                                ),
+                              ),
+                            ),
                       ),
                     ),
 
-                    // ── Transparent drag zone for body ──
+                    // ── Body text drag zone ──
                     Positioned(
                       left: boxLeft.clamp(0, frameW - boxW),
                       top: boxTop.clamp(0, frameH - boxH),
                       width: boxW,
                       height: boxH,
                       child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
                         onPanUpdate: (details) {
                           setState(() {
                             _textPosX = (_textPosX + details.delta.dx / frameW)
@@ -1333,10 +1494,37 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                 .clamp(0.1, 0.92);
                           });
                         },
-                        onPanEnd: (_) => _requestPreviewClip(),
-                        child: Container(
-                          color: Colors.transparent,
-                        ),
+                        onPanEnd: (_) {
+                          if (_livePreviewMode) _requestPreviewClip();
+                        },
+                        child: _livePreviewMode
+                          ? Container(color: Colors.transparent)
+                          : Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: BoxDecoration(
+                                color: _bodyBgEnabled
+                                    ? Color(_bgWithOpacity(_bodyBgColorHex, _bodyBgOpacity))
+                                    : null,
+                                border: Border.all(color: const Color(0xFF6C5CE7).withOpacity(0.5), width: 1.5),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                _wrapText(bodyText, boxW - 12, previewBodySize),
+                                textAlign: bodyTextAlign,
+                                overflow: TextOverflow.clip,
+                                style: _googleFont(
+                                  _bodyFontFamily,
+                                  fontSize: previewBodySize,
+                                  fontWeight: _bodyBold ? FontWeight.w600 : FontWeight.w400,
+                                  fontStyle: _bodyItalic ? FontStyle.italic : null,
+                                  color: Color(_bodyColorHex),
+                                  height: 1.4,
+                                  shadows: _bodyShadow
+                                      ? [const Shadow(color: Colors.black, blurRadius: 4)]
+                                      : null,
+                                ),
+                              ),
+                            ),
                       ),
                     ),
 
@@ -1353,7 +1541,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                 .clamp(0.1, 0.7);
                           });
                         },
-                        onPanEnd: (_) => _requestPreviewClip(),
+                        onPanEnd: (_) {
+                          if (_livePreviewMode) _requestPreviewClip();
+                        },
                         child: Container(
                           width: 16,
                           height: 16,
@@ -1400,13 +1590,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       ),
 
                     // ── Play / Pause toggle ──
-                    if (_previewPlayer != null || _bgPlayer != null)
+                    if (_bgPlayer != null || _previewPlayer != null)
                       Positioned(
                         bottom: 8,
                         left: 8,
                         child: GestureDetector(
                           onTap: () {
-                            final player = _previewPlayer ?? _bgPlayer;
+                            final player = _livePreviewMode
+                                ? (_previewPlayer ?? _bgPlayer)
+                                : _bgPlayer;
                             if (player == null) return;
                             if (_bgPlaying) {
                               player.pause();
@@ -1444,7 +1636,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       ),
                     ),
 
-                    // ── Preview status badge ──
+                    // ── Mode badge ──
                     Positioned(
                       top: 4, left: 4,
                       child: Container(
@@ -1454,13 +1646,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          _previewController != null ? 'Live' : 'No preview',
+                          _livePreviewMode ? 'Live Preview' : 'Edit Mode',
                           style: TextStyle(
                             fontSize: 8,
                             fontWeight: FontWeight.w600,
-                            color: _previewController != null
+                            color: _livePreviewMode
                                 ? const Color(0xFF00E676)
-                                : Colors.white54,
+                                : const Color(0xFF6C5CE7),
                           ),
                         ),
                       ),
@@ -1528,6 +1720,12 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               'body_color': toFfmpegHex(_bodyColorHex),
               'title_shadow': _titleShadow,
               'body_shadow': _bodyShadow,
+              'title_bold': _titleBold,
+              'title_italic': _titleItalic,
+              'body_bold': _bodyBold,
+              'body_italic': _bodyItalic,
+              'title_align': _titleAlign,
+              'body_align': _bodyAlign,
               'title_pos_x': _titlePosX,
               'title_pos_y': _titlePosY,
               'text_pos_x': _textPosX,
@@ -1535,9 +1733,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               'text_box_w': _textBoxW,
               'text_box_h': _textBoxH,
               'title_bg_enabled': _titleBgEnabled,
-              'title_bg_color': toFfmpegBgColor(_titleBgColorHex),
+              'title_bg_color': toFfmpegBgColor(_bgWithOpacity(_titleBgColorHex, _titleBgOpacity)),
               'body_bg_enabled': _bodyBgEnabled,
-              'body_bg_color': toFfmpegBgColor(_bodyBgColorHex),
+              'body_bg_color': toFfmpegBgColor(_bgWithOpacity(_bodyBgColorHex, _bodyBgOpacity)),
               'category_label': _selectedCategory,
               'slideshow_enabled': _slideshowEnabled,
               'words_per_slide': _wordsPerSlide,
@@ -1744,6 +1942,25 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               if (v != null) _setStyleAndRefresh(() => _titleFontFamily = v);
             },
           ),
+          // Bold / Italic / Alignment
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              _formatToggle('B', _titleBold,
+                  (v) => _setStyleAndRefresh(() => _titleBold = v)),
+              const SizedBox(width: 6),
+              _formatToggle('I', _titleItalic,
+                  (v) => _setStyleAndRefresh(() => _titleItalic = v),
+                  italic: true),
+              const SizedBox(width: 12),
+              _alignButton(Icons.format_align_left, 'left', _titleAlign,
+                  (v) => _setStyleAndRefresh(() => _titleAlign = v)),
+              _alignButton(Icons.format_align_center, 'center', _titleAlign,
+                  (v) => _setStyleAndRefresh(() => _titleAlign = v)),
+              _alignButton(Icons.format_align_right, 'right', _titleAlign,
+                  (v) => _setStyleAndRefresh(() => _titleAlign = v)),
+            ],
+          ),
           // Font size (in 1080p pixels, preview scales down)
           const SizedBox(height: 4),
           Text('Size: ${_titleFontSize.toInt()}px',
@@ -1802,21 +2019,33 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               ),
             ],
           ),
-          if (_titleBgEnabled)
+          if (_titleBgEnabled) ...[
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                _colorDotFor(0x80000000, _titleBgColorHex,
+                _colorDotFor(0xFF000000, _titleBgColorHex,
                     (c) => _setStyleAndRefresh(() => _titleBgColorHex = c)),
-                _colorDotFor(0x806C5CE7, _titleBgColorHex,
+                _colorDotFor(0xFF6C5CE7, _titleBgColorHex,
                     (c) => _setStyleAndRefresh(() => _titleBgColorHex = c)),
-                _colorDotFor(0x80FF5252, _titleBgColorHex,
+                _colorDotFor(0xFFFF5252, _titleBgColorHex,
                     (c) => _setStyleAndRefresh(() => _titleBgColorHex = c)),
-                _colorDotFor(0x801A1A2E, _titleBgColorHex,
+                _colorDotFor(0xFF1A1A2E, _titleBgColorHex,
                     (c) => _setStyleAndRefresh(() => _titleBgColorHex = c)),
               ],
             ),
+            const SizedBox(height: 4),
+            Text('Opacity: ${(_titleBgOpacity * 100).toInt()}%',
+                style: TextStyle(
+                    fontSize: 10, color: Colors.white.withOpacity(0.4))),
+            Slider(
+              value: _titleBgOpacity,
+              min: 0.05,
+              max: 1.0,
+              divisions: 19,
+              onChanged: (v) => _setStyleAndRefresh(() => _titleBgOpacity = v),
+            ),
+          ],
           const SizedBox(height: 8),
           Divider(color: Colors.white.withOpacity(0.06)),
           const SizedBox(height: 8),
@@ -1838,6 +2067,25 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             onChanged: (v) {
               if (v != null) _setStyleAndRefresh(() => _bodyFontFamily = v);
             },
+          ),
+          // Bold / Italic / Alignment
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              _formatToggle('B', _bodyBold,
+                  (v) => _setStyleAndRefresh(() => _bodyBold = v)),
+              const SizedBox(width: 6),
+              _formatToggle('I', _bodyItalic,
+                  (v) => _setStyleAndRefresh(() => _bodyItalic = v),
+                  italic: true),
+              const SizedBox(width: 12),
+              _alignButton(Icons.format_align_left, 'left', _bodyAlign,
+                  (v) => _setStyleAndRefresh(() => _bodyAlign = v)),
+              _alignButton(Icons.format_align_center, 'center', _bodyAlign,
+                  (v) => _setStyleAndRefresh(() => _bodyAlign = v)),
+              _alignButton(Icons.format_align_right, 'right', _bodyAlign,
+                  (v) => _setStyleAndRefresh(() => _bodyAlign = v)),
+            ],
           ),
           // Font size (in 1080p pixels)
           const SizedBox(height: 4),
@@ -1897,21 +2145,33 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               ),
             ],
           ),
-          if (_bodyBgEnabled)
+          if (_bodyBgEnabled) ...[
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                _colorDotFor(0x80000000, _bodyBgColorHex,
+                _colorDotFor(0xFF000000, _bodyBgColorHex,
                     (c) => _setStyleAndRefresh(() => _bodyBgColorHex = c)),
-                _colorDotFor(0x806C5CE7, _bodyBgColorHex,
+                _colorDotFor(0xFF6C5CE7, _bodyBgColorHex,
                     (c) => _setStyleAndRefresh(() => _bodyBgColorHex = c)),
-                _colorDotFor(0x80FF5252, _bodyBgColorHex,
+                _colorDotFor(0xFFFF5252, _bodyBgColorHex,
                     (c) => _setStyleAndRefresh(() => _bodyBgColorHex = c)),
-                _colorDotFor(0x801A1A2E, _bodyBgColorHex,
+                _colorDotFor(0xFF1A1A2E, _bodyBgColorHex,
                     (c) => _setStyleAndRefresh(() => _bodyBgColorHex = c)),
               ],
             ),
+            const SizedBox(height: 4),
+            Text('Opacity: ${(_bodyBgOpacity * 100).toInt()}%',
+                style: TextStyle(
+                    fontSize: 10, color: Colors.white.withOpacity(0.4))),
+            Slider(
+              value: _bodyBgOpacity,
+              min: 0.05,
+              max: 1.0,
+              divisions: 19,
+              onChanged: (v) => _setStyleAndRefresh(() => _bodyBgOpacity = v),
+            ),
+          ],
           const SizedBox(height: 8),
 
           // ── Text Box Layout ──
@@ -2434,6 +2694,53 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   }
 
   /// Generic color dot that works with any state variable.
+  Widget _formatToggle(String label, bool active, ValueChanged<bool> onChanged,
+      {bool italic = false}) {
+    return GestureDetector(
+      onTap: () => onChanged(!active),
+      child: Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF6C5CE7) : Colors.white.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: active ? Colors.white38 : Colors.white12,
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: label == 'B' ? FontWeight.w800 : FontWeight.w400,
+            fontStyle: italic ? FontStyle.italic : FontStyle.normal,
+            color: active ? Colors.white : Colors.white54,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _alignButton(IconData icon, String value, String current,
+      ValueChanged<String> onChanged) {
+    final active = value == current;
+    return GestureDetector(
+      onTap: () => onChanged(value),
+      child: Container(
+        width: 28,
+        height: 28,
+        margin: const EdgeInsets.only(right: 2),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF6C5CE7).withOpacity(0.4) : Colors.transparent,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Icon(icon, size: 16,
+            color: active ? Colors.white : Colors.white38),
+      ),
+    );
+  }
+
   Widget _colorDotFor(int hex, int currentHex, ValueChanged<int> onSelect) {
     final isSelected = hex == currentHex;
     return GestureDetector(

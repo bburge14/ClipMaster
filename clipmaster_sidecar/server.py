@@ -596,6 +596,8 @@ async def _handle_create_short(
 
     safe_name = re.sub(r"[^\w\s-]", "", title[:40]).strip().replace(" ", "_")
     output_path = os.path.join(output_dir, f"short_{safe_name}.mp4")
+    # FFmpeg works best with forward slashes, even on Windows
+    output_path = output_path.replace("\\", "/")
 
     # Write text to temp files to avoid FFmpeg escaping nightmares
     title_file = os.path.join(tempfile.gettempdir(), "clipmaster_title.txt")
@@ -681,6 +683,10 @@ async def _handle_create_short(
             output_path,
         ]
 
+    # Log filter string separately for debugging
+    vf_idx = cmd.index("-vf") if "-vf" in cmd else -1
+    if vf_idx >= 0 and vf_idx + 1 < len(cmd):
+        logger.info("FFmpeg -vf filter: %s", cmd[vf_idx + 1])
     logger.info("FFmpeg command: %s", " ".join(cmd))
     await _send(ws, IpcMessage.progress(msg.id, "Encoding video", 65))
 
@@ -726,18 +732,14 @@ def _find_ffmpeg() -> str | None:
 def _escape_ffmpeg_path(path: str) -> str:
     """Escape a file path for use inside FFmpeg filter option values.
 
-    FFmpeg drawtext filter treats colons, semicolons, backslashes, and
-    single-quotes as special.  We must also wrap or escape spaces so that
-    the filter-graph parser doesn't split on them.
+    Wraps the path in single quotes so FFmpeg's filter parser treats it
+    as a literal value — no need to individually escape colons, spaces, etc.
     """
     # Use forward slashes (works on all platforms in FFmpeg)
     path = path.replace("\\", "/")
-    # Escape colons (Windows drive letters like C:) and special chars
-    path = path.replace(":", "\\:")
-    path = path.replace("'", "\\'")
-    # Escape spaces — FFmpeg filter parser splits on unescaped spaces
-    path = path.replace(" ", "\\ ")
-    return path
+    # Escape any existing single quotes inside the path
+    path = path.replace("'", "'\\''")
+    return f"'{path}'"
 
 
 def _wrap_text(text: str, max_chars: int = 35) -> str:
@@ -800,8 +802,11 @@ def _find_font() -> str | None:
                 if matches:
                     # Prefer regular weight (not Bold/Italic)
                     regular = [m for m in matches
-                               if "Bold" not in m and "Italic" not in m
-                               and "bold" not in m and "italic" not in m]
+                               if "Bold" not in os.path.basename(m)
+                               and "Italic" not in os.path.basename(m)
+                               and "bold" not in os.path.basename(m)
+                               and "italic" not in os.path.basename(m)
+                               and not os.path.basename(m).lower().endswith(("i.ttf", "i.otf", "b.ttf", "b.otf", "bi.ttf", "bi.otf", "z.ttf", "z.otf"))]
                     best = regular[0] if regular else matches[0]
                     logger.info("Using font: %s", best)
                     return best

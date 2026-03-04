@@ -473,7 +473,10 @@ async def _handle_create_short(
     font_color = msg.payload.get("font_color", "white")
     title_pos_y = float(msg.payload.get("title_pos_y", 0.08))
     text_pos_y = float(msg.payload.get("text_pos_y", 0.75))
+    text_box_w = float(msg.payload.get("text_box_w", 0.85))
     text_shadow = bool(msg.payload.get("text_shadow", True))
+    # Multiple background URLs (cycle) or single fallback
+    background_video_urls = msg.payload.get("background_video_urls", [])
     background_video_url = msg.payload.get("background_video_url", "")
 
     if not text:
@@ -513,42 +516,83 @@ async def _handle_create_short(
     if duration <= 0:
         duration = max(duration_est, 5.0)
 
-    # Step 2: Get background video — use user-selected URL or search
+    # Step 2: Get background video(s) — download user-selected clips or search
     await _send(ws, IpcMessage.progress(msg.id, "Getting background footage", 30))
-    bg_video_path = None
+    bg_video_paths: list[str] = []
 
-    bg_url = background_video_url
-    if not bg_url and visual_keywords and (pexels_key or pixabay_key):
+    # Collect all background URLs
+    bg_urls = [u for u in background_video_urls if u]
+    if not bg_urls and background_video_url:
+        bg_urls = [background_video_url]
+    if not bg_urls and visual_keywords and (pexels_key or pixabay_key):
         for kw in visual_keywords[:3]:
             clips = await stock_footage.search(
                 kw, pexels_key=pexels_key, pixabay_key=pixabay_key, per_source=1,
             )
             if clips:
-                bg_url = clips[0].get("download_url", "")
-                if bg_url:
+                url = clips[0].get("download_url", "")
+                if url:
+                    bg_urls.append(url)
                     break
 
-    if bg_url:
-        try:
-            import httpx
-            async with httpx.AsyncClient(
-                timeout=60.0, follow_redirects=True,
-            ) as client:
-                resp = await client.get(bg_url)
-                resp.raise_for_status()
-                bg_path = os.path.join(
-                    tempfile.gettempdir(),
-                    "clipmaster_bg_selected.mp4",
-                )
-                with open(bg_path, "wb") as f:
-                    f.write(resp.content)
-                bg_video_path = bg_path
-                logger.info("Downloaded background video: %d bytes", len(resp.content))
-        except Exception as exc:
-            logger.warning("Failed to download stock clip from %s: %s", bg_url, exc)
+    # Download each background clip
+    if bg_urls:
+        import httpx
+        async with httpx.AsyncClient(
+            timeout=60.0, follow_redirects=True,
+        ) as client:
+            for i, bg_url in enumerate(bg_urls):
+                try:
+                    resp = await client.get(bg_url)
+                    resp.raise_for_status()
+                    bg_path = os.path.join(
+                        tempfile.gettempdir(),
+                        f"clipmaster_bg_{i}.mp4",
+                    )
+                    with open(bg_path, "wb") as f:
+                        f.write(resp.content)
+                    bg_video_paths.append(bg_path)
+                    logger.info("Downloaded bg %d: %d bytes", i, len(resp.content))
+                except Exception as exc:
+                    logger.warning("Failed to download bg %d from %s: %s", i, bg_url, exc)
 
-    # Step 3: Build the video
+    # Step 3: If multiple backgrounds, concat them into a single looping bg
     await _send(ws, IpcMessage.progress(msg.id, "Rendering video", 50))
+    bg_video_path = None
+    if len(bg_video_paths) > 1:
+        # Create concat file and merge clips into one background
+        concat_file = os.path.join(tempfile.gettempdir(), "clipmaster_concat.txt")
+        concat_out = os.path.join(tempfile.gettempdir(), "clipmaster_bg_concat.mp4")
+        # Each clip gets equal share of duration, loop through all
+        with open(concat_file, "w") as cf:
+            for bp in bg_video_paths:
+                cf.write(f"file '{bp}'\n")
+        await _send(ws, IpcMessage.progress(msg.id, "Combining backgrounds", 55))
+        concat_cmd = [
+            ffmpeg, "-y",
+            "-f", "concat", "-safe", "0", "-i", concat_file,
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-t", str(duration),
+            "-an",
+            "-pix_fmt", "yuv420p",
+            concat_out,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *concat_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode == 0 and os.path.isfile(concat_out):
+            bg_video_path = concat_out
+            logger.info("Concatenated %d backgrounds", len(bg_video_paths))
+        else:
+            logger.warning("Concat failed, using first bg: %s",
+                           stderr.decode("utf-8", errors="replace")[:200])
+            bg_video_path = bg_video_paths[0]
+    elif len(bg_video_paths) == 1:
+        bg_video_path = bg_video_paths[0]
 
     safe_name = re.sub(r"[^\w\s-]", "", title[:40]).strip().replace(" ", "_")
     output_path = os.path.join(output_dir, f"short_{safe_name}.mp4")
@@ -557,8 +601,9 @@ async def _handle_create_short(
     title_file = os.path.join(tempfile.gettempdir(), "clipmaster_title.txt")
     body_file = os.path.join(tempfile.gettempdir(), "clipmaster_body.txt")
 
-    # Word-wrap body text (~35 chars per line for 1080px width)
-    wrapped_body = _wrap_text(text, 35)
+    # Word-wrap body text based on text box width
+    chars_per_line = int(35 * text_box_w / 0.85)  # scale with box width
+    wrapped_body = _wrap_text(text, max(20, chars_per_line))
     with open(title_file, "w", encoding="utf-8") as f:
         f.write(title)
     with open(body_file, "w", encoding="utf-8") as f:
@@ -594,18 +639,22 @@ async def _handle_create_short(
     )
 
     if bg_video_path and os.path.isfile(bg_video_path):
-        # Stock footage background → scale to 9:16, add dark overlay + text
+        # Stock footage background (single or concat) + dark overlay + text
+        vf_parts = []
+        # Only scale/crop if not already done by concat
+        if len(bg_video_paths) <= 1:
+            vf_parts.append(
+                "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+            )
+        vf_parts.append("drawbox=x=0:y=0:w=iw:h=ih:color=black@0.3:t=fill")
+        vf_parts.append(drawtext_title)
+        vf_parts.append(drawtext_body)
+
         cmd = [
             ffmpeg, "-y",
             "-stream_loop", "-1", "-i", bg_video_path,
             "-i", audio_path,
-            "-vf", (
-                f"scale=1080:1920:force_original_aspect_ratio=increase,"
-                f"crop=1080:1920,"
-                f"drawbox=x=0:y=0:w=iw:h=ih:color=black@0.3:t=fill,"
-                f"{drawtext_title},"
-                f"{drawtext_body}"
-            ),
+            "-vf", ",".join(vf_parts),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "192k",
             "-t", str(duration),
@@ -654,6 +703,7 @@ async def _handle_create_short(
         "audio_path": audio_path,
         "duration": duration,
         "has_stock_footage": bg_video_path is not None,
+        "background_count": len(bg_video_paths),
     }))
 
 

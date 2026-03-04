@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
@@ -13,6 +14,35 @@ import '../../../core/services/api_key_service.dart';
 import '../../../core/services/project_state.dart';
 
 const _categories = ['Space', 'History', 'Science', 'Technology', 'Nature'];
+
+/// Resolve a font family name to a Google Fonts TextStyle.
+TextStyle _googleFont(String family, {double? fontSize, FontWeight? fontWeight,
+    Color? color, List<Shadow>? shadows, double? height}) {
+  final getter = <String, TextStyle Function({
+    TextStyle? textStyle, Color? color, Color? backgroundColor,
+    double? fontSize, FontWeight? fontWeight, FontStyle? fontStyle,
+    double? letterSpacing, double? wordSpacing, TextBaseline? textBaseline,
+    double? height, Locale? locale, Paint? foreground, Paint? background,
+    List<Shadow>? shadows, List<FontFeature>? fontFeatures,
+    TextDecoration? decoration, Color? decorationColor,
+    TextDecorationStyle? decorationStyle, double? decorationThickness,
+  })>{
+    'Inter': GoogleFonts.inter,
+    'Roboto': GoogleFonts.roboto,
+    'Montserrat': GoogleFonts.montserrat,
+    'Oswald': GoogleFonts.oswald,
+    'Lato': GoogleFonts.lato,
+    'Poppins': GoogleFonts.poppins,
+  };
+  final fn = getter[family] ?? GoogleFonts.inter;
+  return fn(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    shadows: shadows,
+    height: height,
+  );
+}
 
 class FactShortsPage extends ConsumerStatefulWidget {
   const FactShortsPage({super.key});
@@ -94,7 +124,11 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   bool _bodyBgEnabled = false;
   int _bodyBgColorHex = 0x80000000;
 
-  // Text position + box size
+  // Title position (draggable independently)
+  double _titlePosX = 0.5;
+  double _titlePosY = 0.08;
+
+  // Body text position + box size
   double _textPosX = 0.5;
   double _textPosY = 0.75;
   double _textBoxW = 0.85;
@@ -430,15 +464,22 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
 
     final clip = _selectedBackgrounds[_activeBgIndex];
-    final previewUrl = clip['preview_url'] as String? ?? '';
-    if (previewUrl.isNotEmpty) {
+    // Use download_url for actual video playback, fall back to preview_url
+    final videoUrl = clip['download_url'] as String? ?? '';
+    final fallbackUrl = clip['preview_url'] as String? ?? '';
+    final urlToPlay = videoUrl.isNotEmpty ? videoUrl : fallbackUrl;
+    if (urlToPlay.isNotEmpty) {
       _bgPlayer?.dispose();
       _bgPlayer = Player();
       _bgController = VideoController(_bgPlayer!);
-      _bgPlayer!.open(Media(previewUrl));
+      _bgPlayer!.open(Media(urlToPlay));
       _bgPlayer!.setPlaylistMode(PlaylistMode.loop);
       _bgPlayer!.setVolume(0);
-      setState(() {});
+      // Listen for play state changes
+      _bgPlayer!.stream.playing.listen((playing) {
+        if (mounted) setState(() => _bgPlaying = playing);
+      });
+      setState(() => _bgPlaying = true);
     }
   }
 
@@ -509,7 +550,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         'body_color': toFfmpegHex(_bodyColorHex),
         'title_shadow': _titleShadow,
         'body_shadow': _bodyShadow,
-        'title_pos_y': 0.08,
+        'title_pos_x': _titlePosX,
+        'title_pos_y': _titlePosY,
         'text_pos_y': _textPosY,
         'text_pos_x': _textPosX,
         'text_box_w': _textBoxW,
@@ -609,6 +651,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   //  BUILD UI
   // ════════════════════════════════════════════════════════════════
 
+  // Resizable left panel width
+  double _leftPanelWidth = 300;
+
   @override
   Widget build(BuildContext context) {
     final hasComposer = _selectedFactIndex != null;
@@ -616,22 +661,54 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     return Column(
       children: [
         Expanded(
-          child: Row(
-            children: [
-              // ── Left panel: fact list ──
-              if (hasComposer)
-                SizedBox(
-                  width: 300,
-                  child: _buildFactListPanel(),
-                )
-              else
-                Expanded(child: _buildFactListPanel()),
-              // ── Composer (when fact selected) ──
-              if (hasComposer) ...[
-                Container(width: 1, color: Colors.white.withOpacity(0.06)),
-                Expanded(child: _buildComposer()),
-              ],
-            ],
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final maxLeftW = constraints.maxWidth * 0.45;
+              final leftW = _leftPanelWidth.clamp(220.0, maxLeftW);
+              return Row(
+                children: [
+                  // ── Left panel: fact list ──
+                  if (hasComposer)
+                    SizedBox(
+                      width: leftW,
+                      child: _buildFactListPanel(),
+                    )
+                  else
+                    Expanded(child: _buildFactListPanel()),
+                  // ── Drag handle for left panel ──
+                  if (hasComposer)
+                    GestureDetector(
+                      onHorizontalDragUpdate: (details) {
+                        setState(() {
+                          _leftPanelWidth =
+                              (_leftPanelWidth + details.delta.dx)
+                                  .clamp(220.0, maxLeftW);
+                        });
+                      },
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.resizeColumn,
+                        child: Container(
+                          width: 6,
+                          color: Colors.white.withOpacity(0.04),
+                          child: Center(
+                            child: Container(
+                              width: 2,
+                              height: 32,
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(1),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  // ── Composer (when fact selected) ──
+                  if (hasComposer)
+                    Expanded(child: _buildComposer()),
+                ],
+              );
+            },
           ),
         ),
         // ── Bottom: timeline scrubber (only in composer mode) ──
@@ -1024,72 +1101,107 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   //  CENTER: COMPOSER
   // ────────────────────────────────────────────────────────────────
 
+  // Resizable panel width for the properties panel
+  double _propertiesPanelWidth = 280;
+
   Widget _buildComposer() {
     return Container(
       color: const Color(0xFF0A0A14),
-      child: Row(
-        children: [
-          // ── Center: 9:16 Preview ──
-          Expanded(
-            flex: 3,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  // Title bar
-                  Row(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Clamp the properties panel width
+          final maxPanelW = constraints.maxWidth * 0.5;
+          final panelW = _propertiesPanelWidth.clamp(200.0, maxPanelW);
+
+          return Row(
+            children: [
+              // ── Center: 9:16 Preview ──
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
                     children: [
-                      const Icon(Icons.smart_display,
-                          size: 18, color: Color(0xFF6C5CE7)),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _composerTitle,
-                          style: const TextStyle(
-                              fontSize: 15, fontWeight: FontWeight.w700),
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                      // Title bar
+                      Row(
+                        children: [
+                          const Icon(Icons.smart_display,
+                              size: 18, color: Color(0xFF6C5CE7)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _composerTitle,
+                              style: const TextStyle(
+                                  fontSize: 15, fontWeight: FontWeight.w700),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton.icon(
+                            onPressed: _isRendering ? null : _renderShort,
+                            icon: _isRendering
+                                ? SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white.withOpacity(0.7),
+                                    ),
+                                  )
+                                : const Icon(Icons.bolt, size: 14),
+                            label: Text(
+                              _isRendering
+                                  ? '$_progressStage $_progressPercent%'
+                                  : 'Render',
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 6),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 8),
-                      FilledButton.icon(
-                        onPressed: _isRendering ? null : _renderShort,
-                        icon: _isRendering
-                            ? SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white.withOpacity(0.7),
-                                ),
-                              )
-                            : const Icon(Icons.bolt, size: 14),
-                        label: Text(
-                          _isRendering
-                              ? '$_progressStage $_progressPercent%'
-                              : 'Render',
-                          style: const TextStyle(fontSize: 11),
-                        ),
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 6),
-                        ),
-                      ),
+                      const SizedBox(height: 12),
+                      Expanded(child: Center(child: _buildPhonePreview())),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  // 9:16 phone frame (fixed size — matches 1080×1920 at ¼ scale)
-                  Expanded(child: Center(child: _buildPhonePreview())),
-                ],
+                ),
               ),
-            ),
-          ),
-          Container(width: 1, color: Colors.white.withOpacity(0.06)),
-          // ── Right: Properties panel ──
-          SizedBox(
-            width: 280,
-            child: _buildPropertiesPanel(),
-          ),
-        ],
+              // ── Drag handle to resize properties panel ──
+              GestureDetector(
+                onHorizontalDragUpdate: (details) {
+                  setState(() {
+                    _propertiesPanelWidth =
+                        (_propertiesPanelWidth - details.delta.dx)
+                            .clamp(200.0, maxPanelW);
+                  });
+                },
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.resizeColumn,
+                  child: Container(
+                    width: 6,
+                    color: Colors.white.withOpacity(0.04),
+                    child: Center(
+                      child: Container(
+                        width: 2,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(1),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // ── Right: Properties panel (resizable) ──
+              SizedBox(
+                width: panelW,
+                child: _buildPropertiesPanel(),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1158,44 +1270,58 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                     // Dark overlay for readability
                     Container(color: Colors.black.withOpacity(0.3)),
 
-                    // ── Title text (top area) ──
+                    // ── Title text (DRAGGABLE) ──
                     Positioned(
-                      top: frameH * 0.08,
-                      left: 16,
-                      right: 16,
-                      child: Container(
-                        padding: _titleBgEnabled
-                            ? const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 4)
-                            : EdgeInsets.zero,
-                        decoration: _titleBgEnabled
-                            ? BoxDecoration(
-                                color: Color(_titleBgColorHex),
-                                borderRadius: BorderRadius.circular(4),
-                              )
-                            : null,
-                        child: Text(
-                          _composerTitle,
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontFamily: _titleFontFamily,
-                            fontSize: previewTitleSize,
-                            fontWeight: FontWeight.w800,
-                            color: Color(_titleColorHex),
-                            shadows: _titleShadow
-                                ? const [
-                                    Shadow(color: Colors.black, blurRadius: 6),
-                                    Shadow(color: Colors.black, blurRadius: 12),
-                                  ]
+                      top: (_titlePosY * frameH).clamp(0, frameH - 30),
+                      left: ((_titlePosX - 0.44) * frameW).clamp(0, frameW * 0.12),
+                      right: ((1.0 - _titlePosX - 0.44) * frameW).clamp(0, frameW * 0.12),
+                      child: GestureDetector(
+                        onPanUpdate: (details) {
+                          setState(() {
+                            _titlePosX = (_titlePosX + details.delta.dx / frameW)
+                                .clamp(0.1, 0.9);
+                            _titlePosY = (_titlePosY + details.delta.dy / frameH)
+                                .clamp(0.02, 0.5);
+                          });
+                        },
+                        child: Container(
+                          padding: _titleBgEnabled
+                              ? const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4)
+                              : const EdgeInsets.all(2),
+                          decoration: BoxDecoration(
+                            color: _titleBgEnabled
+                                ? Color(_titleBgColorHex)
                                 : null,
+                            border: Border.all(
+                              color: const Color(0xFFFFD700).withOpacity(0.4),
+                              width: 1,
+                            ),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            _composerTitle,
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: _googleFont(
+                              _titleFontFamily,
+                              fontSize: previewTitleSize,
+                              fontWeight: FontWeight.w800,
+                              color: Color(_titleColorHex),
+                              shadows: _titleShadow
+                                  ? const [
+                                      Shadow(color: Colors.black, blurRadius: 6),
+                                      Shadow(color: Colors.black, blurRadius: 12),
+                                    ]
+                                  : null,
+                            ),
                           ),
                         ),
                       ),
                     ),
 
-                    // ── Resizable text box (draggable + resize handles) ──
+                    // ── Body text box (DRAGGABLE + resizable) ──
                     Positioned(
                       left: boxLeft.clamp(0, frameW - boxW),
                       top: boxTop.clamp(0, frameH - boxH),
@@ -1230,8 +1356,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                             ),
                             textAlign: TextAlign.center,
                             overflow: TextOverflow.clip,
-                            style: TextStyle(
-                              fontFamily: _bodyFontFamily,
+                            style: _googleFont(
+                              _bodyFontFamily,
                               fontSize: previewBodySize,
                               fontWeight: FontWeight.w600,
                               color: Color(_bodyColorHex),
@@ -1305,30 +1431,32 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       ),
 
                     // ── Play / Pause toggle ──
-                    if (_bgController != null)
+                    if (_bgPlayer != null)
                       Positioned(
                         bottom: 8,
                         left: 8,
                         child: GestureDetector(
                           onTap: () {
-                            setState(() => _bgPlaying = !_bgPlaying);
+                            if (_bgPlayer == null) return;
                             if (_bgPlaying) {
-                              _bgPlayer?.play();
+                              _bgPlayer!.pause();
                             } else {
-                              _bgPlayer?.pause();
+                              _bgPlayer!.play();
                             }
+                            // State updates via the stream listener in _loadActiveBgPreview
                           },
                           child: Container(
-                            width: 28,
-                            height: 28,
+                            width: 32,
+                            height: 32,
                             decoration: BoxDecoration(
-                              color: Colors.black54,
-                              borderRadius: BorderRadius.circular(14),
+                              color: Colors.black.withOpacity(0.6),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.white24),
                             ),
                             child: Icon(
                               _bgPlaying ? Icons.pause : Icons.play_arrow,
-                              size: 16,
-                              color: Colors.white70,
+                              size: 18,
+                              color: Colors.white,
                             ),
                           ),
                         ),
@@ -1358,16 +1486,35 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       ),
                     ),
 
-                    // ── Position presets (right edge) ──
+                    // ── Quick position presets for body (right edge) ──
                     Positioned(
                       right: 4,
-                      top: frameH * 0.3,
+                      top: frameH * 0.35,
                       child: Column(
                         children: [
-                          _previewPosButton(Icons.vertical_align_top, 0.25),
+                          _previewPosButton(Icons.vertical_align_top, 0.3),
                           _previewPosButton(Icons.vertical_align_center, 0.5),
-                          _previewPosButton(Icons.vertical_align_bottom, 0.8),
+                          _previewPosButton(Icons.vertical_align_bottom, 0.78),
                         ],
+                      ),
+                    ),
+                    // ── Drag hint ──
+                    Positioned(
+                      bottom: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          'Drag text to move',
+                          style: TextStyle(
+                              fontSize: 8,
+                              color: Colors.white.withOpacity(0.4)),
+                        ),
                       ),
                     ),
                   ],

@@ -420,6 +420,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         'title_pos_y': 0.08,
         'text_pos_y': _textPosY,
         'text_box_w': _textBoxW,
+        'text_box_h': _textBoxH,
         'text_shadow': _hasBorder,
         // Multiple backgrounds that cycle
         'background_video_urls': _selectedBackgrounds
@@ -874,12 +875,12 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // ────────────────────────────────────────────────────────────────
 
   Widget _buildPhonePreview() {
-    // Fixed aspect ratio, constrained max size — won't resize with window
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 338, maxHeight: 600),
-      child: AspectRatio(
-        aspectRatio: 9 / 16,
-        child: Container(
+    // Exactly 1/4 of 1080×1920 — the ×4 scale factor in the server
+    // relies on this being precisely 270×480.
+    return SizedBox(
+      width: 270,
+      height: 480,
+      child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: Colors.white.withOpacity(0.12), width: 2),
@@ -969,12 +970,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
-                            _composerScript,
+                            _wrapText(
+                              _composerScript,
+                              boxW - 12, // subtract padding
+                              (_fontSize * 0.3).clamp(8, 16),
+                            ),
                             textAlign: TextAlign.center,
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: (boxH / ((_fontSize * 0.3).clamp(8, 16) * 1.5))
-                                .floor()
-                                .clamp(1, 20),
+                            overflow: TextOverflow.clip,
                             style: TextStyle(
                               fontFamily: _fontFamily,
                               fontSize: (_fontSize * 0.3).clamp(8, 16),
@@ -1121,11 +1123,31 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             ),
           ),
         ),
-      ),
     );
   }
 
   bool _bgPlaying = true;
+
+  /// Word-wrap text identically to the Python server's _wrap_text().
+  /// This ensures the preview shows the same line breaks as the render.
+  String _wrapText(String text, double boxWidthPx, double fontSizePx) {
+    final avgCharW = fontSizePx * 0.52;
+    final charsPerLine = (boxWidthPx / avgCharW).floor().clamp(15, 200);
+    final words = text.split(' ');
+    final lines = <String>[];
+    var currentLine = '';
+    for (final word in words) {
+      if (currentLine.length + word.length + 1 > charsPerLine &&
+          currentLine.isNotEmpty) {
+        lines.add(currentLine);
+        currentLine = word;
+      } else {
+        currentLine = currentLine.isEmpty ? word : '$currentLine $word';
+      }
+    }
+    if (currentLine.isNotEmpty) lines.add(currentLine);
+    return lines.join('\n');
+  }
 
   Widget _previewPosButton(IconData icon, double y) {
     final isActive = (_textPosY - y).abs() < 0.08;

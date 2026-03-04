@@ -106,45 +106,36 @@ class LlmGateway:
     async def _call_claude(self, req: LlmRequest) -> LlmResponse:
         config = self._CONFIGS[LlmProvider.claude]
 
-        resp = await self._client.post(
-            config["url"],
-            headers={
-                "x-api-key": req.api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": config["model"],
-                "max_tokens": req.max_tokens,
-                "system": req.system_prompt or "You are a helpful assistant.",
-                "messages": [{"role": "user", "content": req.prompt}],
-            },
-        )
-        if resp.status_code != 200:
-            body = resp.text
-            logger.error("Claude API %d: %s", resp.status_code, body)
-            # Retry with fallback models on 400 (model not available)
-            if resp.status_code == 400:
-                for fallback in config.get("fallback_models", []):
-                    logger.info("Retrying with fallback model: %s", fallback)
-                    resp = await self._client.post(
-                        config["url"],
-                        headers={
-                            "x-api-key": req.api_key,
-                            "anthropic-version": "2023-06-01",
-                            "content-type": "application/json",
-                        },
-                        json={
-                            "model": fallback,
-                            "max_tokens": req.max_tokens,
-                            "system": req.system_prompt or "You are a helpful assistant.",
-                            "messages": [{"role": "user", "content": req.prompt}],
-                        },
-                    )
-                    if resp.status_code == 200:
-                        break
-                    logger.error("Fallback %s also failed: %d %s", fallback, resp.status_code, resp.text[:200])
-            resp.raise_for_status()
+        # Try primary model first, then fallbacks
+        models_to_try = [config["model"]] + config.get("fallback_models", [])
+        last_error = ""
+
+        for model in models_to_try:
+            logger.info("Trying Claude model: %s", model)
+            resp = await self._client.post(
+                config["url"],
+                headers={
+                    "x-api-key": req.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": req.max_tokens,
+                    "system": req.system_prompt or "You are a helpful assistant.",
+                    "messages": [{"role": "user", "content": req.prompt}],
+                },
+            )
+            if resp.status_code == 200:
+                break
+            last_error = resp.text
+            logger.error("Claude model %s failed (%d): %s", model, resp.status_code, last_error[:500])
+        else:
+            # All models failed
+            raise RuntimeError(
+                f"Claude API error ({resp.status_code}): {last_error[:500]}"
+            )
+
         data = resp.json()
 
         text = ""

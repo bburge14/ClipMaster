@@ -11,7 +11,6 @@ import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/api_key_service.dart';
 import '../../../core/services/project_state.dart';
-import '../../../main.dart';
 
 const _categories = ['Space', 'History', 'Science', 'Technology', 'Nature'];
 
@@ -501,96 +500,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
   }
 
-  Future<void> _editInTimeline() async {
-    if (_composerScript.isEmpty) return;
-
-    final apiKeyService = ref.read(apiKeyServiceProvider);
-    final openaiKey = apiKeyService.getNextKey(LlmProvider.openai);
-    if (openaiKey == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('OpenAI API key required for TTS.')),
-      );
-      return;
-    }
-
-    setState(() {
-      _isRendering = true;
-      _progressStage = 'Generating voiceover';
-      _progressPercent = 10;
-    });
-
-    try {
-      final ipc = ref.read(ipcClientProvider);
-
-      final ttsResponse = await ipc.send(
-        IpcMessage(
-          type: MessageType.generateTts,
-          payload: {
-            'text': _composerScript,
-            'api_key': openaiKey,
-            'voice': _selectedVoice.name,
-          },
-        ),
-        timeout: const Duration(seconds: 60),
-        onProgress: (progress) {
-          if (mounted) {
-            setState(() {
-              _progressStage =
-                  progress.payload['stage'] as String? ?? 'Generating TTS';
-              _progressPercent = progress.payload['percent'] as int? ?? 0;
-            });
-          }
-        },
-      );
-
-      if (!mounted) return;
-      if (ttsResponse.type == MessageType.error) {
-        setState(() => _isRendering = false);
-        return;
-      }
-
-      final ttsAudioPath = ttsResponse.payload['audio_path'] as String? ?? '';
-
-      setState(() => _isRendering = false);
-
-      ref.read(projectProvider.notifier).loadShortIntoTimeline(
-            title: _composerTitle,
-            scriptText: _composerScript,
-            voice: _selectedVoice,
-            ttsAudioPath: ttsAudioPath.isNotEmpty ? ttsAudioPath : null,
-            captionStyle: CaptionStyle(
-              fontFamily: _fontFamily,
-              fontSize: _fontSize,
-              colorHex: _colorHex,
-              hasBorder: _hasBorder,
-              positionX: _textPosX,
-              positionY: _textPosY,
-            ),
-            bgPreviewUrl: _selectedBackgrounds.isNotEmpty
-                ? _selectedBackgrounds.first['preview_url'] as String?
-                : null,
-            bgDownloadUrl: _selectedBackgrounds.isNotEmpty
-                ? _selectedBackgrounds.first['download_url'] as String?
-                : null,
-          );
-
-      ref.read(selectedTabProvider.notifier).state = 0;
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Loaded into Timeline. Adjust and render.'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isRendering = false);
-      }
-    }
-  }
-
   // ════════════════════════════════════════════════════════════════
   //  BUILD UI
   // ════════════════════════════════════════════════════════════════
@@ -917,21 +826,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      // Action buttons
-                      OutlinedButton.icon(
-                        onPressed: _isRendering ? null : _editInTimeline,
-                        icon: const Icon(Icons.movie_creation, size: 14),
-                        label: const Text('Timeline',
-                            style: TextStyle(fontSize: 11)),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white60,
-                          side:
-                              BorderSide(color: Colors.white.withOpacity(0.15)),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 6),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
                       FilledButton.icon(
                         onPressed: _isRendering ? null : _renderShort,
                         icon: _isRendering
@@ -958,8 +852,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  // 9:16 phone frame
-                  Expanded(child: _buildPhonePreview()),
+                  // 9:16 phone frame (fixed size — matches 1080×1920 at ¼ scale)
+                  Expanded(child: Center(child: _buildPhonePreview())),
                 ],
               ),
             ),
@@ -980,10 +874,10 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // ────────────────────────────────────────────────────────────────
 
   Widget _buildPhonePreview() {
-    return Center(
-      child: AspectRatio(
-        aspectRatio: 9 / 16,
-        child: Container(
+    return SizedBox(
+      width: 270,
+      height: 480,
+      child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: Colors.white.withOpacity(0.12), width: 2),
@@ -1153,6 +1047,36 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
 
+                    // ── Play / Pause toggle ──
+                    if (_bgController != null)
+                      Positioned(
+                        bottom: 8,
+                        left: 8,
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() => _bgPlaying = !_bgPlaying);
+                            if (_bgPlaying) {
+                              _bgPlayer?.play();
+                            } else {
+                              _bgPlayer?.pause();
+                            }
+                          },
+                          child: Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Icon(
+                              _bgPlaying ? Icons.pause : Icons.play_arrow,
+                              size: 16,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ),
+                      ),
+
                     // ── Category badge ──
                     Positioned(
                       bottom: 12,
@@ -1194,10 +1118,11 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               },
             ),
           ),
-        ),
       ),
     );
   }
+
+  bool _bgPlaying = true;
 
   Widget _previewPosButton(IconData icon, double y) {
     final isActive = (_textPosY - y).abs() < 0.08;

@@ -724,12 +724,19 @@ def _find_ffmpeg() -> str | None:
 
 
 def _escape_ffmpeg_path(path: str) -> str:
-    """Escape a file path for use inside FFmpeg filter option values."""
+    """Escape a file path for use inside FFmpeg filter option values.
+
+    FFmpeg drawtext filter treats colons, semicolons, backslashes, and
+    single-quotes as special.  We must also wrap or escape spaces so that
+    the filter-graph parser doesn't split on them.
+    """
     # Use forward slashes (works on all platforms in FFmpeg)
     path = path.replace("\\", "/")
     # Escape colons (Windows drive letters like C:) and special chars
     path = path.replace(":", "\\:")
     path = path.replace("'", "\\'")
+    # Escape spaces — FFmpeg filter parser splits on unescaped spaces
+    path = path.replace(" ", "\\ ")
     return path
 
 

@@ -414,7 +414,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
 
     final docsDir = await getApplicationDocumentsDirectory();
     final shortsDir = Directory(
-      '${docsDir.path}${Platform.pathSeparator}ClipMaster Pro${Platform.pathSeparator}shorts',
+      '${docsDir.path}${Platform.pathSeparator}ClipMasterPro${Platform.pathSeparator}shorts',
     );
     if (!shortsDir.existsSync()) {
       await shortsDir.create(recursive: true);

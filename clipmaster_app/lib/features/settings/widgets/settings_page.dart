@@ -845,7 +845,7 @@ class _StorageSection extends StatelessWidget {
           getPath: () async {
             final dir = await getApplicationDocumentsDirectory();
             final clipmasterDir =
-                Directory('${dir.path}${Platform.pathSeparator}ClipMaster Pro');
+                Directory('${dir.path}${Platform.pathSeparator}ClipMasterPro');
             if (!clipmasterDir.existsSync()) {
               await clipmasterDir.create(recursive: true);
             }

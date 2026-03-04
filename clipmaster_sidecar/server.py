@@ -566,7 +566,8 @@ async def _handle_create_short(
         # Each clip gets equal share of duration, loop through all
         with open(concat_file, "w") as cf:
             for bp in bg_video_paths:
-                cf.write(f"file '{bp}'\n")
+                # Forward slashes avoid Windows backslash issues in concat files
+                cf.write(f"file '{bp.replace(chr(92), '/')}'\n")
         await _send(ws, IpcMessage.progress(msg.id, "Combining backgrounds", 55))
         concat_cmd = [
             ffmpeg, "-y",
@@ -599,9 +600,12 @@ async def _handle_create_short(
     # FFmpeg works best with forward slashes, even on Windows
     output_path = output_path.replace("\\", "/")
 
-    # Write text to temp files to avoid FFmpeg escaping nightmares
-    title_file = os.path.join(tempfile.gettempdir(), "clipmaster_title.txt")
-    body_file = os.path.join(tempfile.gettempdir(), "clipmaster_body.txt")
+    # ── Write text + font to temp dir with bare filenames ──
+    # We run FFmpeg with cwd=tmpdir so drawtext can use bare filenames,
+    # completely avoiding Windows C: colon issues in filter strings.
+    tmpdir = tempfile.gettempdir()
+    title_file = os.path.join(tmpdir, "cm_title.txt")
+    body_file = os.path.join(tmpdir, "cm_body.txt")
 
     # Word-wrap body text based on text box width
     chars_per_line = int(35 * text_box_w / 0.85)  # scale with box width
@@ -611,13 +615,17 @@ async def _handle_create_short(
     with open(body_file, "w", encoding="utf-8") as f:
         f.write(wrapped_body)
 
-    # Escape paths for FFmpeg filter syntax (colons / backslashes)
-    title_file_esc = _escape_ffmpeg_path(title_file)
-    body_file_esc = _escape_ffmpeg_path(body_file)
-
-    # Find a usable font — try common sans-serif fonts
+    # Copy font to temp dir so we can reference it by bare filename
     font_file = _find_font()
-    font_opt = f":fontfile={_escape_ffmpeg_path(font_file)}" if font_file else ""
+    font_opt = ""
+    if font_file:
+        import shutil
+        font_tmp = os.path.join(tmpdir, "cm_font.ttf")
+        try:
+            shutil.copy2(font_file, font_tmp)
+            font_opt = ":fontfile=cm_font.ttf"
+        except Exception:
+            logger.warning("Could not copy font %s to temp dir", font_file)
 
     # Build drawtext filters
     border_opts = ":borderw=3:bordercolor=black" if text_shadow else ""
@@ -627,18 +635,25 @@ async def _handle_create_short(
     # Center body text vertically around the target Y position
     body_y_expr = f"{int(text_pos_y * 1920)}-(text_h/2)"
 
+    # Bare filenames — FFmpeg cwd will be set to tmpdir
     drawtext_title = (
-        f"drawtext=textfile={title_file_esc}"
+        f"drawtext=textfile=cm_title.txt"
         f":fontsize={title_font_size}:fontcolor={font_color}"
         f":x=(w-text_w)/2:y={title_y}"
         f"{font_opt}{border_opts}"
     )
     drawtext_body = (
-        f"drawtext=textfile={body_file_esc}"
+        f"drawtext=textfile=cm_body.txt"
         f":fontsize={font_size}:fontcolor={font_color}"
         f":x=(w-text_w)/2:y={body_y_expr}"
         f"{font_opt}{body_border}"
     )
+
+    # Ensure all -i / output paths are absolute (cwd will be tmpdir)
+    audio_path = os.path.abspath(audio_path)
+    output_path = os.path.abspath(output_path).replace("\\", "/")
+    if bg_video_path:
+        bg_video_path = os.path.abspath(bg_video_path)
 
     if bg_video_path and os.path.isfile(bg_video_path):
         # Stock footage background (single or concat) + dark overlay + text
@@ -690,8 +705,10 @@ async def _handle_create_short(
     logger.info("FFmpeg command: %s", " ".join(cmd))
     await _send(ws, IpcMessage.progress(msg.id, "Encoding video", 65))
 
+    # Run FFmpeg with cwd=tmpdir so bare filenames in drawtext resolve correctly
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        cwd=tmpdir,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

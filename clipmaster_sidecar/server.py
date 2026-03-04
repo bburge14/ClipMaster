@@ -589,7 +589,7 @@ async def _handle_create_short(
             logger.info("Concatenated %d backgrounds", len(bg_video_paths))
         else:
             logger.warning("Concat failed, using first bg: %s",
-                           stderr.decode("utf-8", errors="replace")[:200])
+                           stderr.decode("utf-8", errors="replace")[-200:])
             bg_video_path = bg_video_paths[0]
     elif len(bg_video_paths) == 1:
         bg_video_path = bg_video_paths[0]
@@ -692,7 +692,7 @@ async def _handle_create_short(
     _, stderr_data = await proc.communicate()
 
     if proc.returncode != 0:
-        err = stderr_data.decode("utf-8", errors="replace")[:500]
+        err = stderr_data.decode("utf-8", errors="replace")[-500:]
         logger.error("FFmpeg create_short failed: %s", err)
         await _send(ws, IpcMessage.error(msg.id, f"Video render failed: {err}"))
         return

@@ -52,6 +52,10 @@ class LlmGateway:
         LlmProvider.claude: {
             "url": "https://api.anthropic.com/v1/messages",
             "model": "claude-sonnet-4-20250514",
+            "fallback_models": [
+                "claude-3-5-sonnet-20241022",
+                "claude-3-haiku-20240307",
+            ],
         },
         LlmProvider.gemini: {
             "url": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -106,7 +110,7 @@ class LlmGateway:
             config["url"],
             headers={
                 "x-api-key": req.api_key,
-                "anthropic-version": "2025-04-01",
+                "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
             json={
@@ -116,7 +120,31 @@ class LlmGateway:
                 "messages": [{"role": "user", "content": req.prompt}],
             },
         )
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            body = resp.text
+            logger.error("Claude API %d: %s", resp.status_code, body)
+            # Retry with fallback models on 400 (model not available)
+            if resp.status_code == 400:
+                for fallback in config.get("fallback_models", []):
+                    logger.info("Retrying with fallback model: %s", fallback)
+                    resp = await self._client.post(
+                        config["url"],
+                        headers={
+                            "x-api-key": req.api_key,
+                            "anthropic-version": "2023-06-01",
+                            "content-type": "application/json",
+                        },
+                        json={
+                            "model": fallback,
+                            "max_tokens": req.max_tokens,
+                            "system": req.system_prompt or "You are a helpful assistant.",
+                            "messages": [{"role": "user", "content": req.prompt}],
+                        },
+                    )
+                    if resp.status_code == 200:
+                        break
+                    logger.error("Fallback %s also failed: %d %s", fallback, resp.status_code, resp.text[:200])
+            resp.raise_for_status()
         data = resp.json()
 
         text = ""

@@ -786,7 +786,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                   label:
                       Text(cat, style: TextStyle(fontSize: isCompact ? 11 : 13)),
                   selected: _selectedCategory == cat,
-                  onSelected: (_) => setState(() => _selectedCategory = cat),
+                  onSelected: (_) => _setStyleAndRefresh(() => _selectedCategory = cat),
                   visualDensity: isCompact
                       ? VisualDensity.compact
                       : VisualDensity.standard,
@@ -1813,13 +1813,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               runSpacing: 8,
               children: [
                 _colorDotFor(0x80000000, _titleBgColorHex,
-                    (c) => setState(() => _titleBgColorHex = c)),
+                    (c) => _setStyleAndRefresh(() => _titleBgColorHex = c)),
                 _colorDotFor(0x806C5CE7, _titleBgColorHex,
-                    (c) => setState(() => _titleBgColorHex = c)),
+                    (c) => _setStyleAndRefresh(() => _titleBgColorHex = c)),
                 _colorDotFor(0x80FF5252, _titleBgColorHex,
-                    (c) => setState(() => _titleBgColorHex = c)),
+                    (c) => _setStyleAndRefresh(() => _titleBgColorHex = c)),
                 _colorDotFor(0x801A1A2E, _titleBgColorHex,
-                    (c) => setState(() => _titleBgColorHex = c)),
+                    (c) => _setStyleAndRefresh(() => _titleBgColorHex = c)),
               ],
             ),
           const SizedBox(height: 8),
@@ -1908,13 +1908,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               runSpacing: 8,
               children: [
                 _colorDotFor(0x80000000, _bodyBgColorHex,
-                    (c) => setState(() => _bodyBgColorHex = c)),
+                    (c) => _setStyleAndRefresh(() => _bodyBgColorHex = c)),
                 _colorDotFor(0x806C5CE7, _bodyBgColorHex,
-                    (c) => setState(() => _bodyBgColorHex = c)),
+                    (c) => _setStyleAndRefresh(() => _bodyBgColorHex = c)),
                 _colorDotFor(0x80FF5252, _bodyBgColorHex,
-                    (c) => setState(() => _bodyBgColorHex = c)),
+                    (c) => _setStyleAndRefresh(() => _bodyBgColorHex = c)),
                 _colorDotFor(0x801A1A2E, _bodyBgColorHex,
-                    (c) => setState(() => _bodyBgColorHex = c)),
+                    (c) => _setStyleAndRefresh(() => _bodyBgColorHex = c)),
               ],
             ),
           const SizedBox(height: 8),
@@ -1928,7 +1928,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             min: 0.3,
             max: 0.95,
             divisions: 13,
-            onChanged: (v) => setState(() => _textBoxW = v),
+            onChanged: (v) => _setStyleAndRefresh(() => _textBoxW = v),
           ),
           Text('Text Box Height: ${(_textBoxH * 100).toInt()}%',
               style: TextStyle(
@@ -1938,7 +1938,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             min: 0.1,
             max: 0.7,
             divisions: 12,
-            onChanged: (v) => setState(() => _textBoxH = v),
+            onChanged: (v) => _setStyleAndRefresh(() => _textBoxH = v),
           ),
           const SizedBox(height: 8),
           Divider(color: Colors.white.withOpacity(0.06)),
@@ -1974,7 +1974,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               max: 40,
               divisions: 7,
               onChanged: (v) =>
-                  setState(() => _wordsPerSlide = v.toInt()),
+                  _setStyleAndRefresh(() => _wordsPerSlide = v.toInt()),
             ),
             Text(
               '${_getSlides().length} slides total',
@@ -2344,7 +2344,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               children: [
                 FilledButton(
                   onPressed: () {
-                    setState(() {
+                    _setStyleAndRefresh(() {
                       _composerScript = _scriptEditController.text;
                       _editingScript = false;
                       _estimatedDuration =

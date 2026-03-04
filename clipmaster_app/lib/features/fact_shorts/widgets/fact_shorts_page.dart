@@ -155,6 +155,24 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     {'label': 'News Intro', 'path': 'bundled_audio/news_intro.mp3'},
   ];
 
+  /// Convert ARGB int to FFmpeg hex (strip alpha).
+  static String toFfmpegHex(int argb) {
+    final rgb = argb & 0x00FFFFFF;
+    return '0x${rgb.toRadixString(16).padLeft(6, '0')}';
+  }
+
+  /// Convert ARGB int to FFmpeg color@opacity format.
+  static String toFfmpegBgColor(int hex) {
+    final a = ((hex >> 24) & 0xFF) / 255.0;
+    final r = (hex >> 16) & 0xFF;
+    final g = (hex >> 8) & 0xFF;
+    final b = hex & 0xFF;
+    return '0x${r.toRadixString(16).padLeft(2, '0')}'
+        '${g.toRadixString(16).padLeft(2, '0')}'
+        '${b.toRadixString(16).padLeft(2, '0')}'
+        '@${a.toStringAsFixed(2)}';
+  }
+
   /// setState + trigger preview snapshot refresh.
   void _setStyleAndRefresh(VoidCallback fn) {
     setState(fn);
@@ -531,24 +549,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
 
     try {
       final ipc = ref.read(ipcClientProvider);
-
-      // Convert colors to FFmpeg hex (strip alpha)
-      String toFfmpegHex(int argb) {
-        final rgb = argb & 0x00FFFFFF;
-        return '0x${rgb.toRadixString(16).padLeft(6, '0')}';
-      }
-
-      // Convert background colors: ARGB → FFmpeg color@opacity
-      String toFfmpegBgColor(int hex) {
-        final a = ((hex >> 24) & 0xFF) / 255.0;
-        final r = (hex >> 16) & 0xFF;
-        final g = (hex >> 8) & 0xFF;
-        final b = hex & 0xFF;
-        return '0x${r.toRadixString(16).padLeft(2, '0')}'
-            '${g.toRadixString(16).padLeft(2, '0')}'
-            '${b.toRadixString(16).padLeft(2, '0')}'
-            '@${a.toStringAsFixed(2)}';
-      }
 
       final payload = <String, dynamic>{
         'text': _composerScript,

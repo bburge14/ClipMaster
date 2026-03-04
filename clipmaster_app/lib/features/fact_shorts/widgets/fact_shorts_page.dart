@@ -874,10 +874,12 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // ────────────────────────────────────────────────────────────────
 
   Widget _buildPhonePreview() {
-    return SizedBox(
-      width: 270,
-      height: 480,
-      child: Container(
+    // Fixed aspect ratio, constrained max size — won't resize with window
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 338, maxHeight: 600),
+      child: AspectRatio(
+        aspectRatio: 9 / 16,
+        child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: Colors.white.withOpacity(0.12), width: 2),
@@ -1118,6 +1120,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               },
             ),
           ),
+        ),
       ),
     );
   }

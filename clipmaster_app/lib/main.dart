@@ -24,6 +24,9 @@ import 'features/viral_scout/widgets/viral_scout_page.dart';
 /// Provider to allow any page to switch tabs programmatically.
 final selectedTabProvider = StateProvider<int>((ref) => 0);
 
+/// Provider to allow the dev console panel to close itself.
+final devConsoleVisibleProvider = StateProvider<bool>((ref) => false);
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
@@ -186,7 +189,6 @@ class MainShell extends ConsumerStatefulWidget {
 }
 
 class _MainShellState extends ConsumerState<MainShell> {
-  bool _devConsoleVisible = false;
 
   @override
   void initState() {
@@ -230,6 +232,7 @@ class _MainShellState extends ConsumerState<MainShell> {
   Widget build(BuildContext context) {
     final updateCheck = ref.watch(updateCheckProvider);
     final selectedIndex = ref.watch(selectedTabProvider);
+    final devConsoleVisible = ref.watch(devConsoleVisibleProvider);
 
     return Scaffold(
       body: Column(
@@ -317,10 +320,9 @@ class _MainShellState extends ConsumerState<MainShell> {
                           Icons.terminal,
                           'Console',
                         ),
-                        _devConsoleVisible,
-                        () => setState(
-                          () => _devConsoleVisible = !_devConsoleVisible,
-                        ),
+                        devConsoleVisible,
+                        () => ref.read(devConsoleVisibleProvider.notifier).state =
+                            !devConsoleVisible,
                       ),
                       const SizedBox(height: 16),
                     ],
@@ -348,7 +350,7 @@ class _MainShellState extends ConsumerState<MainShell> {
             ),
           ),
           // Dev Console (toggle)
-          if (_devConsoleVisible)
+          if (devConsoleVisible)
             const SizedBox(
               height: 250,
               child: DevConsolePanel(),

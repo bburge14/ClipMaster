@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/logging/dev_console.dart';
+import '../../../main.dart' show devConsoleVisibleProvider;
 
 /// The Dev Console UI panel — a toggleable overlay that shows real-time
 /// logs from all subsystems (FFmpeg, IPC, API calls, yt-dlp, etc.).
@@ -89,59 +90,72 @@ class _DevConsolePanelState extends ConsumerState<DevConsolePanel> {
               fontFamily: 'monospace',
             ),
           ),
-          const SizedBox(width: 16),
-          // Level filter
-          DropdownButton<LogLevel>(
-            value: _minLevel,
-            dropdownColor: const Color(0xFF1E1E2E),
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
-            underline: const SizedBox(),
-            items: LogLevel.values.map((level) {
-              return DropdownMenuItem(
-                value: level,
-                child: Text(level.name.toUpperCase()),
-              );
-            }).toList(),
-            onChanged: (level) => setState(() => _minLevel = level!),
-          ),
           const SizedBox(width: 8),
-          // Source filter
-          DropdownButton<String?>(
-            value: _sourceFilter,
-            dropdownColor: const Color(0xFF1E1E2E),
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
-            underline: const SizedBox(),
-            hint: const Text('All Sources',
-                style: TextStyle(color: Colors.white38, fontSize: 12)),
-            items: [
-              const DropdownMenuItem(value: null, child: Text('All Sources')),
-              ...console.sources.map((s) =>
-                  DropdownMenuItem(value: s, child: Text(s))),
-            ],
-            onChanged: (source) => setState(() => _sourceFilter = source),
-          ),
-          const SizedBox(width: 8),
-          // Search
-          SizedBox(
-            width: 200,
-            height: 28,
-            child: TextField(
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
-              decoration: const InputDecoration(
-                hintText: 'Search...',
-                hintStyle: TextStyle(color: Colors.white24),
-                isDense: true,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                border: OutlineInputBorder(),
-                enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white24),
-                ),
+          // Scrollable middle section for filters + search
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  // Level filter
+                  DropdownButton<LogLevel>(
+                    value: _minLevel,
+                    dropdownColor: const Color(0xFF1E1E2E),
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    underline: const SizedBox(),
+                    items: LogLevel.values.map((level) {
+                      return DropdownMenuItem(
+                        value: level,
+                        child: Text(level.name.toUpperCase()),
+                      );
+                    }).toList(),
+                    onChanged: (level) => setState(() => _minLevel = level!),
+                  ),
+                  const SizedBox(width: 8),
+                  // Source filter
+                  DropdownButton<String?>(
+                    value: _sourceFilter,
+                    dropdownColor: const Color(0xFF1E1E2E),
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    underline: const SizedBox(),
+                    hint: const Text('All Sources',
+                        style: TextStyle(color: Colors.white38, fontSize: 12)),
+                    items: [
+                      const DropdownMenuItem(
+                          value: null, child: Text('All Sources')),
+                      ...console.sources.map(
+                          (s) => DropdownMenuItem(value: s, child: Text(s))),
+                    ],
+                    onChanged: (source) =>
+                        setState(() => _sourceFilter = source),
+                  ),
+                  const SizedBox(width: 8),
+                  // Search
+                  SizedBox(
+                    width: 200,
+                    height: 28,
+                    child: TextField(
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 12),
+                      decoration: const InputDecoration(
+                        hintText: 'Search...',
+                        hintStyle: TextStyle(color: Colors.white24),
+                        isDense: true,
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        border: OutlineInputBorder(),
+                        enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white24),
+                        ),
+                      ),
+                      onChanged: (text) => setState(() => _searchText = text),
+                    ),
+                  ),
+                ],
               ),
-              onChanged: (text) => setState(() => _searchText = text),
             ),
           ),
-          const Spacer(),
+          const SizedBox(width: 4),
           // Auto-scroll toggle
           IconButton(
             icon: Icon(
@@ -149,6 +163,8 @@ class _DevConsolePanelState extends ConsumerState<DevConsolePanel> {
               color: Colors.white54,
               size: 18,
             ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             onPressed: () => setState(() => _autoScroll = !_autoScroll),
             tooltip: _autoScroll ? 'Pause auto-scroll' : 'Resume auto-scroll',
           ),
@@ -156,11 +172,22 @@ class _DevConsolePanelState extends ConsumerState<DevConsolePanel> {
           IconButton(
             icon: const Icon(Icons.delete_outline,
                 color: Colors.white54, size: 18),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             onPressed: () {
               console.clear();
               setState(() {});
             },
             tooltip: 'Clear console',
+          ),
+          // Close console
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.white54, size: 18),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            onPressed: () =>
+                ref.read(devConsoleVisibleProvider.notifier).state = false,
+            tooltip: 'Close console',
           ),
         ],
       ),

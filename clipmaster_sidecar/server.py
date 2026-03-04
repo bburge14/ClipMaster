@@ -477,6 +477,7 @@ async def _handle_create_short(
         title_font_size = int(min(max(font_size * 0.45, 12), 24) * 4)
         body_font_size = int(min(max(font_size * 0.3, 8), 16) * 4)
 
+    title_pos_x = float(msg.payload.get("title_pos_x", 0.5))
     title_pos_y = float(msg.payload.get("title_pos_y", 0.08))
     text_pos_y = float(msg.payload.get("text_pos_y", 0.75))
     text_pos_x = float(msg.payload.get("text_pos_x", 0.5))
@@ -723,8 +724,11 @@ async def _handle_create_short(
     effective_title_color = title_color
     effective_body_color = body_color
 
-    # Title Y position: preview uses `top: frameH * title_pos_y`
+    # Title position: preview uses top: frameH * title_pos_y
     title_y = int(title_pos_y * 1920)
+    # Title X: preview offsets from center via title_pos_x (0.5 = centered)
+    # In FFmpeg: x = title_pos_x * 1080 - text_w/2
+    title_x_expr = f"({int(title_pos_x * 1080)}-text_w/2)"
 
     # Body text: preview puts box CENTER at (text_pos_x, text_pos_y),
     # box top = center_y - boxH/2, then text starts at box top + padding(24px)
@@ -739,7 +743,7 @@ async def _handle_create_short(
     drawtext_title = (
         f"drawtext=textfile=cm_title.txt"
         f":fontsize={title_font_size}:fontcolor={effective_title_color}"
-        f":x=(w-text_w)/2:y={title_y}"
+        f":x={title_x_expr}:y={title_y}"
         f"{title_font_opt}{border_opts}"
     )
 
@@ -769,10 +773,13 @@ async def _handle_create_short(
     # Title text box background (drawbox behind title)
     drawbox_title_bg = ""
     if title_bg_enabled:
-        # Title spans full width with padding (left:64, right:64 at 1080px)
+        # Title box centered at title_pos_x with padding
+        title_box_w = 952
+        title_box_x = int(title_pos_x * 1080 - title_box_w / 2)
+        title_box_x = max(0, title_box_x)
         drawbox_title_bg = (
-            f"drawbox=x=64:y={max(0, title_y - 16)}"
-            f":w=952:h={title_font_size * len(title_lines) + 32}"
+            f"drawbox=x={title_box_x}:y={max(0, title_y - 16)}"
+            f":w={title_box_w}:h={title_font_size * len(title_lines) + 32}"
             f":color={title_bg_color}:t=fill,"
         )
 

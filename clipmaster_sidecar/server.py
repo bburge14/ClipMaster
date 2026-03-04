@@ -501,6 +501,16 @@ async def _handle_create_short(
     slideshow_enabled = bool(msg.payload.get("slideshow_enabled", False))
     words_per_slide = int(msg.payload.get("words_per_slide", 15))
 
+    # Bold / Italic
+    title_bold = bool(msg.payload.get("title_bold", False))
+    title_italic = bool(msg.payload.get("title_italic", False))
+    body_bold = bool(msg.payload.get("body_bold", False))
+    body_italic = bool(msg.payload.get("body_italic", False))
+
+    # Text alignment (left, center, right)
+    title_align = msg.payload.get("title_align", "center")
+    body_align = msg.payload.get("body_align", "center")
+
     # Text box background (new)
     title_bg_enabled = bool(msg.payload.get("title_bg_enabled", False))
     title_bg_color = msg.payload.get("title_bg_color", "black@0.5")
@@ -634,8 +644,12 @@ async def _handle_create_short(
     elif len(bg_video_paths) == 1:
         bg_video_path = bg_video_paths[0]
 
-    safe_name = re.sub(r"[^\w\s-]", "", title[:40]).strip().replace(" ", "_")
-    output_path = os.path.join(output_dir, f"short_{safe_name}.mp4")
+    output_name = msg.payload.get("output_name", "")
+    if output_name:
+        safe_name = re.sub(r"[^\w\s-]", "", output_name[:60]).strip().replace(" ", "_")
+    else:
+        safe_name = re.sub(r"[^\w\s-]", "", title[:40]).strip().replace(" ", "_")
+    output_path = os.path.join(output_dir, f"{safe_name}.mp4")
     # FFmpeg works best with forward slashes, even on Windows
     output_path = output_path.replace("\\", "/")
 
@@ -671,9 +685,9 @@ async def _handle_create_short(
         for si in range(0, len(words), words_per_slide):
             slide_text = " ".join(words[si:si + words_per_slide])
             wrapped = _wrap_text(slide_text, chars_per_line)
-            clean = wrapped.encode("ascii", errors="ignore").decode("ascii").strip()
+            clean = _sanitize_for_ffmpeg(wrapped)
             if not clean:
-                clean = wrapped.strip()
+                clean = _sanitize_for_ffmpeg(slide_text)
             slide_path = os.path.join(tmpdir, f"cm_slide_{len(slide_files)}.txt")
             with open(slide_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(clean)
@@ -682,16 +696,16 @@ async def _handle_create_short(
         wrapped_body = _wrap_text(text, chars_per_line)
 
     # Strip any BOM / invisible unicode chars that cause box glyphs in FFmpeg
-    clean_title = wrapped_title.encode("ascii", errors="ignore").decode("ascii").strip()
+    clean_title = _sanitize_for_ffmpeg(wrapped_title)
     if not clean_title:
-        clean_title = title.strip()
+        clean_title = _sanitize_for_ffmpeg(title)
     with open(title_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(clean_title)
 
     if not slideshow_enabled:
-        clean_body = wrapped_body.encode("ascii", errors="ignore").decode("ascii").strip()
+        clean_body = _sanitize_for_ffmpeg(wrapped_body)
         if not clean_body:
-            clean_body = wrapped_body.strip()
+            clean_body = _sanitize_for_ffmpeg(text)
         with open(body_file, "w", encoding="utf-8", newline="\n") as f:
             f.write(clean_body)
 
@@ -701,7 +715,8 @@ async def _handle_create_short(
 
     # Title font
     title_font_name = title_font_family if title_font_family else font_family
-    title_font_file = _find_font(preferred_name=title_font_name if title_font_name else None)
+    title_font_file = _find_font(preferred_name=title_font_name if title_font_name else None,
+                                 bold=title_bold, italic=title_italic)
     title_font_opt = ""
     if title_font_file:
         font_tmp = os.path.join(tmpdir, "cm_font_title.ttf")
@@ -713,7 +728,8 @@ async def _handle_create_short(
 
     # Body font
     body_font_name = body_font_family if body_font_family else font_family
-    body_font_file = _find_font(preferred_name=body_font_name if body_font_name else None)
+    body_font_file = _find_font(preferred_name=body_font_name if body_font_name else None,
+                                bold=body_bold, italic=body_italic)
     body_font_opt = ""
     if body_font_file:
         font_tmp = os.path.join(tmpdir, "cm_font_body.ttf")
@@ -734,7 +750,7 @@ async def _handle_create_short(
     title_y = int(title_pos_y * 1920)
     # Title X: preview offsets from center via title_pos_x (0.5 = centered)
     # In FFmpeg: x = title_pos_x * 1080 - text_w/2
-    title_x_expr = f"({int(title_pos_x * 1080)}-text_w/2)"
+    title_x_expr = _align_x_expr(title_pos_x, title_align)
 
     # Body text: preview puts box CENTER at (text_pos_x, text_pos_y),
     # box top = center_y - boxH/2, then text starts at box top + padding(24px)
@@ -745,7 +761,7 @@ async def _handle_create_short(
     # Body box X: preview centers box at text_pos_x
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
     # Body X expression: center text at text_pos_x (respect drag position)
-    body_x_expr = f"({int(text_pos_x * 1080)}-text_w/2)"
+    body_x_expr = _align_x_expr(text_pos_x, body_align)
 
     # Bare filenames — FFmpeg cwd will be set to tmpdir
     drawtext_title = (
@@ -977,6 +993,12 @@ async def _handle_preview_snapshot(
     body_font_family = p.get("body_font_family", "")
     title_shadow = bool(p.get("title_shadow", True))
     body_shadow = bool(p.get("body_shadow", True))
+    title_bold = bool(p.get("title_bold", False))
+    title_italic = bool(p.get("title_italic", False))
+    body_bold = bool(p.get("body_bold", False))
+    body_italic = bool(p.get("body_italic", False))
+    title_align = p.get("title_align", "center")
+    body_align = p.get("body_align", "center")
     title_bg_enabled = bool(p.get("title_bg_enabled", False))
     title_bg_color = p.get("title_bg_color", "black@0.5")
     body_bg_enabled = bool(p.get("body_bg_enabled", False))
@@ -1005,9 +1027,9 @@ async def _handle_preview_snapshot(
     chars_per_line = max(15, int(body_usable_px / avg_char_w))
 
     # Write title
-    clean_title = wrapped_title.encode("ascii", errors="ignore").decode("ascii").strip()
+    clean_title = _sanitize_for_ffmpeg(wrapped_title)
     if not clean_title:
-        clean_title = title.strip()
+        clean_title = _sanitize_for_ffmpeg(title)
     title_file = os.path.join(tmpdir, "cm_title.txt")
     with open(title_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(clean_title)
@@ -1019,9 +1041,9 @@ async def _handle_preview_snapshot(
         wrapped_body = _wrap_text(first_slide, chars_per_line)
     else:
         wrapped_body = _wrap_text(text, chars_per_line)
-    clean_body = wrapped_body.encode("ascii", errors="ignore").decode("ascii").strip()
+    clean_body = _sanitize_for_ffmpeg(wrapped_body)
     if not clean_body:
-        clean_body = text.strip()
+        clean_body = _sanitize_for_ffmpeg(text)
     body_file = os.path.join(tmpdir, "cm_body.txt")
     with open(body_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(clean_body)
@@ -1029,7 +1051,8 @@ async def _handle_preview_snapshot(
     # ── Fonts ──
     font_family = p.get("font_family", "")
     title_font_name = title_font_family or font_family
-    title_font_file = _find_font(preferred_name=title_font_name or None)
+    title_font_file = _find_font(preferred_name=title_font_name or None,
+                                 bold=title_bold, italic=title_italic)
     title_font_opt = ""
     if title_font_file:
         dst = os.path.join(tmpdir, "cm_font_title.ttf")
@@ -1040,7 +1063,8 @@ async def _handle_preview_snapshot(
             pass
 
     body_font_name = body_font_family or font_family
-    body_font_file = _find_font(preferred_name=body_font_name or None)
+    body_font_file = _find_font(preferred_name=body_font_name or None,
+                                bold=body_bold, italic=body_italic)
     body_font_opt = ""
     if body_font_file:
         dst = os.path.join(tmpdir, "cm_font_body.ttf")
@@ -1055,14 +1079,14 @@ async def _handle_preview_snapshot(
     body_border = ":borderw=2:bordercolor=black" if body_shadow else ""
 
     title_y = int(title_pos_y * 1920)
-    title_x_expr = f"({int(title_pos_x * 1080)}-text_w/2)"
+    title_x_expr = _align_x_expr(title_pos_x, title_align)
 
     body_box_top = int(text_pos_y * 1920 - (text_box_h * 1920) / 2)
     body_y = max(0, body_box_top + 24)
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
 
     # Body X: use actual position instead of always centering
-    body_x_expr = f"({int(text_pos_x * 1080)}-text_w/2)"
+    body_x_expr = _align_x_expr(text_pos_x, body_align)
 
     drawtext_title = (
         f"drawtext=textfile=cm_title.txt"
@@ -1103,7 +1127,7 @@ async def _handle_preview_snapshot(
     drawtext_category = ""
     if category_label:
         cat_file = os.path.join(tmpdir, "cm_category.txt")
-        clean_cat = category_label.encode("ascii", errors="ignore").decode("ascii").strip() or category_label.strip()
+        clean_cat = _sanitize_for_ffmpeg(category_label) or category_label.strip()
         with open(cat_file, "w", encoding="utf-8", newline="\n") as f:
             f.write(clean_cat)
         badge_y = 1920 - 48 - 52
@@ -1208,6 +1232,12 @@ async def _handle_preview_video_clip(
     body_font_family = p.get("body_font_family", "")
     title_shadow = bool(p.get("title_shadow", True))
     body_shadow = bool(p.get("body_shadow", True))
+    title_bold = bool(p.get("title_bold", False))
+    title_italic = bool(p.get("title_italic", False))
+    body_bold = bool(p.get("body_bold", False))
+    body_italic = bool(p.get("body_italic", False))
+    title_align = p.get("title_align", "center")
+    body_align = p.get("body_align", "center")
     title_bg_enabled = bool(p.get("title_bg_enabled", False))
     title_bg_color = p.get("title_bg_color", "black@0.5")
     body_bg_enabled = bool(p.get("body_bg_enabled", False))
@@ -1235,9 +1265,9 @@ async def _handle_preview_video_clip(
     avg_char_w = max(body_font_size * 0.52, 1)
     chars_per_line = max(15, int(body_usable_px / avg_char_w))
 
-    clean_title = wrapped_title.encode("ascii", errors="ignore").decode("ascii").strip()
+    clean_title = _sanitize_for_ffmpeg(wrapped_title)
     if not clean_title:
-        clean_title = title.strip()
+        clean_title = _sanitize_for_ffmpeg(title)
     title_file = os.path.join(tmpdir, "cm_title.txt")
     with open(title_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(clean_title)
@@ -1248,9 +1278,9 @@ async def _handle_preview_video_clip(
         wrapped_body = _wrap_text(first_slide, chars_per_line)
     else:
         wrapped_body = _wrap_text(text, chars_per_line)
-    clean_body = wrapped_body.encode("ascii", errors="ignore").decode("ascii").strip()
+    clean_body = _sanitize_for_ffmpeg(wrapped_body)
     if not clean_body:
-        clean_body = text.strip()
+        clean_body = _sanitize_for_ffmpeg(text)
     body_file = os.path.join(tmpdir, "cm_body.txt")
     with open(body_file, "w", encoding="utf-8", newline="\n") as f:
         f.write(clean_body)
@@ -1258,7 +1288,8 @@ async def _handle_preview_video_clip(
     # ── Fonts ──
     font_family = p.get("font_family", "")
     title_font_name = title_font_family or font_family
-    title_font_file = _find_font(preferred_name=title_font_name or None)
+    title_font_file = _find_font(preferred_name=title_font_name or None,
+                                 bold=title_bold, italic=title_italic)
     title_font_opt = ""
     if title_font_file:
         dst = os.path.join(tmpdir, "cm_font_title.ttf")
@@ -1269,7 +1300,8 @@ async def _handle_preview_video_clip(
             pass
 
     body_font_name = body_font_family or font_family
-    body_font_file = _find_font(preferred_name=body_font_name or None)
+    body_font_file = _find_font(preferred_name=body_font_name or None,
+                                bold=body_bold, italic=body_italic)
     body_font_opt = ""
     if body_font_file:
         dst = os.path.join(tmpdir, "cm_font_body.ttf")
@@ -1284,12 +1316,12 @@ async def _handle_preview_video_clip(
     body_border = ":borderw=2:bordercolor=black" if body_shadow else ""
 
     title_y = int(title_pos_y * 1920)
-    title_x_expr = f"({int(title_pos_x * 1080)}-text_w/2)"
+    title_x_expr = _align_x_expr(title_pos_x, title_align)
 
     body_box_top = int(text_pos_y * 1920 - (text_box_h * 1920) / 2)
     body_y = max(0, body_box_top + 24)
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
-    body_x_expr = f"({int(text_pos_x * 1080)}-text_w/2)"
+    body_x_expr = _align_x_expr(text_pos_x, body_align)
 
     drawtext_title = (
         f"drawtext=textfile=cm_title.txt"
@@ -1328,7 +1360,7 @@ async def _handle_preview_video_clip(
     drawtext_category = ""
     if category_label:
         cat_file = os.path.join(tmpdir, "cm_category.txt")
-        clean_cat = category_label.encode("ascii", errors="ignore").decode("ascii").strip() or category_label.strip()
+        clean_cat = _sanitize_for_ffmpeg(category_label) or category_label.strip()
         with open(cat_file, "w", encoding="utf-8", newline="\n") as f:
             f.write(clean_cat)
         badge_y = 1920 - 48 - 52
@@ -1438,6 +1470,39 @@ def _escape_ffmpeg_path(path: str) -> str:
     return f"'{path}'"
 
 
+def _align_x_expr(pos_x: float, align: str, canvas_w: int = 1080, margin: int = 48) -> str:
+    """Build FFmpeg drawtext x= expression for text alignment."""
+    if align == "left":
+        return str(margin)
+    elif align == "right":
+        return f"({canvas_w}-text_w-{margin})"
+    else:  # center (default)
+        return f"({int(pos_x * canvas_w)}-text_w/2)"
+
+
+def _sanitize_for_ffmpeg(text: str) -> str:
+    """Replace common Unicode chars with ASCII equivalents, strip the rest."""
+    import unicodedata
+    replacements = {
+        '\u2018': "'", '\u2019': "'",   # smart single quotes
+        '\u201C': '"', '\u201D': '"',   # smart double quotes
+        '\u2013': '-', '\u2014': '-',   # en/em dash
+        '\u2026': '...',                # ellipsis
+        '\u00A0': ' ',                  # non-breaking space
+        '\u200B': '', '\u200C': '',     # zero-width space/non-joiner
+        '\u200D': '', '\u200E': '',     # zero-width joiner, LTR mark
+        '\u200F': '', '\uFEFF': '',     # RTL mark, BOM
+        '\u00AB': '"', '\u00BB': '"',   # guillemets
+        '\u2022': '-',                  # bullet
+        '\u00B7': '-',                  # middle dot
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    text = unicodedata.normalize('NFKD', text)
+    text = text.encode('ascii', errors='ignore').decode('ascii')
+    return text.strip()
+
+
 def _wrap_text(text: str, max_chars: int = 35) -> str:
     """Word-wrap text for FFmpeg textfile (plain text, no escaping needed)."""
     words = text.split()
@@ -1454,8 +1519,13 @@ def _wrap_text(text: str, max_chars: int = 35) -> str:
     return "\n".join(lines)
 
 
-def _find_font(preferred_name: str | None = None) -> str | None:
+def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bool = False) -> str | None:
     """Find a TTF font file for FFmpeg drawtext.
+
+    Args:
+        preferred_name: Font family name (e.g. 'Inter', 'Roboto')
+        bold: If True, prefer Bold variant
+        italic: If True, prefer Italic variant
 
     Search order:
     1. Local font cache (previously downloaded Google Fonts)
@@ -1467,16 +1537,31 @@ def _find_font(preferred_name: str | None = None) -> str | None:
     import glob
     import tempfile
 
+    # Determine style suffix for cache lookup
+    style_suffix = "Regular"
+    if bold and italic:
+        style_suffix = "BoldItalic"
+    elif bold:
+        style_suffix = "Bold"
+    elif italic:
+        style_suffix = "Italic"
+
     # Local cache for downloaded fonts
     font_cache_dir = os.path.join(tempfile.gettempdir(), "clipmaster_fonts")
     os.makedirs(font_cache_dir, exist_ok=True)
 
     # Check cache first
     if preferred_name:
-        cached = os.path.join(font_cache_dir, f"{preferred_name}-Regular.ttf")
+        cached = os.path.join(font_cache_dir, f"{preferred_name}-{style_suffix}.ttf")
         if os.path.isfile(cached):
             logger.info("Using cached font: %s", cached)
             return cached
+        # Fall back to Regular if styled variant not cached
+        if style_suffix != "Regular":
+            cached_regular = os.path.join(font_cache_dir, f"{preferred_name}-Regular.ttf")
+            if os.path.isfile(cached_regular):
+                logger.info("Using cached font (no %s variant): %s", style_suffix, cached_regular)
+                return cached_regular
 
     # Flutter google_fonts cache locations
     flutter_cache_dirs = []
@@ -1518,6 +1603,10 @@ def _find_font(preferred_name: str | None = None) -> str | None:
         "NotoSans", "Noto Sans", "Arial", "Helvetica", "FreeSans",
     ])
 
+    # Build style keywords to match or exclude
+    want_bold = bold
+    want_italic = italic
+
     for font_dir in font_dirs:
         if not os.path.isdir(font_dir):
             continue
@@ -1532,18 +1621,37 @@ def _find_font(preferred_name: str | None = None) -> str | None:
             ]
             for pattern in patterns:
                 matches = glob.glob(pattern, recursive=True)
+                if not matches:
+                    continue
+
+                def _has_bold(p: str) -> bool:
+                    b = os.path.basename(p).lower()
+                    return "bold" in b or b.endswith(("b.ttf", "b.otf"))
+
+                def _has_italic(p: str) -> bool:
+                    b = os.path.basename(p).lower()
+                    return "italic" in b or b.endswith(("i.ttf", "i.otf"))
+
+                # Try to find exact style match
+                if want_bold and want_italic:
+                    styled = [m for m in matches if _has_bold(m) and _has_italic(m)]
+                elif want_bold:
+                    styled = [m for m in matches if _has_bold(m) and not _has_italic(m)]
+                elif want_italic:
+                    styled = [m for m in matches if _has_italic(m) and not _has_bold(m)]
+                else:
+                    styled = [m for m in matches
+                              if not _has_bold(m) and not _has_italic(m)
+                              and not os.path.basename(m).lower().endswith(
+                                  ("bi.ttf", "bi.otf", "z.ttf", "z.otf"))]
+
+                if styled:
+                    logger.info("Using font (%s): %s", style_suffix, styled[0])
+                    return styled[0]
+                # Fall back to any match
                 if matches:
-                    regular = [m for m in matches
-                               if "Bold" not in os.path.basename(m)
-                               and "Italic" not in os.path.basename(m)
-                               and "bold" not in os.path.basename(m)
-                               and "italic" not in os.path.basename(m)
-                               and not os.path.basename(m).lower().endswith(
-                                   ("i.ttf", "i.otf", "b.ttf", "b.otf",
-                                    "bi.ttf", "bi.otf", "z.ttf", "z.otf"))]
-                    best = regular[0] if regular else matches[0]
-                    logger.info("Using font: %s", best)
-                    return best
+                    logger.info("Using font (fallback): %s", matches[0])
+                    return matches[0]
 
     # Not found on system — download from Google Fonts
     if preferred_name:
@@ -1551,7 +1659,7 @@ def _find_font(preferred_name: str | None = None) -> str | None:
         if downloaded:
             return downloaded
 
-    logger.warning("No font found for '%s', FFmpeg will use default", preferred_name)
+    logger.warning("No font found for '%s' (%s), FFmpeg will use default", preferred_name, style_suffix)
     return None
 
 

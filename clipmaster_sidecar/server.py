@@ -1645,14 +1645,31 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
                 if styled:
                     logger.info("Using font (%s): %s", style_suffix, styled[0])
                     return styled[0]
-                # Fall back to any match
-                if matches:
+                # Only fall back to any match if no specific style requested
+                if matches and not want_bold and not want_italic:
                     logger.info("Using font (fallback): %s", matches[0])
                     return matches[0]
 
-    # Not found on system — download from Google Fonts
-    if preferred_name:
+    # Not found on system with correct style — download from Google Fonts
+    if preferred_name and (want_bold or want_italic):
         downloaded = _download_google_font(preferred_name, font_cache_dir, bold=bold, italic=italic)
+        if downloaded:
+            return downloaded
+
+    # Try system fonts without style requirement as last resort
+    if preferred_name:
+        for font_dir in font_dirs:
+            if not os.path.isdir(font_dir):
+                continue
+            for pattern in [
+                os.path.join(font_dir, "**", f"{preferred_name}*.ttf"),
+                os.path.join(font_dir, "**", f"{preferred_name.replace(' ', '')}*.ttf"),
+            ]:
+                matches = glob.glob(pattern, recursive=True)
+                if matches:
+                    logger.info("Using font (unstyled fallback): %s", matches[0])
+                    return matches[0]
+        downloaded = _download_google_font(preferred_name, font_cache_dir)
         if downloaded:
             return downloaded
 

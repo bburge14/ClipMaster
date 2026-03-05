@@ -107,6 +107,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // Timeline scrubber
   double _scrubPosition = 0.0;
   double _estimatedDuration = 30.0;
+  bool _userScrubbing = false;
+  StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<Duration>? _durationSub;
 
   // Rendering
   bool _isRendering = false;
@@ -190,6 +193,20 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     return ((opacity * 255).round() << 24) | (colorHex & 0x00FFFFFF);
   }
 
+  /// Seek the active video player to a normalized position (0.0–1.0).
+  void _seekActivePlayer(double pos) {
+    final player = _livePreviewMode
+        ? (_previewPlayer ?? _bgPlayer)
+        : _bgPlayer;
+    if (player == null) return;
+    final dur = player.state.duration;
+    if (dur.inMilliseconds > 0) {
+      player.seek(Duration(
+        milliseconds: (pos * dur.inMilliseconds).round(),
+      ));
+    }
+  }
+
   /// setState + refresh. Only triggers FFmpeg clip if in live preview mode.
   void _setStyleAndRefresh(VoidCallback fn) {
     setState(fn);
@@ -198,6 +215,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
 
   @override
   void dispose() {
+    _positionSub?.cancel();
+    _durationSub?.cancel();
     _previewClipDebounce?.cancel();
     _scriptEditController.dispose();
     _bgSearchController.dispose();
@@ -527,6 +546,25 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       // Listen for play state changes
       _bgPlayer!.stream.playing.listen((playing) {
         if (mounted) setState(() => _bgPlaying = playing);
+      });
+      // Sync timeline scrubber with player position
+      _positionSub?.cancel();
+      _positionSub = _bgPlayer!.stream.position.listen((pos) {
+        if (!mounted || _userScrubbing) return;
+        final dur = _bgPlayer?.state.duration ?? Duration.zero;
+        if (dur.inMilliseconds > 0) {
+          setState(() {
+            _scrubPosition =
+                (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
+          });
+        }
+      });
+      _durationSub?.cancel();
+      _durationSub = _bgPlayer!.stream.duration.listen((dur) {
+        if (!mounted) return;
+        if (dur.inSeconds > 0) {
+          setState(() => _estimatedDuration = dur.inSeconds.toDouble());
+        }
       });
       setState(() => _bgPlaying = true);
     }
@@ -1399,10 +1437,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
 
-                    // ── Edit mode: dark overlay + styled text ──
-                    if (!_livePreviewMode) ...[
-                      Container(color: Colors.black.withOpacity(0.3)),
-                    ],
 
                     // ── Loading indicator for preview clip ──
                     if (_livePreviewMode && _previewClipLoading)
@@ -2862,25 +2896,27 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                     onTapDown: (details) {
                       final renderBox =
                           context.findRenderObject() as RenderBox;
-                      // Account for the 80px label column
                       final localX =
                           details.localPosition.dx;
                       final totalWidth = renderBox.size.width - 80;
-                      setState(() {
-                        _scrubPosition =
-                            (localX / totalWidth).clamp(0.0, 1.0);
-                      });
+                      _userScrubbing = true;
+                      final pos = (localX / totalWidth).clamp(0.0, 1.0);
+                      setState(() => _scrubPosition = pos);
+                      _seekActivePlayer(pos);
                     },
+                    onTapUp: (_) => _userScrubbing = false,
+                    onPanStart: (_) => _userScrubbing = true,
                     onPanUpdate: (details) {
                       final renderBox =
                           context.findRenderObject() as RenderBox;
                       final totalWidth = renderBox.size.width - 80;
-                      setState(() {
-                        _scrubPosition =
-                            (_scrubPosition + details.delta.dx / totalWidth)
-                                .clamp(0.0, 1.0);
-                      });
+                      final pos =
+                          (_scrubPosition + details.delta.dx / totalWidth)
+                              .clamp(0.0, 1.0);
+                      setState(() => _scrubPosition = pos);
+                      _seekActivePlayer(pos);
                     },
+                    onPanEnd: (_) => _userScrubbing = false,
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         final trackWidth = constraints.maxWidth;

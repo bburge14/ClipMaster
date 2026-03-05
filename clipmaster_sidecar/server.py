@@ -764,14 +764,11 @@ async def _handle_create_short(
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 
     # Bare filenames — FFmpeg cwd will be set to tmpdir
-    title_text_align = _ffmpeg_text_align(title_align)
-    body_text_align = _ffmpeg_text_align(body_align)
-
     drawtext_title = (
         f"drawtext=textfile=cm_title.txt"
         f":fontsize={title_font_size}:fontcolor={effective_title_color}"
         f":x={title_x_expr}:y={title_y}"
-        f"{title_font_opt}{border_opts}{title_text_align}"
+        f"{title_font_opt}{border_opts}"
     )
 
     # Body text: single drawtext or multiple for slideshow
@@ -786,7 +783,7 @@ async def _handle_create_short(
                 f"drawtext=textfile={slide_fname}"
                 f":fontsize={body_font_size}:fontcolor={effective_body_color}"
                 f":x={body_x_expr}:y={body_y}"
-                f"{body_font_opt}{body_border}{body_text_align}"
+                f"{body_font_opt}{body_border}"
                 f":enable='between(t,{t_start:.2f},{t_end:.2f})'"
             )
     else:
@@ -794,7 +791,7 @@ async def _handle_create_short(
             f"drawtext=textfile=cm_body.txt"
             f":fontsize={body_font_size}:fontcolor={effective_body_color}"
             f":x={body_x_expr}:y={body_y}"
-            f"{body_font_opt}{body_border}{body_text_align}"
+            f"{body_font_opt}{body_border}"
         )
 
     # Title text box background (drawbox behind title)
@@ -1088,21 +1085,18 @@ async def _handle_preview_snapshot(
     # Body X: use actual position instead of always centering
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 
-    title_text_align = _ffmpeg_text_align(title_align)
-    body_text_align = _ffmpeg_text_align(body_align)
-
     drawtext_title = (
         f"drawtext=textfile=cm_title.txt"
         f":fontsize={title_font_size}:fontcolor={title_color}"
         f":x={title_x_expr}:y={title_y}"
-        f"{title_font_opt}{border_opts}{title_text_align}"
+        f"{title_font_opt}{border_opts}"
     )
 
     drawtext_body = (
         f"drawtext=textfile=cm_body.txt"
         f":fontsize={body_font_size}:fontcolor={body_color}"
         f":x={body_x_expr}:y={body_y}"
-        f"{body_font_opt}{body_border}{body_text_align}"
+        f"{body_font_opt}{body_border}"
     )
 
     # Background boxes
@@ -1292,6 +1286,7 @@ async def _handle_preview_video_clip(
     # ── Fonts ──
     font_family = p.get("font_family", "")
     title_font_name = title_font_family or font_family
+    logger.info("[preview_clip] title_font=%s bold=%s italic=%s", title_font_name, title_bold, title_italic)
     title_font_file = _find_font(preferred_name=title_font_name or None,
                                  bold=title_bold, italic=title_italic)
     title_font_opt = ""
@@ -1300,10 +1295,15 @@ async def _handle_preview_video_clip(
         try:
             shutil.copy2(title_font_file, dst)
             title_font_opt = ":fontfile=cm_font_title.ttf"
-        except Exception:
-            pass
+            logger.info("[preview_clip] title font copied: %s -> %s (valid=%s, size=%d)",
+                       title_font_file, dst, _is_valid_font_file(dst), os.path.getsize(dst))
+        except Exception as exc:
+            logger.error("[preview_clip] Failed to copy title font: %s", exc)
+    else:
+        logger.warning("[preview_clip] No title font found for '%s'", title_font_name)
 
     body_font_name = body_font_family or font_family
+    logger.info("[preview_clip] body_font=%s bold=%s italic=%s", body_font_name, body_bold, body_italic)
     body_font_file = _find_font(preferred_name=body_font_name or None,
                                 bold=body_bold, italic=body_italic)
     body_font_opt = ""
@@ -1312,8 +1312,12 @@ async def _handle_preview_video_clip(
         try:
             shutil.copy2(body_font_file, dst)
             body_font_opt = ":fontfile=cm_font_body.ttf"
-        except Exception:
-            pass
+            logger.info("[preview_clip] body font copied: %s -> %s (valid=%s, size=%d)",
+                       body_font_file, dst, _is_valid_font_file(dst), os.path.getsize(dst))
+        except Exception as exc:
+            logger.error("[preview_clip] Failed to copy body font: %s", exc)
+    else:
+        logger.warning("[preview_clip] No body font found for '%s'", body_font_name)
 
     # ── Build filter chain (identical to snapshot/render) ──
     border_opts = ":borderw=3:bordercolor=black" if title_shadow else ""
@@ -1327,21 +1331,18 @@ async def _handle_preview_video_clip(
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 
-    title_text_align = _ffmpeg_text_align(title_align)
-    body_text_align = _ffmpeg_text_align(body_align)
-
     drawtext_title = (
         f"drawtext=textfile=cm_title.txt"
         f":fontsize={title_font_size}:fontcolor={title_color}"
         f":x={title_x_expr}:y={title_y}"
-        f"{title_font_opt}{border_opts}{title_text_align}"
+        f"{title_font_opt}{border_opts}"
     )
 
     drawtext_body = (
         f"drawtext=textfile=cm_body.txt"
         f":fontsize={body_font_size}:fontcolor={body_color}"
         f":x={body_x_expr}:y={body_y}"
-        f"{body_font_opt}{body_border}{body_text_align}"
+        f"{body_font_opt}{body_border}"
     )
 
     drawbox_title_bg = ""
@@ -1426,6 +1427,8 @@ async def _handle_preview_video_clip(
         ]
 
     try:
+        logger.info("[preview_clip] FFmpeg cmd: %s", " ".join(cmd))
+        logger.info("[preview_clip] vf_str: %s", vf_str)
         await _send(ws, IpcMessage.progress(msg.id, "Rendering preview clip…", 30))
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -1434,8 +1437,11 @@ async def _handle_preview_video_clip(
             cwd=tmpdir,
         )
         _, stderr_bytes = await proc.communicate()
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+        if stderr_text:
+            logger.info("[preview_clip] FFmpeg stderr (last 500): %s", stderr_text[-500:])
         if proc.returncode != 0:
-            err = stderr_bytes.decode("utf-8", errors="replace")[-500:]
+            err = stderr_text[-500:]
             logger.error("Preview clip FFmpeg error: %s", err)
             await _send(ws, IpcMessage.error(msg.id, f"FFmpeg preview clip failed: {err}"))
             return
@@ -1484,16 +1490,6 @@ def _align_x_expr(pos_x: float, align: str, canvas_w: int = 1080, margin: int = 
         return f"({canvas_w}-text_w-{margin})"
     else:  # center (default)
         return f"({int(pos_x * canvas_w)}-text_w/2)"
-
-
-def _ffmpeg_text_align(align: str) -> str:
-    """Return FFmpeg text_align option string for drawtext (L+T, C+T, R+T)."""
-    if align == "left":
-        return ":text_align=L+T"
-    elif align == "right":
-        return ":text_align=R+T"
-    else:
-        return ":text_align=C+T"
 
 
 def _sanitize_for_ffmpeg(text: str) -> str:
@@ -1595,6 +1591,15 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
     # Local cache for downloaded fonts
     font_cache_dir = os.path.join(tempfile.gettempdir(), "clipmaster_fonts")
     os.makedirs(font_cache_dir, exist_ok=True)
+
+    # Purge any invalid (woff2 / corrupt) cached files automatically
+    for cached_file in glob.glob(os.path.join(font_cache_dir, "*")):
+        if os.path.isfile(cached_file) and not _is_valid_font_file(cached_file):
+            logger.warning("Purging invalid cached font: %s", cached_file)
+            try:
+                os.remove(cached_file)
+            except Exception:
+                pass
 
     # Check cache first
     if preferred_name:
@@ -1733,6 +1738,16 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
         if downloaded:
             return downloaded
 
+    # Last resort: try to download ANY font that we know has a TTF URL
+    for fallback_name in ["Roboto", "Montserrat", "Lato", "Poppins"]:
+        try:
+            downloaded = _download_google_font(fallback_name, font_cache_dir)
+            if downloaded:
+                logger.info("Using fallback font download: %s", downloaded)
+                return downloaded
+        except Exception:
+            continue
+
     logger.warning("No font found for '%s' (%s), FFmpeg will use default", preferred_name, style_suffix)
     return None
 
@@ -1777,9 +1792,9 @@ def _download_google_font(name: str, cache_dir: str,
                 f"https://fonts.googleapis.com/css2?"
                 f"family={family_param}:ital,wght@{ital},{wght}"
             )
-            # Use a non-browser UA so Google Fonts returns TTF URLs instead of woff2
+            # Use an old IE11 UA — Google Fonts returns TTF (not woff2) for old browsers
             req = urllib.request.Request(css_url, headers={
-                "User-Agent": "FFmpeg/ClipMaster (compatible; need TTF)",
+                "User-Agent": "Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko",
             })
             with urllib.request.urlopen(req, timeout=10) as resp:
                 css = resp.read().decode("utf-8")

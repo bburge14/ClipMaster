@@ -858,7 +858,6 @@ async def _handle_create_short(
             parts.append(
                 "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
             )
-        parts.append("drawbox=x=0:y=0:w=iw:h=ih:color=black@0.3:t=fill")
         if drawbox_title_bg:
             parts.append(drawbox_title_bg.rstrip(","))
         if drawbox_body_bg:
@@ -1144,7 +1143,6 @@ async def _handle_preview_snapshot(
     vf_parts = []
     if bg_video_path and os.path.isfile(bg_video_path):
         vf_parts.append("scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920")
-    vf_parts.append("drawbox=x=0:y=0:w=iw:h=ih:color=black@0.3:t=fill")
     if drawbox_title_bg:
         vf_parts.append(drawbox_title_bg)
     if drawbox_body_bg:
@@ -1377,7 +1375,6 @@ async def _handle_preview_video_clip(
     vf_parts = []
     if bg_video_path and os.path.isfile(bg_video_path):
         vf_parts.append("scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920")
-    vf_parts.append("drawbox=x=0:y=0:w=iw:h=ih:color=black@0.3:t=fill")
     if drawbox_title_bg:
         vf_parts.append(drawbox_title_bg)
     if drawbox_body_bg:
@@ -1655,7 +1652,7 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
 
     # Not found on system — download from Google Fonts
     if preferred_name:
-        downloaded = _download_google_font(preferred_name, font_cache_dir)
+        downloaded = _download_google_font(preferred_name, font_cache_dir, bold=bold, italic=italic)
         if downloaded:
             return downloaded
 
@@ -1674,45 +1671,65 @@ _GOOGLE_FONT_URLS = {
 }
 
 
-def _download_google_font(name: str, cache_dir: str) -> str | None:
+def _download_google_font(name: str, cache_dir: str,
+                          bold: bool = False, italic: bool = False) -> str | None:
     """Download a Google Font TTF file to local cache."""
     import os
+    import re
     import urllib.request
 
-    url = _GOOGLE_FONT_URLS.get(name)
+    style_suffix = "Regular"
+    if bold and italic:
+        style_suffix = "BoldItalic"
+    elif bold:
+        style_suffix = "Bold"
+    elif italic:
+        style_suffix = "Italic"
+
+    # Only use hardcoded URLs for Regular weight
+    url = None
+    if style_suffix == "Regular":
+        url = _GOOGLE_FONT_URLS.get(name)
+
     if not url:
-        # Try the Google Fonts CSS API to get the URL dynamically
+        # Use Google Fonts CSS API with weight/style params
         try:
-            css_url = f"https://fonts.googleapis.com/css2?family={name.replace(' ', '+')}"
+            # Build CSS2 API URL with specific weight/style
+            ital = 1 if italic else 0
+            wght = 700 if bold else 400
+            family_param = name.replace(" ", "+")
+            css_url = (
+                f"https://fonts.googleapis.com/css2?"
+                f"family={family_param}:ital,wght@{ital},{wght}"
+            )
             req = urllib.request.Request(css_url, headers={
-                "User-Agent": "Mozilla/5.0",  # Google Fonts requires a browser-like UA
+                "User-Agent": "Mozilla/5.0",
             })
             with urllib.request.urlopen(req, timeout=10) as resp:
                 css = resp.read().decode("utf-8")
-            # Extract first TTF/woff2 URL from CSS
-            import re
             match = re.search(r"url\((https://fonts\.gstatic\.com/[^)]+\.ttf)\)", css)
             if not match:
                 match = re.search(r"url\((https://fonts\.gstatic\.com/[^)]+)\)", css)
             if match:
                 url = match.group(1)
         except Exception as exc:
-            logger.warning("Could not fetch Google Fonts CSS for %s: %s", name, exc)
+            logger.warning("Could not fetch Google Fonts CSS for %s (%s): %s",
+                          name, style_suffix, exc)
 
     if not url:
         return None
 
     ext = ".woff2" if url.endswith(".woff2") else ".ttf"
-    dest = os.path.join(cache_dir, f"{name}-Regular{ext}")
+    dest = os.path.join(cache_dir, f"{name}-{style_suffix}{ext}")
 
     try:
-        logger.info("Downloading Google Font %s from %s", name, url[:80])
+        logger.info("Downloading Google Font %s (%s) from %s", name, style_suffix, url[:80])
         urllib.request.urlretrieve(url, dest)
         if os.path.isfile(dest) and os.path.getsize(dest) > 1000:
             logger.info("Downloaded font: %s (%d bytes)", dest, os.path.getsize(dest))
             return dest
     except Exception as exc:
-        logger.warning("Failed to download font %s: %s", name, exc)
+        logger.warning("Failed to download font %s (%s): %s", name, style_suffix, exc)
 
     return None
 

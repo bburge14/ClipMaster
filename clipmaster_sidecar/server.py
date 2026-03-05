@@ -689,7 +689,7 @@ async def _handle_create_short(
             if not clean:
                 clean = _sanitize_for_ffmpeg(slide_text)
             slide_path = os.path.join(tmpdir, f"cm_slide_{len(slide_files)}.txt")
-            with open(slide_path, "w", encoding="utf-8", newline="\n") as f:
+            with open(slide_path, "w", encoding="ascii", newline="\n") as f:
                 f.write(clean)
             slide_files.append(f"cm_slide_{len(slide_files)}.txt")
     else:
@@ -699,14 +699,14 @@ async def _handle_create_short(
     clean_title = _sanitize_for_ffmpeg(wrapped_title)
     if not clean_title:
         clean_title = _sanitize_for_ffmpeg(title)
-    with open(title_file, "w", encoding="utf-8", newline="\n") as f:
+    with open(title_file, "w", encoding="ascii", newline="\n") as f:
         f.write(clean_title)
 
     if not slideshow_enabled:
         clean_body = _sanitize_for_ffmpeg(wrapped_body)
         if not clean_body:
             clean_body = _sanitize_for_ffmpeg(text)
-        with open(body_file, "w", encoding="utf-8", newline="\n") as f:
+        with open(body_file, "w", encoding="ascii", newline="\n") as f:
             f.write(clean_body)
 
     # Copy font(s) to temp dir so we can reference by bare filename
@@ -826,7 +826,7 @@ async def _handle_create_short(
     if category_label:
         cat_file = os.path.join(tmpdir, "cm_category.txt")
         clean_cat = _sanitize_for_ffmpeg(category_label) or category_label.strip()
-        with open(cat_file, "w", encoding="utf-8", newline="\n") as f:
+        with open(cat_file, "w", encoding="ascii", newline="\n") as f:
             f.write(clean_cat)
         # Badge text at bottom, centered
         # Preview: bottom:12, padding h:10, v:3 on 270×480
@@ -1031,7 +1031,7 @@ async def _handle_preview_snapshot(
     if not clean_title:
         clean_title = _sanitize_for_ffmpeg(title)
     title_file = os.path.join(tmpdir, "cm_title.txt")
-    with open(title_file, "w", encoding="utf-8", newline="\n") as f:
+    with open(title_file, "w", encoding="ascii", newline="\n") as f:
         f.write(clean_title)
 
     # Write body (show first slide if slideshow)
@@ -1045,7 +1045,7 @@ async def _handle_preview_snapshot(
     if not clean_body:
         clean_body = _sanitize_for_ffmpeg(text)
     body_file = os.path.join(tmpdir, "cm_body.txt")
-    with open(body_file, "w", encoding="utf-8", newline="\n") as f:
+    with open(body_file, "w", encoding="ascii", newline="\n") as f:
         f.write(clean_body)
 
     # ── Fonts ──
@@ -1131,7 +1131,7 @@ async def _handle_preview_snapshot(
     if category_label:
         cat_file = os.path.join(tmpdir, "cm_category.txt")
         clean_cat = _sanitize_for_ffmpeg(category_label) or category_label.strip()
-        with open(cat_file, "w", encoding="utf-8", newline="\n") as f:
+        with open(cat_file, "w", encoding="ascii", newline="\n") as f:
             f.write(clean_cat)
         badge_y = 1920 - 48 - 52
         badge_font_size = 40
@@ -1270,8 +1270,9 @@ async def _handle_preview_video_clip(
     clean_title = _sanitize_for_ffmpeg(wrapped_title)
     if not clean_title:
         clean_title = _sanitize_for_ffmpeg(title)
+    logger.info("preview_clip title bytes: %s", clean_title.encode('utf-8').hex())
     title_file = os.path.join(tmpdir, "cm_title.txt")
-    with open(title_file, "w", encoding="utf-8", newline="\n") as f:
+    with open(title_file, "w", encoding="ascii", newline="\n") as f:
         f.write(clean_title)
 
     if slideshow_enabled:
@@ -1283,8 +1284,9 @@ async def _handle_preview_video_clip(
     clean_body = _sanitize_for_ffmpeg(wrapped_body)
     if not clean_body:
         clean_body = _sanitize_for_ffmpeg(text)
+    logger.info("preview_clip body bytes: %s", clean_body.encode('utf-8').hex())
     body_file = os.path.join(tmpdir, "cm_body.txt")
-    with open(body_file, "w", encoding="utf-8", newline="\n") as f:
+    with open(body_file, "w", encoding="ascii", newline="\n") as f:
         f.write(clean_body)
 
     # ── Fonts ──
@@ -1366,7 +1368,7 @@ async def _handle_preview_video_clip(
     if category_label:
         cat_file = os.path.join(tmpdir, "cm_category.txt")
         clean_cat = _sanitize_for_ffmpeg(category_label) or category_label.strip()
-        with open(cat_file, "w", encoding="utf-8", newline="\n") as f:
+        with open(cat_file, "w", encoding="ascii", newline="\n") as f:
             f.write(clean_cat)
         badge_y = 1920 - 48 - 52
         badge_font_size = 40
@@ -1495,7 +1497,10 @@ def _ffmpeg_text_align(align: str) -> str:
 
 
 def _sanitize_for_ffmpeg(text: str) -> str:
-    """Replace common Unicode chars with ASCII equivalents, strip the rest."""
+    """Replace common Unicode chars with ASCII equivalents, strip the rest.
+
+    Guarantees output contains ONLY printable ASCII (0x20-0x7E) plus newline (0x0A).
+    """
     import unicodedata
     replacements = {
         '\u2018': "'", '\u2019': "'",   # smart single quotes
@@ -1509,18 +1514,28 @@ def _sanitize_for_ffmpeg(text: str) -> str:
         '\u00AB': '"', '\u00BB': '"',   # guillemets
         '\u2022': '-',                  # bullet
         '\u00B7': '-',                  # middle dot
+        '\u2032': "'", '\u2033': '"',   # prime, double prime
+        '\u2010': '-', '\u2011': '-',   # hyphens
+        '\u2012': '-', '\u2015': '-',   # figure dash, horizontal bar
+        '\u2044': '/',                  # fraction slash
+        '\u00D7': 'x',                 # multiplication sign
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
-    # Strip carriage returns (render as boxes in FFmpeg)
-    text = text.replace('\r', '')
-    # Strip tabs and other control chars except newline
-    text = ''.join(c for c in text if c == '\n' or (c.isprintable() or ord(c) >= 32))
+    # Normalize to decomposed form, then strip to ASCII
     text = unicodedata.normalize('NFKD', text)
-    text = text.encode('ascii', errors='ignore').decode('ascii')
-    # Remove any remaining non-printable ASCII (control chars 0x00-0x1F except \n)
-    text = ''.join(c for c in text if c == '\n' or (0x20 <= ord(c) <= 0x7E))
-    return text.strip()
+    # Build output char by char — ONLY allow printable ASCII + newline
+    out = []
+    for c in text:
+        if c == '\n':
+            out.append(c)
+        elif 0x20 <= ord(c) <= 0x7E:
+            out.append(c)
+        # Everything else is silently dropped
+    result = ''.join(out)
+    # Strip trailing spaces per line to prevent phantom glyphs
+    lines = [line.rstrip() for line in result.split('\n')]
+    return '\n'.join(lines).strip()
 
 
 def _wrap_text(text: str, max_chars: int = 35) -> str:
@@ -1537,6 +1552,17 @@ def _wrap_text(text: str, max_chars: int = 35) -> str:
     if current_line:
         lines.append(current_line)
     return "\n".join(lines)
+
+
+def _is_valid_font_file(path: str) -> bool:
+    """Check if a file is a valid TTF/OTF font (not woff2 or corrupt)."""
+    try:
+        with open(path, "rb") as f:
+            magic = f.read(4)
+        # TTF: 0x00010000 or 'true'; OTF: 'OTTO'; TTC: 'ttcf'
+        return magic in (b'\x00\x01\x00\x00', b'true', b'OTTO', b'ttcf')
+    except Exception:
+        return False
 
 
 def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bool = False) -> str | None:
@@ -1573,15 +1599,21 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
     # Check cache first
     if preferred_name:
         cached = os.path.join(font_cache_dir, f"{preferred_name}-{style_suffix}.ttf")
-        if os.path.isfile(cached):
+        if os.path.isfile(cached) and _is_valid_font_file(cached):
             logger.info("Using cached font: %s", cached)
             return cached
+        elif os.path.isfile(cached):
+            logger.warning("Cached font is invalid (woff2?), removing: %s", cached)
+            os.remove(cached)
         # Fall back to Regular if styled variant not cached
         if style_suffix != "Regular":
             cached_regular = os.path.join(font_cache_dir, f"{preferred_name}-Regular.ttf")
-            if os.path.isfile(cached_regular):
+            if os.path.isfile(cached_regular) and _is_valid_font_file(cached_regular):
                 logger.info("Using cached font (no %s variant): %s", style_suffix, cached_regular)
                 return cached_regular
+            elif os.path.isfile(cached_regular):
+                logger.warning("Cached font is invalid, removing: %s", cached_regular)
+                os.remove(cached_regular)
 
     # Flutter google_fonts cache locations
     flutter_cache_dirs = []
@@ -1665,13 +1697,17 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
                               and not os.path.basename(m).lower().endswith(
                                   ("bi.ttf", "bi.otf", "z.ttf", "z.otf"))]
 
+                # Filter to valid font files only (skip woff2 disguised as .ttf)
+                styled = [m for m in styled if _is_valid_font_file(m)]
                 if styled:
                     logger.info("Using font (%s): %s", style_suffix, styled[0])
                     return styled[0]
                 # Only fall back to any match if no specific style requested
                 if matches and not want_bold and not want_italic:
-                    logger.info("Using font (fallback): %s", matches[0])
-                    return matches[0]
+                    valid = [m for m in matches if _is_valid_font_file(m)]
+                    if valid:
+                        logger.info("Using font (fallback): %s", valid[0])
+                        return valid[0]
 
     # Not found on system with correct style — download from Google Fonts
     if preferred_name and (want_bold or want_italic):
@@ -1689,9 +1725,10 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
                 os.path.join(font_dir, "**", f"{preferred_name.replace(' ', '')}*.ttf"),
             ]:
                 matches = glob.glob(pattern, recursive=True)
-                if matches:
-                    logger.info("Using font (unstyled fallback): %s", matches[0])
-                    return matches[0]
+                valid = [m for m in matches if _is_valid_font_file(m)]
+                if valid:
+                    logger.info("Using font (unstyled fallback): %s", valid[0])
+                    return valid[0]
         downloaded = _download_google_font(preferred_name, font_cache_dir)
         if downloaded:
             return downloaded
@@ -1700,9 +1737,8 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
     return None
 
 
-# Google Fonts direct download URLs (regular weight)
+# Google Fonts direct download URLs (regular weight, TTF only — FFmpeg cannot read woff2)
 _GOOGLE_FONT_URLS = {
-    "Inter": "https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfAZ9hiA.woff2",
     "Roboto": "https://fonts.gstatic.com/s/roboto/v47/KFOMCnqEu92Fr1ME7kSn66aGLdTylUAMQXC89YmC2DPNWubEbGmT.ttf",
     "Montserrat": "https://fonts.gstatic.com/s/montserrat/v29/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw5aXo.ttf",
     "Oswald": "https://fonts.gstatic.com/s/oswald/v53/TK3_WkUHHAIjg75cFRf3bXL8LICs1_FvsUZiYA.ttf",
@@ -1734,7 +1770,6 @@ def _download_google_font(name: str, cache_dir: str,
     if not url:
         # Use Google Fonts CSS API with weight/style params
         try:
-            # Build CSS2 API URL with specific weight/style
             ital = 1 if italic else 0
             wght = 700 if bold else 400
             family_param = name.replace(" ", "+")
@@ -1742,25 +1777,32 @@ def _download_google_font(name: str, cache_dir: str,
                 f"https://fonts.googleapis.com/css2?"
                 f"family={family_param}:ital,wght@{ital},{wght}"
             )
+            # Use a non-browser UA so Google Fonts returns TTF URLs instead of woff2
             req = urllib.request.Request(css_url, headers={
-                "User-Agent": "Mozilla/5.0",
+                "User-Agent": "FFmpeg/ClipMaster (compatible; need TTF)",
             })
             with urllib.request.urlopen(req, timeout=10) as resp:
                 css = resp.read().decode("utf-8")
+            # Prefer .ttf URLs — FFmpeg CANNOT use woff2
             match = re.search(r"url\((https://fonts\.gstatic\.com/[^)]+\.ttf)\)", css)
-            if not match:
-                match = re.search(r"url\((https://fonts\.gstatic\.com/[^)]+)\)", css)
             if match:
                 url = match.group(1)
+            else:
+                logger.warning("Google Fonts returned no TTF URL for %s (%s), CSS: %s",
+                              name, style_suffix, css[:200])
         except Exception as exc:
             logger.warning("Could not fetch Google Fonts CSS for %s (%s): %s",
                           name, style_suffix, exc)
 
+    # Reject woff2 URLs — FFmpeg cannot read them
+    if url and url.endswith(".woff2"):
+        logger.warning("Skipping woff2 URL for %s, FFmpeg needs TTF", name)
+        url = None
+
     if not url:
         return None
 
-    ext = ".woff2" if url.endswith(".woff2") else ".ttf"
-    dest = os.path.join(cache_dir, f"{name}-{style_suffix}{ext}")
+    dest = os.path.join(cache_dir, f"{name}-{style_suffix}.ttf")
 
     try:
         logger.info("Downloading Google Font %s (%s) from %s", name, style_suffix, url[:80])

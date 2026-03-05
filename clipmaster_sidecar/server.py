@@ -1611,15 +1611,21 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
         r"C:\Windows\Fonts",
     ]
 
-    # User's chosen font goes first, then fallback list
-    preferred = []
-    if preferred_name:
-        preferred.append(preferred_name)
-    preferred.extend([
-        "Inter", "Roboto", "Montserrat", "Poppins", "Lato", "Oswald",
-        "LiberationSans", "Liberation Sans", "DejaVuSans", "DejaVu Sans",
-        "NotoSans", "Noto Sans", "Arial", "Helvetica", "FreeSans",
-    ])
+    # When bold/italic is requested, only search for the user's preferred font
+    # Don't fall back to other font families — that defeats the purpose
+    if want_bold or want_italic:
+        preferred = []
+        if preferred_name:
+            preferred.append(preferred_name)
+    else:
+        preferred = []
+        if preferred_name:
+            preferred.append(preferred_name)
+        preferred.extend([
+            "Inter", "Roboto", "Montserrat", "Poppins", "Lato", "Oswald",
+            "LiberationSans", "Liberation Sans", "DejaVuSans", "DejaVu Sans",
+            "NotoSans", "Noto Sans", "Arial", "Helvetica", "FreeSans",
+        ])
 
     # Build style keywords to match or exclude
     want_bold = bold
@@ -1675,29 +1681,33 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
                         logger.info("Using font (fallback): %s", valid[0])
                         return valid[0]
 
-    # Not found on system with correct style — download from Google Fonts
-    if preferred_name and (want_bold or want_italic):
+    # Not found on system — download from Google Fonts
+    if preferred_name:
         downloaded = _download_google_font(preferred_name, font_cache_dir, bold=bold, italic=italic)
         if downloaded:
             return downloaded
 
-    # Try system fonts without style requirement as last resort
-    if preferred_name:
+    # If bold/italic download failed, try downloading Regular as fallback
+    if preferred_name and (want_bold or want_italic):
+        downloaded = _download_google_font(preferred_name, font_cache_dir, bold=False, italic=False)
+        if downloaded:
+            logger.info("Bold/Italic variant not available, using Regular: %s", downloaded)
+            return downloaded
+
+    # Last resort: try system fonts (any style) for ANY known font
+    if not preferred_name or (not want_bold and not want_italic):
         for font_dir in font_dirs:
             if not os.path.isdir(font_dir):
                 continue
-            for pattern in [
-                os.path.join(font_dir, "**", f"{preferred_name}*.ttf"),
-                os.path.join(font_dir, "**", f"{preferred_name.replace(' ', '')}*.ttf"),
-            ]:
-                matches = glob.glob(pattern, recursive=True)
-                valid = [m for m in matches if _is_valid_font_file(m)]
-                if valid:
-                    logger.info("Using font (unstyled fallback): %s", valid[0])
-                    return valid[0]
-        downloaded = _download_google_font(preferred_name, font_cache_dir)
-        if downloaded:
-            return downloaded
+            for fallback in ["Roboto", "Arial", "DejaVuSans", "LiberationSans", "FreeSans"]:
+                for pattern in [
+                    os.path.join(font_dir, "**", f"{fallback}*.ttf"),
+                ]:
+                    matches = glob.glob(pattern, recursive=True)
+                    valid = [m for m in matches if _is_valid_font_file(m)]
+                    if valid:
+                        logger.info("Using system fallback font: %s", valid[0])
+                        return valid[0]
 
     # Last resort: try to download ANY font that we know has a TTF URL
     for fallback_name in ["Roboto", "Montserrat", "Lato", "Poppins"]:

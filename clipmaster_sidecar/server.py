@@ -764,11 +764,14 @@ async def _handle_create_short(
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 
     # Bare filenames — FFmpeg cwd will be set to tmpdir
+    title_text_align = _ffmpeg_text_align(title_align)
+    body_text_align = _ffmpeg_text_align(body_align)
+
     drawtext_title = (
         f"drawtext=textfile=cm_title.txt"
         f":fontsize={title_font_size}:fontcolor={effective_title_color}"
         f":x={title_x_expr}:y={title_y}"
-        f"{title_font_opt}{border_opts}"
+        f"{title_font_opt}{border_opts}{title_text_align}"
     )
 
     # Body text: single drawtext or multiple for slideshow
@@ -783,7 +786,7 @@ async def _handle_create_short(
                 f"drawtext=textfile={slide_fname}"
                 f":fontsize={body_font_size}:fontcolor={effective_body_color}"
                 f":x={body_x_expr}:y={body_y}"
-                f"{body_font_opt}{body_border}"
+                f"{body_font_opt}{body_border}{body_text_align}"
                 f":enable='between(t,{t_start:.2f},{t_end:.2f})'"
             )
     else:
@@ -791,7 +794,7 @@ async def _handle_create_short(
             f"drawtext=textfile=cm_body.txt"
             f":fontsize={body_font_size}:fontcolor={effective_body_color}"
             f":x={body_x_expr}:y={body_y}"
-            f"{body_font_opt}{body_border}"
+            f"{body_font_opt}{body_border}{body_text_align}"
         )
 
     # Title text box background (drawbox behind title)
@@ -822,9 +825,7 @@ async def _handle_create_short(
     drawtext_category = ""
     if category_label:
         cat_file = os.path.join(tmpdir, "cm_category.txt")
-        clean_cat = category_label.encode("ascii", errors="ignore").decode("ascii").strip()
-        if not clean_cat:
-            clean_cat = category_label.strip()
+        clean_cat = _sanitize_for_ffmpeg(category_label) or category_label.strip()
         with open(cat_file, "w", encoding="utf-8", newline="\n") as f:
             f.write(clean_cat)
         # Badge text at bottom, centered
@@ -1087,18 +1088,21 @@ async def _handle_preview_snapshot(
     # Body X: use actual position instead of always centering
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 
+    title_text_align = _ffmpeg_text_align(title_align)
+    body_text_align = _ffmpeg_text_align(body_align)
+
     drawtext_title = (
         f"drawtext=textfile=cm_title.txt"
         f":fontsize={title_font_size}:fontcolor={title_color}"
         f":x={title_x_expr}:y={title_y}"
-        f"{title_font_opt}{border_opts}"
+        f"{title_font_opt}{border_opts}{title_text_align}"
     )
 
     drawtext_body = (
         f"drawtext=textfile=cm_body.txt"
         f":fontsize={body_font_size}:fontcolor={body_color}"
         f":x={body_x_expr}:y={body_y}"
-        f"{body_font_opt}{body_border}"
+        f"{body_font_opt}{body_border}{body_text_align}"
     )
 
     # Background boxes
@@ -1321,18 +1325,21 @@ async def _handle_preview_video_clip(
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 
+    title_text_align = _ffmpeg_text_align(title_align)
+    body_text_align = _ffmpeg_text_align(body_align)
+
     drawtext_title = (
         f"drawtext=textfile=cm_title.txt"
         f":fontsize={title_font_size}:fontcolor={title_color}"
         f":x={title_x_expr}:y={title_y}"
-        f"{title_font_opt}{border_opts}"
+        f"{title_font_opt}{border_opts}{title_text_align}"
     )
 
     drawtext_body = (
         f"drawtext=textfile=cm_body.txt"
         f":fontsize={body_font_size}:fontcolor={body_color}"
         f":x={body_x_expr}:y={body_y}"
-        f"{body_font_opt}{body_border}"
+        f"{body_font_opt}{body_border}{body_text_align}"
     )
 
     drawbox_title_bg = ""
@@ -1477,6 +1484,16 @@ def _align_x_expr(pos_x: float, align: str, canvas_w: int = 1080, margin: int = 
         return f"({int(pos_x * canvas_w)}-text_w/2)"
 
 
+def _ffmpeg_text_align(align: str) -> str:
+    """Return FFmpeg text_align option string for drawtext (L+T, C+T, R+T)."""
+    if align == "left":
+        return ":text_align=L+T"
+    elif align == "right":
+        return ":text_align=R+T"
+    else:
+        return ":text_align=C+T"
+
+
 def _sanitize_for_ffmpeg(text: str) -> str:
     """Replace common Unicode chars with ASCII equivalents, strip the rest."""
     import unicodedata
@@ -1495,8 +1512,14 @@ def _sanitize_for_ffmpeg(text: str) -> str:
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
+    # Strip carriage returns (render as boxes in FFmpeg)
+    text = text.replace('\r', '')
+    # Strip tabs and other control chars except newline
+    text = ''.join(c for c in text if c == '\n' or (c.isprintable() or ord(c) >= 32))
     text = unicodedata.normalize('NFKD', text)
     text = text.encode('ascii', errors='ignore').decode('ascii')
+    # Remove any remaining non-printable ASCII (control chars 0x00-0x1F except \n)
+    text = ''.join(c for c in text if c == '\n' or (0x20 <= ord(c) <= 0x7E))
     return text.strip()
 
 

@@ -657,8 +657,6 @@ async def _handle_create_short(
     # We run FFmpeg with cwd=tmpdir so drawtext can use bare filenames,
     # completely avoiding Windows C: colon issues in filter strings.
     tmpdir = tempfile.gettempdir()
-    title_file = os.path.join(tmpdir, "cm_title.txt")
-    body_file = os.path.join(tmpdir, "cm_body.txt")
 
     # Word-wrap title: preview shows left:16, right:16 on 270px → (270-32)/270 ≈ 88%
     # On 1080px canvas that's ~952px usable. Wrap to max 2 lines.
@@ -678,42 +676,35 @@ async def _handle_create_short(
     avg_char_w = max(body_font_size * 0.52, 1)
     chars_per_line = max(15, int(body_usable_px / avg_char_w))
 
-    # Slideshow mode: split text into separate slide files
-    slide_files: list[str] = []
+    # Prepare title lines (sanitized, inline)
+    title_lines_clean = [_sanitize_for_ffmpeg(l) for l in wrapped_title.split("\n") if _sanitize_for_ffmpeg(l)]
+    if not title_lines_clean:
+        title_lines_clean = [_sanitize_for_ffmpeg(title) or "Untitled"]
+
+    # Slideshow mode: prepare per-slide line lists
+    slide_line_lists: list[list[str]] = []
     if slideshow_enabled:
         words = text.split()
         for si in range(0, len(words), words_per_slide):
             slide_text = " ".join(words[si:si + words_per_slide])
             wrapped = _wrap_text(slide_text, chars_per_line)
-            clean = _sanitize_for_ffmpeg(wrapped)
-            if not clean:
-                clean = _sanitize_for_ffmpeg(slide_text)
-            slide_path = os.path.join(tmpdir, f"cm_slide_{len(slide_files)}.txt")
-            with open(slide_path, "w", encoding="ascii", newline="\n") as f:
-                f.write(clean)
-            slide_files.append(f"cm_slide_{len(slide_files)}.txt")
+            lines = [_sanitize_for_ffmpeg(l) for l in wrapped.split("\n") if _sanitize_for_ffmpeg(l)]
+            if lines:
+                slide_line_lists.append(lines)
     else:
         wrapped_body = _wrap_text(text, chars_per_line)
 
-    # Strip any BOM / invisible unicode chars that cause box glyphs in FFmpeg
-    clean_title = _sanitize_for_ffmpeg(wrapped_title)
-    if not clean_title:
-        clean_title = _sanitize_for_ffmpeg(title)
-    with open(title_file, "w", encoding="ascii", newline="\n") as f:
-        f.write(clean_title)
-
+    # Body lines for non-slideshow
+    body_lines_clean: list[str] = []
     if not slideshow_enabled:
-        clean_body = _sanitize_for_ffmpeg(wrapped_body)
-        if not clean_body:
-            clean_body = _sanitize_for_ffmpeg(text)
-        with open(body_file, "w", encoding="ascii", newline="\n") as f:
-            f.write(clean_body)
+        body_lines_clean = [_sanitize_for_ffmpeg(l) for l in wrapped_body.split("\n") if _sanitize_for_ffmpeg(l)]
+        if not body_lines_clean:
+            body_lines_clean = [_sanitize_for_ffmpeg(text) or ""]
 
-    # Copy font(s) to temp dir so we can reference by bare filename
+    # Copy font(s) to temp dir
     import shutil
     font_family = msg.payload.get("font_family", "")
 
-    # Title font
     title_font_name = title_font_family if title_font_family else font_family
     title_font_file = _find_font(preferred_name=title_font_name if title_font_name else None,
                                  bold=title_bold, italic=title_italic)
@@ -726,7 +717,6 @@ async def _handle_create_short(
         except Exception:
             logger.warning("Could not copy title font %s to temp dir", title_font_file)
 
-    # Body font
     body_font_name = body_font_family if body_font_family else font_family
     body_font_file = _find_font(preferred_name=body_font_name if body_font_name else None,
                                 bold=body_bold, italic=body_italic)
@@ -739,75 +729,54 @@ async def _handle_create_short(
         except Exception:
             logger.warning("Could not copy body font %s to temp dir", body_font_file)
 
-    # Build drawtext filters — match Flutter preview pixel-for-pixel
+    # Build drawtext filters — inline text=, one per line, no textfile
     border_opts = ":borderw=3:bordercolor=black" if title_shadow else ""
     body_border = ":borderw=2:bordercolor=black" if body_shadow else ""
 
     effective_title_color = title_color
     effective_body_color = body_color
 
-    # Title position: preview uses top: frameH * title_pos_y
     title_y = int(title_pos_y * 1920)
-    # Title X: preview offsets from center via title_pos_x (0.5 = centered)
-    # In FFmpeg: x = title_pos_x * 1080 - text_w/2
     title_x_expr = _align_x_expr(title_pos_x, title_align)
 
-    # Body text: preview puts box CENTER at (text_pos_x, text_pos_y),
-    # box top = center_y - boxH/2, then text starts at box top + padding(24px)
     text_box_h = float(msg.payload.get("text_box_h", 0.35))
     body_box_top = int(text_pos_y * 1920 - (text_box_h * 1920) / 2)
-    body_y = max(0, body_box_top + 24)  # +24px for padding (6px × 4 scale)
-
-    # Body box X: preview centers box at text_pos_x
+    body_y = max(0, body_box_top + 24)
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
-    # Body X expression: center text at text_pos_x (respect drag position)
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 
-    # Bare filenames — FFmpeg cwd will be set to tmpdir
-    drawtext_title = (
-        f"drawtext=textfile=cm_title.txt"
-        f":fontsize={title_font_size}:fontcolor={effective_title_color}"
-        f":x={title_x_expr}:y={title_y}"
-        f"{title_font_opt}{border_opts}"
-    )
+    title_drawtext_parts = _build_drawtext_lines(
+        title_lines_clean, title_font_opt, title_font_size, effective_title_color,
+        title_x_expr, title_y, border_opts)
 
-    # Body text: single drawtext or multiple for slideshow
+    # Body text: single block or slideshow with enable expressions
     drawtext_body_parts: list[str] = []
-    if slideshow_enabled and slide_files:
-        # Each slide shown for equal duration
-        slide_dur = duration / len(slide_files) if duration > 0 else 5.0
-        for si, slide_fname in enumerate(slide_files):
+    if slideshow_enabled and slide_line_lists:
+        slide_dur = duration / len(slide_line_lists) if duration > 0 else 5.0
+        for si, slide_lines in enumerate(slide_line_lists):
             t_start = si * slide_dur
             t_end = (si + 1) * slide_dur
-            drawtext_body_parts.append(
-                f"drawtext=textfile={slide_fname}"
-                f":fontsize={body_font_size}:fontcolor={effective_body_color}"
-                f":x={body_x_expr}:y={body_y}"
-                f"{body_font_opt}{body_border}"
-                f":enable='between(t,{t_start:.2f},{t_end:.2f})'"
-            )
+            enable = f"between(t,{t_start:.2f},{t_end:.2f})"
+            drawtext_body_parts.extend(_build_drawtext_lines(
+                slide_lines, body_font_opt, body_font_size, effective_body_color,
+                body_x_expr, body_y, body_border, enable_expr=enable))
     else:
-        drawtext_body_parts.append(
-            f"drawtext=textfile=cm_body.txt"
-            f":fontsize={body_font_size}:fontcolor={effective_body_color}"
-            f":x={body_x_expr}:y={body_y}"
-            f"{body_font_opt}{body_border}"
-        )
+        drawtext_body_parts.extend(_build_drawtext_lines(
+            body_lines_clean, body_font_opt, body_font_size, effective_body_color,
+            body_x_expr, body_y, body_border))
 
-    # Title text box background (drawbox behind title)
+    # Title text box background
     drawbox_title_bg = ""
     if title_bg_enabled:
-        # Title box centered at title_pos_x with padding
         title_box_w = 952
-        title_box_x = int(title_pos_x * 1080 - title_box_w / 2)
-        title_box_x = max(0, title_box_x)
+        title_box_x = max(0, int(title_pos_x * 1080 - title_box_w / 2))
         drawbox_title_bg = (
             f"drawbox=x={title_box_x}:y={max(0, title_y - 16)}"
             f":w={title_box_w}:h={title_font_size * len(title_lines) + 32}"
-            f":color={title_bg_color}:t=fill,"
+            f":color={title_bg_color}:t=fill"
         )
 
-    # Body text box background (drawbox behind body)
+    # Body text box background
     drawbox_body_bg = ""
     if body_bg_enabled:
         body_box_h_px = int(text_box_h * 1920)
@@ -815,24 +784,18 @@ async def _handle_create_short(
             f"drawbox=x={max(0, body_box_left)}"
             f":y={max(0, body_box_top)}"
             f":w={body_box_w_px}:h={body_box_h_px}"
-            f":color={body_bg_color}:t=fill,"
+            f":color={body_bg_color}:t=fill"
         )
 
-    # Category badge: small text at bottom center (matches preview)
-    drawtext_category = ""
+    # Category badge
+    drawtext_category_parts: list[str] = []
     if category_label:
-        cat_file = os.path.join(tmpdir, "cm_category.txt")
-        clean_cat = _sanitize_for_ffmpeg(category_label) or category_label.strip()
-        with open(cat_file, "w", encoding="ascii", newline="\n") as f:
-            f.write(clean_cat)
-        # Badge text at bottom, centered
-        # Preview: bottom:12, padding h:10, v:3 on 270×480
-        # → 1920 - 48(bottom margin) - 12(badge padding) - 40(font size) ≈ 1820
+        clean_cat = _sanitize_for_ffmpeg(category_label) or "Category"
+        escaped_cat = _escape_ffmpeg_text(clean_cat)
         badge_y = 1920 - 48 - 52
-        badge_font_size = 40  # 10px preview × 4
-        # Use drawtext with box=1 for built-in background box
-        drawtext_category = (
-            f",drawtext=textfile=cm_category.txt"
+        badge_font_size = 40
+        drawtext_category_parts.append(
+            f"drawtext=text='{escaped_cat}'"
             f":fontsize={badge_font_size}:fontcolor=white"
             f":x=(w-text_w)/2:y={badge_y}"
             f":box=1:boxcolor=0x6C5CE7@0.6:boxborderw=12"
@@ -847,9 +810,7 @@ async def _handle_create_short(
     if bg_music_path:
         bg_music_path = os.path.abspath(bg_music_path)
 
-    # Build the video filter chain — order matters for WYSIWYG fidelity:
-    # 1. Scale/crop → 2. Dark overlay → 3. Text box backgrounds →
-    # 4. Title text → 5. Body text(s) → 6. Category badge
+    # Build the video filter chain
     def _build_vf(include_scale: bool) -> str:
         parts = []
         if include_scale:
@@ -857,15 +818,13 @@ async def _handle_create_short(
                 "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
             )
         if drawbox_title_bg:
-            parts.append(drawbox_title_bg.rstrip(","))
+            parts.append(drawbox_title_bg)
         if drawbox_body_bg:
-            parts.append(drawbox_body_bg.rstrip(","))
-        parts.append(drawtext_title)
+            parts.append(drawbox_body_bg)
+        parts.extend(title_drawtext_parts)
         parts.extend(drawtext_body_parts)
-        vf_str = ",".join(parts)
-        if drawtext_category:
-            vf_str += drawtext_category
-        return vf_str
+        parts.extend(drawtext_category_parts)
+        return ",".join(parts)
 
     # Determine audio inputs and mixing
     has_bg_music = bg_music_path and os.path.isfile(bg_music_path)
@@ -1023,27 +982,20 @@ async def _handle_preview_snapshot(
     avg_char_w = max(body_font_size * 0.52, 1)
     chars_per_line = max(15, int(body_usable_px / avg_char_w))
 
-    # Write title
-    clean_title = _sanitize_for_ffmpeg(wrapped_title)
-    if not clean_title:
-        clean_title = _sanitize_for_ffmpeg(title)
-    title_file = os.path.join(tmpdir, "cm_title.txt")
-    with open(title_file, "w", encoding="ascii", newline="\n") as f:
-        f.write(clean_title)
+    # Prepare title and body lines (sanitized)
+    title_lines_clean = [_sanitize_for_ffmpeg(l) for l in wrapped_title.split("\n") if _sanitize_for_ffmpeg(l)]
+    if not title_lines_clean:
+        title_lines_clean = [_sanitize_for_ffmpeg(title) or "Untitled"]
 
-    # Write body (show first slide if slideshow)
     if slideshow_enabled:
         words = text.split()
         first_slide = " ".join(words[:words_per_slide])
         wrapped_body = _wrap_text(first_slide, chars_per_line)
     else:
         wrapped_body = _wrap_text(text, chars_per_line)
-    clean_body = _sanitize_for_ffmpeg(wrapped_body)
-    if not clean_body:
-        clean_body = _sanitize_for_ffmpeg(text)
-    body_file = os.path.join(tmpdir, "cm_body.txt")
-    with open(body_file, "w", encoding="ascii", newline="\n") as f:
-        f.write(clean_body)
+    body_lines_clean = [_sanitize_for_ffmpeg(l) for l in wrapped_body.split("\n") if _sanitize_for_ffmpeg(l)]
+    if not body_lines_clean:
+        body_lines_clean = [_sanitize_for_ffmpeg(text) or ""]
 
     # ── Fonts ──
     font_family = p.get("font_family", "")
@@ -1071,7 +1023,7 @@ async def _handle_preview_snapshot(
         except Exception:
             pass
 
-    # ── Build filter chain (same as render) ──
+    # ── Build filter chain — inline text=, one drawtext per line ──
     border_opts = ":borderw=3:bordercolor=black" if title_shadow else ""
     body_border = ":borderw=2:bordercolor=black" if body_shadow else ""
 
@@ -1081,25 +1033,16 @@ async def _handle_preview_snapshot(
     body_box_top = int(text_pos_y * 1920 - (text_box_h * 1920) / 2)
     body_y = max(0, body_box_top + 24)
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
-
-    # Body X: use actual position instead of always centering
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 
-    drawtext_title = (
-        f"drawtext=textfile=cm_title.txt"
-        f":fontsize={title_font_size}:fontcolor={title_color}"
-        f":x={title_x_expr}:y={title_y}"
-        f"{title_font_opt}{border_opts}"
-    )
+    title_drawtext_parts = _build_drawtext_lines(
+        title_lines_clean, title_font_opt, title_font_size, title_color,
+        title_x_expr, title_y, border_opts)
 
-    drawtext_body = (
-        f"drawtext=textfile=cm_body.txt"
-        f":fontsize={body_font_size}:fontcolor={body_color}"
-        f":x={body_x_expr}:y={body_y}"
-        f"{body_font_opt}{body_border}"
-    )
+    body_drawtext_parts = _build_drawtext_lines(
+        body_lines_clean, body_font_opt, body_font_size, body_color,
+        body_x_expr, body_y, body_border)
 
-    # Background boxes
     drawbox_title_bg = ""
     if title_bg_enabled:
         title_box_w = 952
@@ -1120,17 +1063,14 @@ async def _handle_preview_snapshot(
             f":color={body_bg_color}:t=fill"
         )
 
-    # Category badge
-    drawtext_category = ""
+    drawtext_category_parts: list[str] = []
     if category_label:
-        cat_file = os.path.join(tmpdir, "cm_category.txt")
-        clean_cat = _sanitize_for_ffmpeg(category_label) or category_label.strip()
-        with open(cat_file, "w", encoding="ascii", newline="\n") as f:
-            f.write(clean_cat)
+        clean_cat = _sanitize_for_ffmpeg(category_label) or "Category"
+        escaped_cat = _escape_ffmpeg_text(clean_cat)
         badge_y = 1920 - 48 - 52
         badge_font_size = 40
-        drawtext_category = (
-            f",drawtext=textfile=cm_category.txt"
+        drawtext_category_parts.append(
+            f"drawtext=text='{escaped_cat}'"
             f":fontsize={badge_font_size}:fontcolor=white"
             f":x=(w-text_w)/2:y={badge_y}"
             f":box=1:boxcolor=0x6C5CE7@0.6:boxborderw=12"
@@ -1145,11 +1085,10 @@ async def _handle_preview_snapshot(
         vf_parts.append(drawbox_title_bg)
     if drawbox_body_bg:
         vf_parts.append(drawbox_body_bg)
-    vf_parts.append(drawtext_title)
-    vf_parts.append(drawtext_body)
+    vf_parts.extend(title_drawtext_parts)
+    vf_parts.extend(body_drawtext_parts)
+    vf_parts.extend(drawtext_category_parts)
     vf_str = ",".join(vf_parts)
-    if drawtext_category:
-        vf_str += drawtext_category
 
     # Build FFmpeg command: single frame PNG
     if bg_video_path and os.path.isfile(bg_video_path):
@@ -1261,13 +1200,10 @@ async def _handle_preview_video_clip(
     avg_char_w = max(body_font_size * 0.52, 1)
     chars_per_line = max(15, int(body_usable_px / avg_char_w))
 
-    clean_title = _sanitize_for_ffmpeg(wrapped_title)
-    if not clean_title:
-        clean_title = _sanitize_for_ffmpeg(title)
-    logger.info("preview_clip title bytes: %s", clean_title.encode('utf-8').hex())
-    title_file = os.path.join(tmpdir, "cm_title.txt")
-    with open(title_file, "w", encoding="ascii", newline="\n") as f:
-        f.write(clean_title)
+    # Prepare title and body lines (sanitized, no files)
+    title_lines_clean = [_sanitize_for_ffmpeg(l) for l in wrapped_title.split("\n") if _sanitize_for_ffmpeg(l)]
+    if not title_lines_clean:
+        title_lines_clean = [_sanitize_for_ffmpeg(title) or "Untitled"]
 
     if slideshow_enabled:
         words = text.split()
@@ -1275,18 +1211,13 @@ async def _handle_preview_video_clip(
         wrapped_body = _wrap_text(first_slide, chars_per_line)
     else:
         wrapped_body = _wrap_text(text, chars_per_line)
-    clean_body = _sanitize_for_ffmpeg(wrapped_body)
-    if not clean_body:
-        clean_body = _sanitize_for_ffmpeg(text)
-    logger.info("preview_clip body bytes: %s", clean_body.encode('utf-8').hex())
-    body_file = os.path.join(tmpdir, "cm_body.txt")
-    with open(body_file, "w", encoding="ascii", newline="\n") as f:
-        f.write(clean_body)
+    body_lines_clean = [_sanitize_for_ffmpeg(l) for l in wrapped_body.split("\n") if _sanitize_for_ffmpeg(l)]
+    if not body_lines_clean:
+        body_lines_clean = [_sanitize_for_ffmpeg(text) or ""]
 
     # ── Fonts ──
     font_family = p.get("font_family", "")
     title_font_name = title_font_family or font_family
-    logger.info("[preview_clip] title_font=%s bold=%s italic=%s", title_font_name, title_bold, title_italic)
     title_font_file = _find_font(preferred_name=title_font_name or None,
                                  bold=title_bold, italic=title_italic)
     title_font_opt = ""
@@ -1295,15 +1226,10 @@ async def _handle_preview_video_clip(
         try:
             shutil.copy2(title_font_file, dst)
             title_font_opt = ":fontfile=cm_font_title.ttf"
-            logger.info("[preview_clip] title font copied: %s -> %s (valid=%s, size=%d)",
-                       title_font_file, dst, _is_valid_font_file(dst), os.path.getsize(dst))
-        except Exception as exc:
-            logger.error("[preview_clip] Failed to copy title font: %s", exc)
-    else:
-        logger.warning("[preview_clip] No title font found for '%s'", title_font_name)
+        except Exception:
+            pass
 
     body_font_name = body_font_family or font_family
-    logger.info("[preview_clip] body_font=%s bold=%s italic=%s", body_font_name, body_bold, body_italic)
     body_font_file = _find_font(preferred_name=body_font_name or None,
                                 bold=body_bold, italic=body_italic)
     body_font_opt = ""
@@ -1312,14 +1238,10 @@ async def _handle_preview_video_clip(
         try:
             shutil.copy2(body_font_file, dst)
             body_font_opt = ":fontfile=cm_font_body.ttf"
-            logger.info("[preview_clip] body font copied: %s -> %s (valid=%s, size=%d)",
-                       body_font_file, dst, _is_valid_font_file(dst), os.path.getsize(dst))
-        except Exception as exc:
-            logger.error("[preview_clip] Failed to copy body font: %s", exc)
-    else:
-        logger.warning("[preview_clip] No body font found for '%s'", body_font_name)
+        except Exception:
+            pass
 
-    # ── Build filter chain (identical to snapshot/render) ──
+    # ── Build filter chain — inline text=, one drawtext per line ──
     border_opts = ":borderw=3:bordercolor=black" if title_shadow else ""
     body_border = ":borderw=2:bordercolor=black" if body_shadow else ""
 
@@ -1331,19 +1253,13 @@ async def _handle_preview_video_clip(
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 
-    drawtext_title = (
-        f"drawtext=textfile=cm_title.txt"
-        f":fontsize={title_font_size}:fontcolor={title_color}"
-        f":x={title_x_expr}:y={title_y}"
-        f"{title_font_opt}{border_opts}"
-    )
+    title_drawtext_parts = _build_drawtext_lines(
+        title_lines_clean, title_font_opt, title_font_size, title_color,
+        title_x_expr, title_y, border_opts)
 
-    drawtext_body = (
-        f"drawtext=textfile=cm_body.txt"
-        f":fontsize={body_font_size}:fontcolor={body_color}"
-        f":x={body_x_expr}:y={body_y}"
-        f"{body_font_opt}{body_border}"
-    )
+    body_drawtext_parts = _build_drawtext_lines(
+        body_lines_clean, body_font_opt, body_font_size, body_color,
+        body_x_expr, body_y, body_border)
 
     drawbox_title_bg = ""
     if title_bg_enabled:
@@ -1365,16 +1281,14 @@ async def _handle_preview_video_clip(
             f":color={body_bg_color}:t=fill"
         )
 
-    drawtext_category = ""
+    drawtext_category_parts: list[str] = []
     if category_label:
-        cat_file = os.path.join(tmpdir, "cm_category.txt")
-        clean_cat = _sanitize_for_ffmpeg(category_label) or category_label.strip()
-        with open(cat_file, "w", encoding="ascii", newline="\n") as f:
-            f.write(clean_cat)
+        clean_cat = _sanitize_for_ffmpeg(category_label) or "Category"
+        escaped_cat = _escape_ffmpeg_text(clean_cat)
         badge_y = 1920 - 48 - 52
         badge_font_size = 40
-        drawtext_category = (
-            f",drawtext=textfile=cm_category.txt"
+        drawtext_category_parts.append(
+            f"drawtext=text='{escaped_cat}'"
             f":fontsize={badge_font_size}:fontcolor=white"
             f":x=(w-text_w)/2:y={badge_y}"
             f":box=1:boxcolor=0x6C5CE7@0.6:boxborderw=12"
@@ -1389,11 +1303,10 @@ async def _handle_preview_video_clip(
         vf_parts.append(drawbox_title_bg)
     if drawbox_body_bg:
         vf_parts.append(drawbox_body_bg)
-    vf_parts.append(drawtext_title)
-    vf_parts.append(drawtext_body)
+    vf_parts.extend(title_drawtext_parts)
+    vf_parts.extend(body_drawtext_parts)
+    vf_parts.extend(drawtext_category_parts)
     vf_str = ",".join(vf_parts)
-    if drawtext_category:
-        vf_str += drawtext_category
 
     # Build FFmpeg command: 5-second video clip (ultrafast for speed)
     if bg_video_path and os.path.isfile(bg_video_path):
@@ -1535,7 +1448,7 @@ def _sanitize_for_ffmpeg(text: str) -> str:
 
 
 def _wrap_text(text: str, max_chars: int = 35) -> str:
-    """Word-wrap text for FFmpeg textfile (plain text, no escaping needed)."""
+    """Word-wrap text. Returns newline-separated lines."""
     words = text.split()
     lines: list[str] = []
     current_line = ""
@@ -1548,6 +1461,54 @@ def _wrap_text(text: str, max_chars: int = 35) -> str:
     if current_line:
         lines.append(current_line)
     return "\n".join(lines)
+
+
+def _escape_ffmpeg_text(text: str) -> str:
+    """Escape a string for use in FFmpeg drawtext text= option."""
+    # Must escape in this order: backslash first
+    text = text.replace('\\', '\\\\')
+    text = text.replace("'", "\u2019")  # replace with curly quote (will display as quote in most fonts)
+    text = text.replace(':', '\\:')
+    text = text.replace(';', '\\;')
+    text = text.replace('%', '%%')
+    text = text.replace('[', '\\[')
+    text = text.replace(']', '\\]')
+    return text
+
+
+def _build_drawtext_lines(
+    lines: list[str],
+    font_opt: str,
+    font_size: int,
+    font_color: str,
+    x_expr: str,
+    base_y: int,
+    border_opts: str = "",
+    line_spacing: int = 8,
+    enable_expr: str = "",
+) -> list[str]:
+    """Build a list of drawtext filter strings, one per line of text.
+
+    This avoids textfile= entirely — each line is passed inline via text=.
+    No file encoding, no newline issues, no phantom box glyphs.
+    """
+    filters = []
+    for i, line in enumerate(lines):
+        clean = _sanitize_for_ffmpeg(line)
+        if not clean:
+            continue
+        escaped = _escape_ffmpeg_text(clean)
+        y = base_y + i * (font_size + line_spacing)
+        f = (
+            f"drawtext=text='{escaped}'"
+            f":fontsize={font_size}:fontcolor={font_color}"
+            f":x={x_expr}:y={y}"
+            f"{font_opt}{border_opts}"
+        )
+        if enable_expr:
+            f += f":enable='{enable_expr}'"
+        filters.append(f)
+    return filters
 
 
 def _is_valid_font_file(path: str) -> bool:

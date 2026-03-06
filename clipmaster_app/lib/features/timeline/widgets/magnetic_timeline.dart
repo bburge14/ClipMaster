@@ -83,6 +83,9 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   // Selected asset for property editing
   String? _selectedAssetId;
 
+  // Which text element is selected in the preview (title vs body)
+  _SelectedTextElement _selectedTextElement = _SelectedTextElement.none;
+
   @override
   void dispose() {
     _horizontalScroll.dispose();
@@ -1180,28 +1183,42 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         // Title text (top area)
                         if (hasTitle)
                           Positioned(
-                            top: frameH * 0.08,
+                            top: project.titleStyle.positionY * frameH,
                             left: 8,
                             right: 8,
-                            child: Text(
-                              titleText,
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontFamily: style.fontFamily,
-                                fontSize: (style.fontSize * 0.45).clamp(10, 20),
-                                fontWeight: FontWeight.w800,
-                                color: Color(style.colorHex),
-                                shadows: style.hasBorder
-                                    ? const [
-                                        Shadow(
-                                            color: Colors.black, blurRadius: 6),
-                                        Shadow(
-                                            color: Colors.black,
-                                            blurRadius: 12),
-                                      ]
-                                    : null,
+                            child: GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _selectedTextElement = _SelectedTextElement.title;
+                                  _rightPanel = _RightPanel.textEditor;
+                                });
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                decoration: BoxDecoration(
+                                  border: _selectedTextElement == _SelectedTextElement.title
+                                      ? Border.all(color: const Color(0xFF6C5CE7), width: 1.5)
+                                      : null,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  titleText,
+                                  textAlign: TextAlign.center,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontFamily: project.titleStyle.fontFamily,
+                                    fontSize: (project.titleStyle.fontSize * 0.45).clamp(10, 20),
+                                    fontWeight: FontWeight.w800,
+                                    color: Color(project.titleStyle.colorHex),
+                                    shadows: project.titleStyle.hasBorder
+                                        ? const [
+                                            Shadow(color: Colors.black, blurRadius: 6),
+                                            Shadow(color: Colors.black, blurRadius: 12),
+                                          ]
+                                        : null,
+                                  ),
+                                ),
                               ),
                             ),
                           ),
@@ -1212,6 +1229,12 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                             left: 8,
                             right: 8,
                             child: GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _selectedTextElement = _SelectedTextElement.body;
+                                  _rightPanel = _RightPanel.textEditor;
+                                });
+                              },
                               onPanUpdate: (details) {
                                 final newY =
                                     (style.positionY + details.delta.dy / frameH)
@@ -1227,8 +1250,10 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                                     horizontal: 6, vertical: 3),
                                 decoration: BoxDecoration(
                                   border: Border.all(
-                                    color: const Color(0xFF6C5CE7)
-                                        .withOpacity(0.3),
+                                    color: _selectedTextElement == _SelectedTextElement.body
+                                        ? const Color(0xFF6C5CE7)
+                                        : const Color(0xFF6C5CE7).withOpacity(0.3),
+                                    width: _selectedTextElement == _SelectedTextElement.body ? 1.5 : 1,
                                   ),
                                   borderRadius: BorderRadius.circular(4),
                                 ),
@@ -2359,7 +2384,21 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   }
 
   Widget _buildTextEditorPanel(ProjectState project) {
-    final style = project.captionStyle;
+    // Default to body if nothing is selected
+    if (_selectedTextElement == _SelectedTextElement.none) {
+      _selectedTextElement = _SelectedTextElement.body;
+    }
+
+    final isTitle = _selectedTextElement == _SelectedTextElement.title;
+    final style = isTitle ? project.titleStyle : project.captionStyle;
+
+    void updateStyle(CaptionStyle newStyle) {
+      if (isTitle) {
+        ref.read(projectProvider.notifier).setTitleStyle(newStyle);
+      } else {
+        ref.read(projectProvider.notifier).setCaptionStyle(newStyle);
+      }
+    }
 
     return Container(
       color: const Color(0xFF1A1A2A),
@@ -2380,11 +2419,85 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                 IconButton(
                   icon: const Icon(Icons.close, size: 18),
                   onPressed: () =>
-                      setState(() => _rightPanel = _RightPanel.none),
+                      setState(() {
+                        _rightPanel = _RightPanel.none;
+                        _selectedTextElement = _SelectedTextElement.none;
+                      }),
                 ),
               ],
             ),
           ),
+          // Title / Body toggle tabs
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _selectedTextElement = _SelectedTextElement.title),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isTitle ? const Color(0xFF6C5CE7).withOpacity(0.3) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        border: isTitle ? Border.all(color: const Color(0xFF6C5CE7), width: 1) : null,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.title, size: 14, color: isTitle ? const Color(0xFF6C5CE7) : Colors.white38),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Title',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: isTitle ? Colors.white : Colors.white38,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _selectedTextElement = _SelectedTextElement.body),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      decoration: BoxDecoration(
+                        color: !isTitle ? const Color(0xFF6C5CE7).withOpacity(0.3) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        border: !isTitle ? Border.all(color: const Color(0xFF6C5CE7), width: 1) : null,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.notes, size: 14, color: !isTitle ? const Color(0xFF6C5CE7) : Colors.white38),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Body',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: !isTitle ? Colors.white : Colors.white38,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
           const Divider(height: 1),
           Expanded(
             child: SingleChildScrollView(
@@ -2406,9 +2519,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         .toList(),
                     onChanged: (v) {
                       if (v != null) {
-                        ref.read(projectProvider.notifier).setCaptionStyle(
-                          style.copyWith(fontFamily: v),
-                        );
+                        updateStyle(style.copyWith(fontFamily: v));
                       }
                     },
                   ),
@@ -2422,9 +2533,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     divisions: 26,
                     label: '${style.fontSize.toInt()}px',
                     onChanged: (v) {
-                      ref.read(projectProvider.notifier).setCaptionStyle(
-                        style.copyWith(fontSize: v),
-                      );
+                      updateStyle(style.copyWith(fontSize: v));
                     },
                   ),
                   const SizedBox(height: 16),
@@ -2436,34 +2545,22 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     runSpacing: 8,
                     children: [
                       _colorCircle(0xFFFFFFFF, style.colorHex, (c) {
-                        ref.read(projectProvider.notifier).setCaptionStyle(
-                          style.copyWith(colorHex: c),
-                        );
+                        updateStyle(style.copyWith(colorHex: c));
                       }),
                       _colorCircle(0xFFFFD700, style.colorHex, (c) {
-                        ref.read(projectProvider.notifier).setCaptionStyle(
-                          style.copyWith(colorHex: c),
-                        );
+                        updateStyle(style.copyWith(colorHex: c));
                       }),
                       _colorCircle(0xFF6C5CE7, style.colorHex, (c) {
-                        ref.read(projectProvider.notifier).setCaptionStyle(
-                          style.copyWith(colorHex: c),
-                        );
+                        updateStyle(style.copyWith(colorHex: c));
                       }),
                       _colorCircle(0xFF00C853, style.colorHex, (c) {
-                        ref.read(projectProvider.notifier).setCaptionStyle(
-                          style.copyWith(colorHex: c),
-                        );
+                        updateStyle(style.copyWith(colorHex: c));
                       }),
                       _colorCircle(0xFFFF5252, style.colorHex, (c) {
-                        ref.read(projectProvider.notifier).setCaptionStyle(
-                          style.copyWith(colorHex: c),
-                        );
+                        updateStyle(style.copyWith(colorHex: c));
                       }),
                       _colorCircle(0xFF40C4FF, style.colorHex, (c) {
-                        ref.read(projectProvider.notifier).setCaptionStyle(
-                          style.copyWith(colorHex: c),
-                        );
+                        updateStyle(style.copyWith(colorHex: c));
                       }),
                     ],
                   ),
@@ -2475,31 +2572,31 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     dense: true,
                     contentPadding: EdgeInsets.zero,
                     onChanged: (v) {
-                      ref.read(projectProvider.notifier).setCaptionStyle(
-                        style.copyWith(hasBorder: v),
-                      );
+                      updateStyle(style.copyWith(hasBorder: v));
                     },
                   ),
-                  const SizedBox(height: 16),
-                  const Text('Text Position',
-                      style: TextStyle(fontSize: 11, color: Colors.white54)),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      _posChip('Top', 0.5, 0.12, style),
-                      const SizedBox(width: 6),
-                      _posChip('Center', 0.5, 0.5, style),
-                      const SizedBox(width: 6),
-                      _posChip('Bottom', 0.5, 0.85, style),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Or drag the text in the preview.',
-                    style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.white.withOpacity(0.2)),
-                  ),
+                  if (!isTitle) ...[
+                    const SizedBox(height: 16),
+                    const Text('Text Position',
+                        style: TextStyle(fontSize: 11, color: Colors.white54)),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        _posChip('Top', 0.5, 0.12, style),
+                        const SizedBox(width: 6),
+                        _posChip('Center', 0.5, 0.5, style),
+                        const SizedBox(width: 6),
+                        _posChip('Bottom', 0.5, 0.85, style),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Or drag the text in the preview.',
+                      style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.white.withOpacity(0.2)),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -2724,91 +2821,102 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
             child: hasClips && clipLabel != null
                 ? Row(
                     children: [
-                      ...assets.map((asset) => Draggable<TimelineAsset>(
-                            data: asset,
-                            feedback: Material(
-                              color: Colors.transparent,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: color.withOpacity(0.8),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  asset.label,
-                                  style: const TextStyle(fontSize: 10, color: Colors.white),
-                                ),
-                              ),
-                            ),
-                            childWhenDragging: Container(
-                              margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: color.withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: color.withOpacity(0.3), style: BorderStyle.solid),
-                              ),
-                              child: Text(
-                                asset.label,
-                                style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.3)),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            child: GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  _selectedAssetId = asset.id;
-                                  _rightPanel = _RightPanel.assetProperties;
-                                });
-                              },
-                              child: Container(
-                                margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: asset.id == _selectedAssetId
-                                      ? color.withOpacity(0.7)
-                                      : color.withOpacity(0.4),
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(
-                                    color: asset.id == _selectedAssetId
-                                        ? Colors.white54
-                                        : color.withOpacity(0.6),
+                      ...assets.map((asset) => Expanded(
+                            child: Draggable<TimelineAsset>(
+                              data: asset,
+                              feedback: Material(
+                                color: Colors.transparent,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: color.withOpacity(0.8),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    asset.label,
+                                    style: const TextStyle(fontSize: 10, color: Colors.white),
                                   ),
                                 ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    if (!asset.visible)
-                                      Padding(
-                                        padding: const EdgeInsets.only(right: 4),
-                                        child: Icon(Icons.visibility_off, size: 10, color: Colors.white.withOpacity(0.4)),
-                                      ),
-                                    Text(
-                                      '${asset.label} ${asset.speed != 1.0 ? "(${asset.speed}x)" : ""}',
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        color: asset.visible ? Colors.white70 : Colors.white30,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
+                              ),
+                              childWhenDragging: Container(
+                                margin: const EdgeInsets.symmetric(horizontal: 1, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: color.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(3),
+                                  border: Border.all(color: color.withOpacity(0.3), style: BorderStyle.solid),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  child: Text(
+                                    asset.label,
+                                    style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.3)),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ),
+                              child: GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _selectedAssetId = asset.id;
+                                    _rightPanel = _RightPanel.assetProperties;
+                                  });
+                                },
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(horizontal: 1, vertical: 2),
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: asset.id == _selectedAssetId
+                                        ? color.withOpacity(0.7)
+                                        : color.withOpacity(0.4),
+                                    borderRadius: BorderRadius.circular(3),
+                                    border: Border.all(
+                                      color: asset.id == _selectedAssetId
+                                          ? Colors.white54
+                                          : color.withOpacity(0.6),
                                     ),
-                                  ],
+                                  ),
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (!asset.visible)
+                                          Padding(
+                                            padding: const EdgeInsets.only(right: 4),
+                                            child: Icon(Icons.visibility_off, size: 10, color: Colors.white.withOpacity(0.4)),
+                                          ),
+                                        Flexible(
+                                          child: Text(
+                                            '${asset.label} ${asset.speed != 1.0 ? "(${asset.speed}x)" : ""}',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              color: asset.visible ? Colors.white70 : Colors.white30,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
                           )),
                       if (assets.isEmpty && extraLabel != null)
-                        Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: color.withOpacity(0.4),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: color.withOpacity(0.6)),
-                          ),
-                          child: Text(
-                            extraLabel,
-                            style: const TextStyle(fontSize: 10, color: Colors.white70),
-                            overflow: TextOverflow.ellipsis,
+                        Expanded(
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 1, vertical: 2),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: color.withOpacity(0.4),
+                              borderRadius: BorderRadius.circular(3),
+                              border: Border.all(color: color.withOpacity(0.6)),
+                            ),
+                            child: Text(
+                              extraLabel,
+                              style: const TextStyle(fontSize: 10, color: Colors.white70),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                         ),
                     ],
@@ -2822,6 +2930,8 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
 }
 
 enum _RightPanel { none, stockFootage, textEditor, voicePicker, layers, assetProperties }
+
+enum _SelectedTextElement { none, title, body }
 
 class _ActionButton extends StatelessWidget {
   final IconData icon;

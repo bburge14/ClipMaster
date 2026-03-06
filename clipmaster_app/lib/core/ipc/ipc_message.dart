@@ -52,6 +52,8 @@ enum MessageType {
   createShort,
   previewSnapshot,
   previewVideoClip,
+  setCookieBrowser,
+  getCookieBrowser,
 
   // -- Responses (Python -> Flutter) --
   pong,

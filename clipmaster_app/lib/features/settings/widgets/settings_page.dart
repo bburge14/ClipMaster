@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/ipc/ipc_client.dart';
+import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/account_service.dart';
 import '../../../core/services/api_key_service.dart';
 import '../../../core/services/auto_updater.dart';
@@ -39,6 +40,8 @@ class SettingsPage extends ConsumerWidget {
             child: ListView(
               children: const [
                 _StorageSection(),
+                SizedBox(height: 16),
+                _BrowserCookieSection(),
                 SizedBox(height: 16),
                 _UpdateSection(),
                 SizedBox(height: 16),
@@ -644,6 +647,156 @@ class _ConnectedAccountsSectionState
             ),
         ],
       ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  BROWSER COOKIES — yt-dlp --cookies-from-browser
+// ═══════════════════════════════════════════════════════════════════
+
+const _supportedBrowsers = [
+  ('', 'Disabled'),
+  ('chrome', 'Chrome'),
+  ('firefox', 'Firefox'),
+  ('edge', 'Edge'),
+  ('brave', 'Brave'),
+  ('opera', 'Opera'),
+  ('chromium', 'Chromium'),
+  ('vivaldi', 'Vivaldi'),
+  ('safari', 'Safari'),
+];
+
+class _BrowserCookieSection extends ConsumerStatefulWidget {
+  const _BrowserCookieSection();
+
+  @override
+  ConsumerState<_BrowserCookieSection> createState() =>
+      _BrowserCookieSectionState();
+}
+
+class _BrowserCookieSectionState
+    extends ConsumerState<_BrowserCookieSection> {
+  String _selected = '';
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchCurrent();
+  }
+
+  Future<void> _fetchCurrent() async {
+    try {
+      final ipc = ref.read(ipcClientProvider);
+      if (!ipc.isConnected) {
+        if (mounted) setState(() => _loading = false);
+        return;
+      }
+      final resp = await ipc.send(
+        IpcMessage(
+          type: MessageType.getCookieBrowser,
+          payload: {},
+        ),
+        timeout: const Duration(seconds: 5),
+      );
+      if (mounted) {
+        setState(() {
+          _selected = (resp.payload['browser'] as String?) ?? '';
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _setBrowser(String browser) async {
+    setState(() => _selected = browser);
+    try {
+      final ipc = ref.read(ipcClientProvider);
+      if (!ipc.isConnected) return;
+      await ipc.send(
+        IpcMessage(
+          type: MessageType.setCookieBrowser,
+          payload: {'browser': browser.isEmpty ? null : browser},
+        ),
+        timeout: const Duration(seconds: 5),
+      );
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsCard(
+      icon: Icons.cookie_rounded,
+      title: 'Browser Cookies',
+      children: [
+        Text(
+          'Share browser cookies with yt-dlp to bypass YouTube '
+          'sign-in prompts. Select the browser where you are '
+          'logged into YouTube.',
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.white.withOpacity(0.35),
+            height: 1.5,
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (_loading)
+          const SizedBox(
+            height: 36,
+            child: Center(
+              child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          )
+        else
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.04),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white.withOpacity(0.08)),
+            ),
+            child: DropdownButton<String>(
+              value: _selected,
+              isExpanded: true,
+              dropdownColor: const Color(0xFF1E1E2E),
+              underline: const SizedBox.shrink(),
+              style: const TextStyle(fontSize: 13),
+              items: _supportedBrowsers
+                  .map((b) => DropdownMenuItem(
+                        value: b.$1,
+                        child: Text(b.$2),
+                      ))
+                  .toList(),
+              onChanged: (val) {
+                if (val != null) _setBrowser(val);
+              },
+            ),
+          ),
+        if (_selected.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              const Icon(Icons.check_circle_rounded,
+                  color: Color(0xFF00C853), size: 14),
+              const SizedBox(width: 6),
+              Text(
+                'Using cookies from ${_selected[0].toUpperCase()}${_selected.substring(1)}',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.white.withOpacity(0.4),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
     );
   }
 }

@@ -46,6 +46,7 @@ enum MessageType {
   scoutChannel,
   scoutVods,
   scoutClips,
+  resolveStreamUrl,
   generateFacts,
   ffmpegRender,
   createShort,

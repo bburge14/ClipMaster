@@ -14,8 +14,7 @@ import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/api_key_service.dart';
 import '../../../core/services/project_state.dart';
 import '../../../core/utils/time_format.dart';
-import '../../../main.dart' show selectedTabProvider;
-import '../../fact_shorts/widgets/fact_shorts_page.dart';
+import 'script_generator_panel.dart';
 
 /// The Magnetic Timeline — the core editing UI for ClipMaster Pro.
 ///
@@ -899,7 +898,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
               size: 56, color: Colors.white.withOpacity(0.08)),
           const SizedBox(height: 12),
           Text(
-            'Import a video or create a short from Fact Shorts',
+            'Import a video or generate a script with AI',
             style: TextStyle(
               color: Colors.white.withOpacity(0.15),
               fontSize: 14,
@@ -933,7 +932,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
               _rightPanel = _RightPanel.aiCreate;
             }),
             icon: const Icon(Icons.auto_awesome, size: 18),
-            label: const Text('Fact Shorts'),
+            label: const Text('Generate Script'),
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFF6C5CE7),
             ),
@@ -2985,36 +2984,31 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   // ─── AI Create Panel — inline Fact Shorts add-in ───
 
   Widget _buildAiCreatePanel(ProjectState project) {
-    return Container(
-      color: const Color(0xFF1A1A2A),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                const Icon(Icons.auto_awesome,
-                    size: 18, color: Color(0xFF6C5CE7)),
-                const SizedBox(width: 8),
-                const Text('AI Create',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  onPressed: () =>
-                      setState(() => _rightPanel = _RightPanel.none),
-                ),
-              ],
+    return ScriptGeneratorPanel(
+      onFactSelected: (fact) {
+        // Feed the generated script into the project state — same as if
+        // the user had typed it manually. This populates the timeline,
+        // preview, and all other panels.
+        final notifier = ref.read(projectProvider.notifier);
+        notifier.setScript(title: fact.title, text: fact.script);
+
+        // Auto-search stock footage for the visual keywords
+        if (fact.visualKeywords.isNotEmpty) {
+          _stockSearchController.text = fact.visualKeywords.first;
+          _searchStockFootage();
+        }
+
+        // Show a confirmation
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Script loaded: ${fact.title}'),
+              duration: const Duration(seconds: 2),
             ),
-          ),
-          const Divider(height: 1),
-          const Expanded(
-            child: FactShortsPage(),
-          ),
-        ],
-      ),
+          );
+        }
+      },
+      onClose: () => setState(() => _rightPanel = _RightPanel.none),
     );
   }
 

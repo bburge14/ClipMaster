@@ -139,7 +139,10 @@ async def _dispatch(
                 await _handle_scout_vods(ws, msg, youtube_search, twitch_search)
 
             case MessageType.scout_clips:
-                await _handle_scout_clips(ws, msg, twitch_search)
+                await _handle_scout_clips(ws, msg, youtube_search, twitch_search)
+
+            case MessageType.resolve_stream_url:
+                await _handle_resolve_stream_url(ws, msg)
 
             case MessageType.download_clip:
                 await _handle_download_clip(ws, msg)
@@ -1930,31 +1933,167 @@ async def _handle_scout_vods(
 async def _handle_scout_clips(
     ws: WebSocket,
     msg: IpcMessage,
+    youtube_search: YouTubeSearchService,
     twitch_search: TwitchSearchService,
 ) -> None:
-    """Fetch viewer-created clips for a Twitch broadcaster/VOD."""
-    broadcaster_id = msg.payload.get("broadcaster_id", "")
+    """Fetch clips for a channel's video (YouTube chapters or Twitch clips)."""
+    platform = msg.payload.get("platform", "youtube")
     vod_id = msg.payload.get("vod_id")
     limit = msg.payload.get("limit", 20)
-    twitch_client_id = msg.payload.get("twitch_client_id", "")
-    twitch_client_secret = msg.payload.get("twitch_client_secret", "")
 
-    if not broadcaster_id:
-        await _send(ws, IpcMessage.error(msg.id, "No broadcaster_id provided."))
-        return
+    if platform == "twitch":
+        broadcaster_id = msg.payload.get("broadcaster_id", "")
+        twitch_client_id = msg.payload.get("twitch_client_id", "")
+        twitch_client_secret = msg.payload.get("twitch_client_secret", "")
 
-    await _send(ws, IpcMessage.progress(msg.id, "Fetching clips", 20))
+        if not broadcaster_id:
+            await _send(ws, IpcMessage.error(msg.id, "No broadcaster_id provided."))
+            return
+
+        await _send(ws, IpcMessage.progress(msg.id, "Fetching clips", 20))
+
+        try:
+            clips = await twitch_search.get_clips_for_broadcaster(
+                twitch_client_id, twitch_client_secret,
+                broadcaster_id, vod_id=vod_id, limit=limit,
+            )
+            await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
+            await _send(ws, IpcMessage.result(msg.id, {"clips": clips}))
+        except ValueError as exc:
+            await _send(ws, IpcMessage.error(msg.id, str(exc)))
+
+    else:
+        # YouTube — extract chapters/segments from the video as "clips".
+        if not vod_id:
+            await _send(ws, IpcMessage.error(msg.id, "No vod_id provided."))
+            return
+
+        await _send(ws, IpcMessage.progress(msg.id, "Extracting chapters", 20))
+
+        try:
+            clips = await _extract_youtube_chapters(vod_id, limit)
+            await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
+            await _send(ws, IpcMessage.result(msg.id, {"clips": clips}))
+        except Exception as exc:
+            logger.error("YouTube chapter extraction failed: %s", exc)
+            await _send(ws, IpcMessage.error(msg.id, str(exc)))
+
+
+async def _extract_youtube_chapters(video_id: str, limit: int = 20) -> list[dict]:
+    """Extract chapters from a YouTube video using yt-dlp as clip segments."""
+    ytdlp = ViralScout._find_ytdlp()
+    if not ytdlp:
+        raise ValueError("yt-dlp not found. Cannot extract video chapters.")
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    cmd = [ytdlp, "--skip-download", "-J", "--no-warnings", url]
 
     try:
-        clips = await twitch_search.get_clips_for_broadcaster(
-            twitch_client_id, twitch_client_secret,
-            broadcaster_id, vod_id=vod_id, limit=limit,
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
-        await _send(ws, IpcMessage.result(msg.id, {"clips": clips}))
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except asyncio.TimeoutError:
+        raise ValueError("yt-dlp timed out extracting video info.")
 
-    except ValueError as exc:
-        await _send(ws, IpcMessage.error(msg.id, str(exc)))
+    if proc.returncode != 0:
+        raise ValueError(f"yt-dlp error: {stderr.decode()[:300]}")
+
+    data = json.loads(stdout.decode())
+    chapters = data.get("chapters") or []
+    duration = data.get("duration") or 0
+    title = data.get("title", "")
+    thumbnail = data.get("thumbnail", "")
+
+    clips = []
+    if chapters:
+        # Video has chapters — each chapter is a "clip"
+        for ch in chapters[:limit]:
+            start = ch.get("start_time", 0)
+            end = ch.get("end_time", start + 60)
+            clips.append({
+                "title": ch.get("title", "Untitled Chapter"),
+                "url": f"{url}&t={int(start)}",
+                "thumbnail_url": thumbnail,
+                "start_time": start,
+                "end_time": end,
+                "duration": end - start,
+                "video_id": video_id,
+            })
+    else:
+        # No chapters — split into evenly-spaced segments for clipping
+        segment_len = 60  # 60-second segments
+        if duration > 0:
+            for i in range(0, min(int(duration), segment_len * limit), segment_len):
+                end = min(i + segment_len, duration)
+                clips.append({
+                    "title": f"{title} [{_fmt_time(i)} – {_fmt_time(end)}]",
+                    "url": f"{url}&t={i}",
+                    "thumbnail_url": thumbnail,
+                    "start_time": i,
+                    "end_time": end,
+                    "duration": end - i,
+                    "video_id": video_id,
+                })
+
+    return clips[:limit]
+
+
+def _fmt_time(seconds: float) -> str:
+    """Format seconds as MM:SS."""
+    m, s = divmod(int(seconds), 60)
+    return f"{m}:{s:02d}"
+
+
+async def _handle_resolve_stream_url(ws: WebSocket, msg: IpcMessage) -> None:
+    """Resolve a YouTube/Twitch URL to a direct stream URL for media_kit playback."""
+    url = msg.payload.get("url", "")
+    if not url:
+        await _send(ws, IpcMessage.error(msg.id, "No URL provided."))
+        return
+
+    ytdlp = ViralScout._find_ytdlp()
+    if not ytdlp:
+        await _send(ws, IpcMessage.error(msg.id, "yt-dlp not found."))
+        return
+
+    await _send(ws, IpcMessage.progress(msg.id, "Resolving stream URL", 30))
+
+    try:
+        cmd = [
+            ytdlp,
+            "--get-url",
+            "--no-warnings",
+            "-f", "best[height<=720]/best",
+            url,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
+
+        if proc.returncode != 0:
+            err = stderr.decode()[:300]
+            await _send(ws, IpcMessage.error(msg.id, f"Failed to resolve URL: {err}"))
+            return
+
+        stream_url = stdout.decode().strip().split("\n")[0]
+        if not stream_url:
+            await _send(ws, IpcMessage.error(msg.id, "No stream URL found."))
+            return
+
+        await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
+        await _send(ws, IpcMessage.result(msg.id, {"stream_url": stream_url}))
+
+    except asyncio.TimeoutError:
+        await _send(ws, IpcMessage.error(msg.id, "Timed out resolving stream URL."))
+    except Exception as exc:
+        logger.error("Stream URL resolution failed: %s", exc)
+        await _send(ws, IpcMessage.error(msg.id, f"Stream URL resolution failed: {exc}"))
 
 
 async def _handle_download_clip(ws: WebSocket, msg: IpcMessage) -> None:

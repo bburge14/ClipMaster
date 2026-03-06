@@ -1433,43 +1433,41 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                   horizontal: 12, vertical: 6),
                             ),
                           ),
+                          const SizedBox(width: 8),
+                          TextButton.icon(
+                            onPressed: () {
+                              if (!_livePreviewMode) {
+                                _requestPreviewClip();
+                              } else if (_bgPlayer != null) {
+                                _syncPlayback(_bgPlayer!);
+                              }
+                              setState(() => _livePreviewMode = !_livePreviewMode);
+                            },
+                            icon: Icon(
+                              _livePreviewMode ? Icons.edit : Icons.play_circle,
+                              size: 14,
+                            ),
+                            label: Text(
+                              _livePreviewMode ? 'Edit Mode' : 'Live Preview',
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                            style: TextButton.styleFrom(
+                              foregroundColor: _livePreviewMode
+                                  ? const Color(0xFF6C5CE7) : Colors.white54,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            ),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 12),
                       Expanded(
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Flexible(child: _buildPhonePreview()),
-                              const SizedBox(height: 6),
-                              TextButton.icon(
-                                onPressed: () {
-                                  if (!_livePreviewMode) {
-                                    _requestPreviewClip();
-                                  } else if (_bgPlayer != null) {
-                                    // Switching back to edit mode — reconnect timeline to _bgPlayer
-                                    _syncPlayback(_bgPlayer!);
-                                  }
-                                  setState(() => _livePreviewMode = !_livePreviewMode);
-                                },
-                                icon: Icon(
-                                  _livePreviewMode ? Icons.edit : Icons.play_circle,
-                                  size: 14,
-                                ),
-                                label: Text(
-                                  _livePreviewMode ? 'Edit Mode' : 'Live Preview',
-                                  style: const TextStyle(fontSize: 11),
-                                ),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: _livePreviewMode
-                                      ? const Color(0xFF6C5CE7)
-                                      : Colors.white54,
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 4),
-                                ),
-                              ),
-                            ],
+                        child: Container(
+                          color: Colors.black,
+                          child: Center(
+                            child: AspectRatio(
+                              aspectRatio: 9 / 16,
+                              child: _buildPhonePreview(),
+                            ),
                           ),
                         ),
                       ),
@@ -1521,17 +1519,16 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // ────────────────────────────────────────────────────────────────
 
   Widget _buildPhonePreview() {
-    return SizedBox(
-      width: 270,
-      height: 480,
-      child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white.withOpacity(0.12), width: 2),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: LayoutBuilder(
+    // No fixed size — the parent AspectRatio(9/16) + Expanded handle sizing.
+    // The preview fills the available space while maintaining 9:16 aspect ratio.
+    return Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withOpacity(0.12), width: 2),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: LayoutBuilder(
               builder: (context, constraints) {
                 final frameW = constraints.maxWidth;
                 final frameH = constraints.maxHeight;
@@ -1541,10 +1538,10 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                 final boxLeft = (_textPosX * frameW) - (boxW / 2);
                 final boxTop = (_textPosY * frameH) - (boxH / 2);
 
-                // Scale factor for edit mode text (270×480 vs 1080×1920)
-                const double scale = 0.25;
-                final previewTitleSize = (_titleFontSize * scale).clamp(8.0, 30.0);
-                final previewBodySize = (_bodyFontSize * scale).clamp(6.0, 20.0);
+                // Scale factor: preview width / 1080 (the render target width)
+                final double scale = frameW / 1080.0;
+                final previewTitleSize = (_titleFontSize * scale).clamp(6.0, 60.0);
+                final previewBodySize = (_bodyFontSize * scale).clamp(5.0, 48.0);
 
                 // Body text (slideshow-aware)
                 String bodyText;
@@ -1654,10 +1651,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                   fontStyle: _titleItalic ? FontStyle.italic : null,
                                   color: Color(_titleColorHex),
                                   shadows: _titleShadow
-                                      ? [
-                                          const Shadow(color: Colors.black, blurRadius: 6),
-                                          const Shadow(color: Colors.black, blurRadius: 12),
-                                        ]
+                                      ? [Shadow(color: Colors.black, blurRadius: 3 * scale, offset: Offset(1 * scale, 1 * scale))]
                                       : null,
                                 ),
                               ),
@@ -1697,7 +1691,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
-                                _wrapText(bodyText, boxW - 12, previewBodySize, bold: _bodyBold),
+                                _wrapText(bodyText, _textBoxW * 1080 - 12, _bodyFontSize, bold: _bodyBold),
                                 textAlign: bodyTextAlign,
                                 overflow: TextOverflow.clip,
                                 style: _googleFont(
@@ -1708,7 +1702,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                   color: Color(_bodyColorHex),
                                   height: 1.4,
                                   shadows: _bodyShadow
-                                      ? [const Shadow(color: Colors.black, blurRadius: 4)]
+                                      ? [Shadow(color: Colors.black, blurRadius: 3 * scale, offset: Offset(1 * scale, 1 * scale))]
                                       : null,
                                 ),
                               ),
@@ -1902,7 +1896,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               },
             ),
           ),
-        ),
     );
   }
 
@@ -3270,6 +3263,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                   label: desc.length > 20 ? desc.substring(0, 20) : desc,
                   startFrac: e.key * frac,
                   endFrac: (e.key + 1) * frac,
+                  deletable: true,
                 );
               }).toList()
             : [_NleClipData(id: 'video_bg', label: 'Gradient background', startFrac: 0.0, endFrac: 1.0)],
@@ -3277,7 +3271,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       _NleTrackData(
         color: const Color(0xFF6C5CE7),
         clips: hasAudio
-            ? [_NleClipData(id: 'audio', label: _bgMusicLabel ?? 'Audio', startFrac: 0.0, endFrac: 1.0)]
+            ? [_NleClipData(id: 'audio', label: _bgMusicLabel ?? 'Audio', startFrac: 0.0, endFrac: 1.0, deletable: true)]
             : [],
       ),
       _NleTrackData(
@@ -3312,8 +3306,12 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                   child: Column(
                     children: [
                       _buildNleTrackLabel('Voice', Icons.record_voice_over, const Color(0xFF2D824A)),
-                      _buildNleTrackLabel('Video', Icons.videocam, const Color(0xFF2D5AA0)),
-                      _buildNleTrackLabel('Audio', Icons.music_note, const Color(0xFF6C5CE7)),
+                      _buildNleTrackLabel('Video', Icons.videocam, const Color(0xFF2D5AA0),
+                        onAdd: () => setState(() => _activePropertiesSection = 'bg'),
+                      ),
+                      _buildNleTrackLabel('Audio', Icons.music_note, const Color(0xFF6C5CE7),
+                        onAdd: () => setState(() => _activePropertiesSection = 'audio'),
+                      ),
                       _buildNleTrackLabel('Text', Icons.text_fields, const Color(0xFF82782D)),
                     ],
                   ),
@@ -3362,6 +3360,41 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                       } else if (id.startsWith('caption')) {
                                         _activePropertiesSection = 'body';
                                       }
+                                    }
+                                  },
+                                  onClipDeleted: (clipId) {
+                                    if (clipId.startsWith('video_')) {
+                                      final idx = int.tryParse(clipId.replaceFirst('video_', ''));
+                                      if (idx != null && idx < _selectedBackgrounds.length) {
+                                        setState(() {
+                                          _selectedBackgrounds.removeAt(idx);
+                                          if (_activeBgIndex >= _selectedBackgrounds.length) {
+                                            _activeBgIndex = _selectedBackgrounds.isEmpty ? 0 : _selectedBackgrounds.length - 1;
+                                          }
+                                        });
+                                        _loadActiveBgPreview();
+                                      }
+                                    } else if (clipId == 'audio') {
+                                      setState(() {
+                                        _bgMusicPath = null;
+                                        _bgMusicLabel = null;
+                                      });
+                                    }
+                                  },
+                                  onVideoClipReordered: (oldIndex, newIndex) {
+                                    if (oldIndex < _selectedBackgrounds.length && newIndex < _selectedBackgrounds.length) {
+                                      setState(() {
+                                        final item = _selectedBackgrounds.removeAt(oldIndex);
+                                        _selectedBackgrounds.insert(newIndex, item);
+                                        // Keep active index tracking the same clip
+                                        if (_activeBgIndex == oldIndex) {
+                                          _activeBgIndex = newIndex;
+                                        } else if (oldIndex < _activeBgIndex && newIndex >= _activeBgIndex) {
+                                          _activeBgIndex--;
+                                        } else if (oldIndex > _activeBgIndex && newIndex <= _activeBgIndex) {
+                                          _activeBgIndex++;
+                                        }
+                                      });
                                     }
                                   },
                                   tracks: tracks,
@@ -3434,7 +3467,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     );
   }
 
-  Widget _buildNleTrackLabel(String name, IconData icon, Color color) {
+  Widget _buildNleTrackLabel(String name, IconData icon, Color color, {VoidCallback? onAdd}) {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -3446,14 +3479,24 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           children: [
             Icon(icon, size: 13, color: color.withOpacity(0.7)),
             const SizedBox(width: 6),
-            Text(
-              name,
-              style: TextStyle(
-                fontSize: 11,
-                color: color.withOpacity(0.8),
-                fontWeight: FontWeight.w500,
+            Expanded(
+              child: Text(
+                name,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: color.withOpacity(0.8),
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
+            if (onAdd != null)
+              GestureDetector(
+                onTap: onAdd,
+                child: Tooltip(
+                  message: 'Add $name clip',
+                  child: Icon(Icons.add, size: 14, color: color.withOpacity(0.5)),
+                ),
+              ),
           ],
         ),
       ),
@@ -3471,12 +3514,14 @@ class _NleClipData {
   final String label;
   final double startFrac; // 0.0–1.0
   final double endFrac;   // 0.0–1.0
+  final bool deletable;   // shows delete option on right-click
 
   _NleClipData({
     required this.id,
     required this.label,
     required this.startFrac,
     required this.endFrac,
+    this.deletable = false,
   });
 }
 
@@ -3487,7 +3532,7 @@ class _NleTrackData {
   _NleTrackData({required this.color, required this.clips});
 }
 
-class _TimelineTrackArea extends StatelessWidget {
+class _TimelineTrackArea extends StatefulWidget {
   final double totalWidth;
   final double scrubPosition;
   final double estimatedDuration;
@@ -3495,6 +3540,8 @@ class _TimelineTrackArea extends StatelessWidget {
   final VoidCallback onScrubEnd;
   final String? selectedClipId;
   final ValueChanged<String?> onClipSelected;
+  final ValueChanged<String>? onClipDeleted;
+  final void Function(int oldIndex, int newIndex)? onVideoClipReordered;
   final List<_NleTrackData> tracks;
 
   const _TimelineTrackArea({
@@ -3505,20 +3552,33 @@ class _TimelineTrackArea extends StatelessWidget {
     required this.onScrubEnd,
     this.selectedClipId,
     required this.onClipSelected,
+    this.onClipDeleted,
+    this.onVideoClipReordered,
     required this.tracks,
   });
 
+  @override
+  State<_TimelineTrackArea> createState() => _TimelineTrackAreaState();
+}
+
+class _TimelineTrackAreaState extends State<_TimelineTrackArea> {
+  // Drag-to-reorder state for video clips
+  int? _draggingClipIndex;
+  double? _dragCurrentX;
+  double? _dragStartX;
+
   void _handlePointerScrub(Offset localPosition) {
-    final pos = (localPosition.dx / totalWidth).clamp(0.0, 1.0);
-    onScrub(pos);
+    if (_draggingClipIndex != null) return; // don't scrub while dragging clip
+    final pos = (localPosition.dx / widget.totalWidth).clamp(0.0, 1.0);
+    widget.onScrub(pos);
   }
 
   @override
   Widget build(BuildContext context) {
-    final playheadX = (scrubPosition * totalWidth).clamp(0.0, totalWidth);
+    final playheadX = (widget.scrubPosition * widget.totalWidth).clamp(0.0, widget.totalWidth);
 
     return SizedBox(
-      width: totalWidth,
+      width: widget.totalWidth,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
@@ -3527,9 +3587,13 @@ class _TimelineTrackArea extends StatelessWidget {
             behavior: HitTestBehavior.translucent,
             onPointerDown: (e) => _handlePointerScrub(e.localPosition),
             onPointerMove: (e) => _handlePointerScrub(e.localPosition),
-            onPointerUp: (_) => onScrubEnd(),
+            onPointerUp: (_) => widget.onScrubEnd(),
             child: Column(
-              children: tracks.map((track) {
+              children: widget.tracks.asMap().entries.map((trackEntry) {
+                final trackIndex = trackEntry.key;
+                final track = trackEntry.value;
+                final isVideoTrack = trackIndex == 1; // Video is the second track
+
                 return Expanded(
                   child: Container(
                     decoration: BoxDecoration(
@@ -3540,9 +3604,9 @@ class _TimelineTrackArea extends StatelessWidget {
                       clipBehavior: Clip.none,
                       children: [
                         // Grid lines
-                        for (int i = 0; i <= (estimatedDuration / 5).ceil(); i++)
+                        for (int i = 0; i <= (widget.estimatedDuration / 5).ceil(); i++)
                           Positioned(
-                            left: (i * 5 / estimatedDuration) * totalWidth,
+                            left: (i * 5 / widget.estimatedDuration) * widget.totalWidth,
                             top: 0,
                             bottom: 0,
                             child: Container(
@@ -3550,63 +3614,139 @@ class _TimelineTrackArea extends StatelessWidget {
                               color: Colors.white.withOpacity(0.03),
                             ),
                           ),
-                        // Clips — use GestureDetector so taps on clips are handled
-                        for (final clip in track.clips)
+                        // Clips
+                        for (int ci = 0; ci < track.clips.length; ci++)
                           Builder(builder: (context) {
-                            final isSelected = clip.id == selectedClipId;
-                            final clipLeft = clip.startFrac * totalWidth;
-                            final clipWidth = (clip.endFrac - clip.startFrac) * totalWidth;
+                            final clip = track.clips[ci];
+                            final isSelected = clip.id == widget.selectedClipId;
+                            final isDragging = isVideoTrack && _draggingClipIndex == ci;
+                            final clipLeft = clip.startFrac * widget.totalWidth;
+                            final clipWidth = (clip.endFrac - clip.startFrac) * widget.totalWidth;
+
+                            // Calculate position for dragged clip
+                            double displayLeft = clipLeft + 2;
+                            if (isDragging && _dragCurrentX != null) {
+                              displayLeft = (_dragCurrentX! - clipWidth / 2).clamp(0.0, widget.totalWidth - clipWidth);
+                            }
+
+                            Widget clipWidget = Container(
+                              width: (clipWidth - 4).clamp(8.0, double.infinity),
+                              decoration: BoxDecoration(
+                                color: isDragging
+                                    ? track.color.withOpacity(0.7)
+                                    : isSelected
+                                        ? track.color.withOpacity(0.55)
+                                        : track.color.withOpacity(0.35),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(
+                                  color: isDragging
+                                      ? Colors.white.withOpacity(0.8)
+                                      : isSelected
+                                          ? Colors.white.withOpacity(0.6)
+                                          : track.color.withOpacity(0.5),
+                                  width: isDragging ? 2.0 : isSelected ? 1.5 : 0.5,
+                                ),
+                                boxShadow: isDragging
+                                    ? [BoxShadow(color: track.color.withOpacity(0.5), blurRadius: 10)]
+                                    : isSelected
+                                        ? [BoxShadow(color: track.color.withOpacity(0.3), blurRadius: 6)]
+                                        : null,
+                              ),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    clip.label,
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white.withOpacity(isSelected || isDragging ? 0.95 : 0.7),
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                  ),
+                                  if (clipWidth > 60)
+                                    Text(
+                                      '${(clip.startFrac * widget.estimatedDuration).toStringAsFixed(1)}s – ${(clip.endFrac * widget.estimatedDuration).toStringAsFixed(1)}s',
+                                      style: TextStyle(
+                                        fontSize: 8,
+                                        color: Colors.white.withOpacity(0.35),
+                                        fontFamily: 'monospace',
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            );
 
                             return Positioned(
-                              left: clipLeft + 2,
+                              left: displayLeft,
                               top: 3,
                               bottom: 3,
                               child: GestureDetector(
                                 behavior: HitTestBehavior.opaque,
-                                onTap: () => onClipSelected(isSelected ? null : clip.id),
-                                child: Container(
-                                  width: (clipWidth - 4).clamp(8.0, double.infinity),
-                                  decoration: BoxDecoration(
-                                    color: isSelected
-                                        ? track.color.withOpacity(0.55)
-                                        : track.color.withOpacity(0.35),
-                                    borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(
-                                      color: isSelected
-                                          ? Colors.white.withOpacity(0.6)
-                                          : track.color.withOpacity(0.5),
-                                      width: isSelected ? 1.5 : 0.5,
-                                    ),
-                                    boxShadow: isSelected
-                                        ? [BoxShadow(color: track.color.withOpacity(0.3), blurRadius: 6)]
-                                        : null,
-                                  ),
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Text(
-                                        clip.label,
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.white.withOpacity(isSelected ? 0.95 : 0.7),
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
-                                        maxLines: 1,
-                                      ),
-                                      if (clipWidth > 60)
-                                        Text(
-                                          '${(clip.startFrac * estimatedDuration).toStringAsFixed(1)}s – ${(clip.endFrac * estimatedDuration).toStringAsFixed(1)}s',
-                                          style: TextStyle(
-                                            fontSize: 8,
-                                            color: Colors.white.withOpacity(0.35),
-                                            fontFamily: 'monospace',
-                                          ),
-                                        ),
+                                onTap: () => widget.onClipSelected(isSelected ? null : clip.id),
+                                // Long press to start drag-reorder on video track
+                                onLongPressStart: (isVideoTrack && track.clips.length > 1 && widget.onVideoClipReordered != null) ? (details) {
+                                  final initX = clipLeft + clipWidth / 2;
+                                  setState(() {
+                                    _draggingClipIndex = ci;
+                                    _dragStartX = initX;
+                                    _dragCurrentX = initX;
+                                  });
+                                } : null,
+                                onLongPressMoveUpdate: (isVideoTrack && track.clips.length > 1 && widget.onVideoClipReordered != null) ? (details) {
+                                  if (_draggingClipIndex == null) return;
+                                  setState(() {
+                                    _dragCurrentX = (_dragStartX ?? 0) + details.offsetFromOrigin.dx;
+                                  });
+                                } : null,
+                                onLongPressEnd: (isVideoTrack && track.clips.length > 1 && widget.onVideoClipReordered != null) ? (details) {
+                                  if (_draggingClipIndex != null && _dragCurrentX != null) {
+                                    // Determine drop position
+                                    final dropFrac = (_dragCurrentX! / widget.totalWidth).clamp(0.0, 1.0);
+                                    int targetIndex = 0;
+                                    for (int j = 0; j < track.clips.length; j++) {
+                                      final midFrac = (track.clips[j].startFrac + track.clips[j].endFrac) / 2;
+                                      if (dropFrac > midFrac) targetIndex = j + 1;
+                                    }
+                                    final fromIndex = _draggingClipIndex!;
+                                    if (targetIndex > fromIndex) targetIndex -= 1;
+                                    if (targetIndex != fromIndex) {
+                                      widget.onVideoClipReordered?.call(fromIndex, targetIndex);
+                                    }
+                                  }
+                                  setState(() {
+                                    _draggingClipIndex = null;
+                                    _dragCurrentX = null;
+                                    _dragStartX = null;
+                                  });
+                                } : null,
+                                onSecondaryTapUp: clip.deletable ? (details) {
+                                  final renderBox = context.findRenderObject() as RenderBox;
+                                  final offset = renderBox.localToGlobal(details.localPosition);
+                                  showMenu<String>(
+                                    context: context,
+                                    position: RelativeRect.fromLTRB(offset.dx, offset.dy, offset.dx + 1, offset.dy + 1),
+                                    items: [
+                                      const PopupMenuItem(value: 'delete', child: Row(
+                                        children: [
+                                          Icon(Icons.delete_outline, size: 16, color: Colors.redAccent),
+                                          SizedBox(width: 8),
+                                          Text('Remove clip', style: TextStyle(fontSize: 12)),
+                                        ],
+                                      )),
                                     ],
-                                  ),
+                                  ).then((value) {
+                                    if (value == 'delete') widget.onClipDeleted?.call(clip.id);
+                                  });
+                                } : null,
+                                child: MouseRegion(
+                                  cursor: (isVideoTrack && track.clips.length > 1)
+                                      ? SystemMouseCursors.grab
+                                      : SystemMouseCursors.click,
+                                  child: clipWidget,
                                 ),
                               ),
                             );
@@ -3629,7 +3769,7 @@ class _TimelineTrackArea extends StatelessWidget {
           ),
           // Playhead handle
           Positioned(
-            left: (playheadX - 6).clamp(0.0, totalWidth - 12),
+            left: (playheadX - 6).clamp(0.0, widget.totalWidth - 12),
             top: 0,
             child: IgnorePointer(
               child: Container(

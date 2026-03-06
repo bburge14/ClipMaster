@@ -2052,30 +2052,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   //  RIGHT: PROPERTIES PANEL
   // ────────────────────────────────────────────────────────────────
 
-  // ScrollController for properties panel auto-scrolling
   final _propertiesScrollController = ScrollController();
 
-  // Keys for sections to scroll to
-  final _titleSectionKey = GlobalKey();
-  final _bodySectionKey = GlobalKey();
-
-  void _scrollToSection(GlobalKey key) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctx = key.currentContext;
-      if (ctx != null) {
-        Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
-      }
-    });
-  }
-
   Widget _buildPropertiesPanel() {
-    // Auto-scroll when section changes
-    if (_activePropertiesSection == 'title') {
-      _scrollToSection(_titleSectionKey);
-    } else if (_activePropertiesSection == 'body') {
-      _scrollToSection(_bodySectionKey);
-    }
-
     return Container(
       color: const Color(0xFF141420),
       child: ListView(
@@ -2149,7 +2128,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           // ══════════════════════════════════════
           // ── TITLE STYLE (fully independent) ──
           // ══════════════════════════════════════
-          Container(key: _titleSectionKey, child: _sectionHeader('Title Style', Icons.title)),
+          _sectionHeader('Title Style', Icons.title),
           const SizedBox(height: 8),
           // Font family
           DropdownButton<String>(
@@ -2275,7 +2254,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           // ══════════════════════════════════════
           // ── BODY STYLE (fully independent) ──
           // ══════════════════════════════════════
-          Container(key: _bodySectionKey, child: _sectionHeader('Body Style', Icons.text_fields)),
+          _sectionHeader('Body Style', Icons.text_fields),
           const SizedBox(height: 8),
           // Font family
           DropdownButton<String>(

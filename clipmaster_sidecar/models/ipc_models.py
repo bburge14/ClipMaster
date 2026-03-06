@@ -24,6 +24,7 @@ class MessageType(str, Enum):
     scout_channel = "scoutChannel"
     scout_vods = "scoutVods"
     scout_clips = "scoutClips"
+    resolve_stream_url = "resolveStreamUrl"
     generate_facts = "generateFacts"
     ffmpeg_render = "ffmpegRender"
     create_short = "createShort"

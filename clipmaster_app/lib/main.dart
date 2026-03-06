@@ -15,7 +15,6 @@ import 'core/utils/binary_paths.dart';
 import 'core/utils/env_config.dart';
 import 'features/activity/widgets/activity_page.dart';
 import 'features/dev_console/widgets/dev_console_panel.dart';
-import 'features/fact_shorts/widgets/fact_shorts_page.dart';
 import 'features/onboarding/widgets/onboarding_wizard.dart';
 import 'features/timeline/widgets/magnetic_timeline.dart';
 import 'features/settings/widgets/settings_page.dart';

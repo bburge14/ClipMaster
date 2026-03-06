@@ -1067,21 +1067,21 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         }),
                       ),
                     ],
+                    // AI Create button — opens Fact Shorts as an add-in
+                    _buildActionChip(
+                      icon: Icons.auto_awesome,
+                      label: 'AI Create',
+                      color: _rightPanel == _RightPanel.aiCreate
+                          ? const Color(0xFF00C853)
+                          : const Color(0xFF6C5CE7),
+                      busy: false,
+                      onTap: () => setState(() {
+                        _rightPanel = _rightPanel == _RightPanel.aiCreate
+                            ? _RightPanel.none
+                            : _RightPanel.aiCreate;
+                      }),
+                    ),
                   ],
-                  // AI Create button — opens Fact Shorts as an add-in
-                  _buildActionChip(
-                    icon: Icons.auto_awesome,
-                    label: 'AI Create',
-                    color: _rightPanel == _RightPanel.aiCreate
-                        ? const Color(0xFF00C853)
-                        : const Color(0xFF6C5CE7),
-                    busy: false,
-                    onTap: () => setState(() {
-                      _rightPanel = _rightPanel == _RightPanel.aiCreate
-                          ? _RightPanel.none
-                          : _RightPanel.aiCreate;
-                    }),
-                  ),
                 ),
                 const SizedBox(height: 12),
                 // Render button
@@ -3125,7 +3125,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     Text(subtitle,
                         style: TextStyle(
                           fontSize: 10,
-                          color: onTap != null ? Colors.white38 : Colors.white20,
+                          color: onTap != null ? Colors.white38 : Colors.white.withOpacity(0.2),
                         )),
                   ],
                 ),
@@ -3287,7 +3287,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
             borderRadius: BorderRadius.circular(4),
           ),
           child: Icon(icon, size: 16,
-              color: onTap != null ? Colors.white54 : Colors.white20),
+              color: onTap != null ? Colors.white54 : Colors.white.withOpacity(0.2)),
         ),
       ),
     );
@@ -3416,7 +3416,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                           alignment: Alignment.centerLeft,
                           child: Text(
                             extraLabel,
-                            style: const TextStyle(fontSize: 10, color: Colors.white60),
+                            style: const TextStyle(fontSize: 10, color: Colors.white54),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),

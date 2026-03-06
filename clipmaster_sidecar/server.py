@@ -1835,7 +1835,7 @@ async def _get_audio_duration(ffmpeg: str, audio_path: str) -> float:
             stderr=asyncio.subprocess.DEVNULL,
         )
         stdout, _ = await proc.communicate()
-        data = json.loads(stdout.decode())
+        data = json.loads(stdout.decode(errors="replace"))
         return float(data.get("format", {}).get("duration", 0))
     except Exception:
         return 0.0
@@ -1999,9 +1999,9 @@ async def _extract_youtube_chapters(video_id: str, limit: int = 20) -> list[dict
         raise ValueError("yt-dlp timed out extracting video info.")
 
     if proc.returncode != 0:
-        raise ValueError(f"yt-dlp error: {stderr.decode()[:300]}")
+        raise ValueError(f"yt-dlp error: {stderr.decode(errors='replace')[:300]}")
 
-    data = json.loads(stdout.decode())
+    data = json.loads(stdout.decode(errors="replace"))
     chapters = data.get("chapters") or []
     duration = data.get("duration") or 0
     title = data.get("title", "")
@@ -2077,11 +2077,11 @@ async def _handle_resolve_stream_url(ws: WebSocket, msg: IpcMessage) -> None:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
 
         if proc.returncode != 0:
-            err = stderr.decode()[:300]
+            err = stderr.decode(errors="replace")[:300]
             await _send(ws, IpcMessage.error(msg.id, f"Failed to resolve URL: {err}"))
             return
 
-        stream_url = stdout.decode().strip().split("\n")[0]
+        stream_url = stdout.decode(errors="replace").strip().split("\n")[0]
         if not stream_url:
             await _send(ws, IpcMessage.error(msg.id, "No stream URL found."))
             return

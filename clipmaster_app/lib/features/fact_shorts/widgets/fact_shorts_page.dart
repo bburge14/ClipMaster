@@ -14,6 +14,7 @@ import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/api_key_service.dart';
 import '../../../core/services/project_state.dart';
+import '../../../core/utils/time_format.dart';
 
 const _categories = ['Space', 'History', 'Science', 'Technology', 'Nature'];
 
@@ -92,6 +93,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   bool _isPreviewingVoice = false;
   String? _previewAudioPath;
   bool _voicePlaying = false;
+  Player? _voicePlayer;                          // temp player for TTS preview
+  StreamSubscription<bool>? _voiceCompletedSub;  // cleaned up on dispose
 
   // Background footage — multiple backgrounds that cycle
   List<Map<String, dynamic>> _bgResults = [];
@@ -234,9 +237,14 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     _durationSub?.cancel();
     _playingSub?.cancel();
 
-    _positionSub = player.stream.position.listen((pos) {
+    // Capture a weak reference: if the player we attached to is no longer
+    // the active player (e.g. it was disposed and replaced), skip the update.
+    final attachedPlayer = player;
+
+    _positionSub = attachedPlayer.stream.position.listen((pos) {
       if (!mounted || _userScrubbing) return;
-      final dur = player.state.duration;
+      if (_activePlayer != attachedPlayer) return; // player was swapped out
+      final dur = attachedPlayer.state.duration;
       if (dur.inMilliseconds > 0) {
         setState(() {
           _scrubPosition =
@@ -244,14 +252,16 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         });
       }
     });
-    _durationSub = player.stream.duration.listen((dur) {
+    _durationSub = attachedPlayer.stream.duration.listen((dur) {
       if (!mounted) return;
+      if (_activePlayer != attachedPlayer) return;
       if (dur.inSeconds > 0) {
         setState(() => _estimatedDuration = dur.inSeconds.toDouble());
       }
     });
-    _playingSub = player.stream.playing.listen((playing) {
+    _playingSub = attachedPlayer.stream.playing.listen((playing) {
       if (!mounted) return;
+      if (_activePlayer != attachedPlayer) return;
       setState(() => _isPlaying = playing);
     });
   }
@@ -262,12 +272,20 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     if (_livePreviewMode) _requestPreviewClip();
   }
 
+  void _disposeVoicePlayer() {
+    _voiceCompletedSub?.cancel();
+    _voiceCompletedSub = null;
+    _voicePlayer?.dispose();
+    _voicePlayer = null;
+  }
+
   @override
   void dispose() {
     _positionSub?.cancel();
     _durationSub?.cancel();
     _playingSub?.cancel();
     _previewClipDebounce?.cancel();
+    _disposeVoicePlayer();
     _scriptEditController.dispose();
     _bgSearchController.dispose();
     _customPromptController.dispose();
@@ -477,13 +495,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       // Pause the active video player during voice preview
       _activePlayer?.pause();
 
-      // Play voice through a temporary player, tracking completion
-      final voicePlayer = Player();
-      voicePlayer.open(Media(audioPath));
-      voicePlayer.stream.completed.listen((completed) {
+      // Clean up any previous voice player
+      _voiceCompletedSub?.cancel();
+      _voicePlayer?.dispose();
+
+      _voicePlayer = Player();
+      _voicePlayer!.open(Media(audioPath));
+      _voiceCompletedSub = _voicePlayer!.stream.completed.listen((completed) {
         if (completed && mounted) {
-          voicePlayer.dispose();
-          // Resume the active video player
+          _disposeVoicePlayer();
           _activePlayer?.play();
           setState(() {
             _voicePlaying = false;
@@ -1998,16 +2018,30 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
   }
 
+  // Memoized slide cache — avoids recomputing on every rebuild (scrub, zoom, etc.)
+  List<String>? _cachedSlides;
+  String? _cachedSlidesScript;
+  int? _cachedSlidesWps;
+
   /// Split body text into slideshow slides (each with _wordsPerSlide words).
   List<String> _getSlides() {
-    final words = _composerScript.split(' ');
-    if (words.isEmpty) return [_composerScript];
-    final slides = <String>[];
-    for (var i = 0; i < words.length; i += _wordsPerSlide) {
-      final end = (i + _wordsPerSlide).clamp(0, words.length);
-      slides.add(words.sublist(i, end).join(' '));
+    if (_cachedSlidesScript == _composerScript && _cachedSlidesWps == _wordsPerSlide) {
+      return _cachedSlides!;
     }
-    return slides;
+    final words = _composerScript.split(' ');
+    if (words.isEmpty) {
+      _cachedSlides = [_composerScript];
+    } else {
+      final slides = <String>[];
+      for (var i = 0; i < words.length; i += _wordsPerSlide) {
+        final end = (i + _wordsPerSlide).clamp(0, words.length);
+        slides.add(words.sublist(i, end).join(' '));
+      }
+      _cachedSlides = slides;
+    }
+    _cachedSlidesScript = _composerScript;
+    _cachedSlidesWps = _wordsPerSlide;
+    return _cachedSlides!;
   }
 
   /// Word-wrap text identically to the Python server's _wrap_text().
@@ -3097,7 +3131,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     final player = _activePlayer;
     final dur = player?.state.duration ?? Duration.zero;
     final pos = player?.state.position ?? Duration.zero;
-    final durMs = dur.inMilliseconds;
 
     return Container(
       height: 44,
@@ -3105,7 +3138,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Row(
         children: [
-          // Skip to start
           IconButton(
             icon: const Icon(Icons.skip_previous, size: 18),
             onPressed: () {
@@ -3115,7 +3147,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             tooltip: 'Go to start',
             visualDensity: VisualDensity.compact,
           ),
-          // Rewind 5s
           IconButton(
             icon: const Icon(Icons.replay_5, size: 18),
             onPressed: () {
@@ -3127,7 +3158,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             tooltip: 'Back 5s',
             visualDensity: VisualDensity.compact,
           ),
-          // Play / Pause
           IconButton(
             icon: Icon(
               _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
@@ -3138,7 +3168,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             tooltip: _isPlaying ? 'Pause' : 'Play',
             visualDensity: VisualDensity.compact,
           ),
-          // Forward 5s
           IconButton(
             icon: const Icon(Icons.forward_5, size: 18),
             onPressed: () {
@@ -3150,7 +3179,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             tooltip: 'Forward 5s',
             visualDensity: VisualDensity.compact,
           ),
-          // Skip to end
           IconButton(
             icon: const Icon(Icons.skip_next, size: 18),
             onPressed: () {
@@ -3162,9 +3190,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             visualDensity: VisualDensity.compact,
           ),
           const SizedBox(width: 6),
-          // Time display
           Text(
-            '${_formatTime(_scrubPosition * _estimatedDuration)} / ${_formatTime(_estimatedDuration)}',
+            '${formatTimeMMSS(_scrubPosition * _estimatedDuration)} / ${formatTimeMMSS(_estimatedDuration)}',
             style: TextStyle(
               fontSize: 11,
               fontFamily: 'monospace',
@@ -3172,7 +3199,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             ),
           ),
           const SizedBox(width: 8),
-          // Seek slider
           Expanded(
             child: SliderTheme(
               data: SliderTheme.of(context).copyWith(
@@ -3195,7 +3221,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             ),
           ),
           const SizedBox(width: 8),
-          // Zoom control
           const Icon(Icons.zoom_in, size: 14, color: Colors.white38),
           SizedBox(
             width: 80,
@@ -3214,35 +3239,70 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   }
 
   Widget _buildTimelineTracks() {
-    // Compute text segments for caption track — synced with slideshow state
+    // Caption segments synced with slideshow state
     final captionSlides = _slideshowEnabled
         ? _getSlides()
         : [_composerScript];
     final segmentCount = captionSlides.length.clamp(1, 20);
 
-    // Build clips data for each track
     final voiceLabel = _previewAudioPath != null
         ? _selectedVoice.label
         : 'TTS (${_selectedVoice.label})';
     final hasVoice = _composerScript.isNotEmpty;
-
-    final videoLabel = _selectedBackgrounds.isNotEmpty
-        ? '${_selectedBackgrounds.length} clip${_selectedBackgrounds.length > 1 ? 's' : ''} cycling'
-        : 'Gradient background';
-    final hasVideo = true;
-
-    final audioLabel = _bgMusicLabel ?? 'No audio clip';
     final hasAudio = _bgMusicPath != null;
+
+    // Build track data
+    final tracks = <_NleTrackData>[
+      _NleTrackData(
+        color: const Color(0xFF2D824A),
+        clips: hasVoice
+            ? [_NleClipData(id: 'voice', label: voiceLabel, startFrac: 0.0, endFrac: 1.0)]
+            : [],
+      ),
+      _NleTrackData(
+        color: const Color(0xFF2D5AA0),
+        clips: _selectedBackgrounds.isNotEmpty
+            ? _selectedBackgrounds.asMap().entries.map((e) {
+                final frac = 1.0 / _selectedBackgrounds.length;
+                final desc = e.value['description'] as String? ?? 'Clip ${e.key + 1}';
+                return _NleClipData(
+                  id: 'video_${e.key}',
+                  label: desc.length > 20 ? desc.substring(0, 20) : desc,
+                  startFrac: e.key * frac,
+                  endFrac: (e.key + 1) * frac,
+                );
+              }).toList()
+            : [_NleClipData(id: 'video_bg', label: 'Gradient background', startFrac: 0.0, endFrac: 1.0)],
+      ),
+      _NleTrackData(
+        color: const Color(0xFF6C5CE7),
+        clips: hasAudio
+            ? [_NleClipData(id: 'audio', label: _bgMusicLabel ?? 'Audio', startFrac: 0.0, endFrac: 1.0)]
+            : [],
+      ),
+      _NleTrackData(
+        color: const Color(0xFF82782D),
+        clips: List.generate(segmentCount, (i) {
+          final frac = 1.0 / segmentCount;
+          final slideText = i < captionSlides.length ? captionSlides[i] : '';
+          final label = slideText.length > 25
+              ? '${slideText.substring(0, 25)}...'
+              : slideText.isNotEmpty ? slideText : 'Slide ${i + 1}';
+          return _NleClipData(
+            id: 'caption_$i',
+            label: label,
+            startFrac: i * frac,
+            endFrac: (i + 1) * frac,
+          );
+        }),
+      ),
+    ];
 
     return Container(
       color: const Color(0xFF141420),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Time ruler
-          _buildTimeRuler(),
-          const Divider(height: 1, color: Colors.white10),
-          // Track rows
           Expanded(
             child: Row(
               children: [
@@ -3259,90 +3319,56 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                   ),
                 ),
                 const VerticalDivider(width: 1),
-                // Scrollable track area
+                // Scrollable track area (ruler + tracks scroll together)
                 Expanded(
                   child: LayoutBuilder(
                     builder: (context, outerConstraints) {
-                      final parentWidth = outerConstraints.maxWidth > 0 ? outerConstraints.maxWidth : 800.0;
+                      final viewWidth = outerConstraints.maxWidth > 0 ? outerConstraints.maxWidth : 800.0;
+                      final contentWidth = (viewWidth * _timelineZoom).clamp(viewWidth, viewWidth * 4.0);
+
                       return SingleChildScrollView(
                         controller: _timelineHScroll,
                         scrollDirection: Axis.horizontal,
                         physics: const ClampingScrollPhysics(),
-                        child: _TimelineTrackArea(
-                          parentWidth: parentWidth,
-                          zoom: _timelineZoom,
-                          scrubPosition: _scrubPosition,
-                          estimatedDuration: _estimatedDuration,
-                          onScrub: (pos) {
-                            _userScrubbing = true;
-                            setState(() => _scrubPosition = pos);
-                            _seekActivePlayer(pos);
-                          },
-                          onScrubEnd: () => _userScrubbing = false,
-                          selectedClipId: _selectedTrackClip,
-                          onClipSelected: (id) {
-                            setState(() => _selectedTrackClip = id);
-                            // Navigate properties panel to the relevant section
-                            if (id != null) {
-                              if (id.startsWith('voice')) {
-                                _activePropertiesSection = 'voice';
-                              } else if (id.startsWith('video')) {
-                                _activePropertiesSection = 'bg';
-                              } else if (id.startsWith('audio')) {
-                                _activePropertiesSection = 'audio';
-                              } else if (id.startsWith('caption')) {
-                                _activePropertiesSection = 'body';
-                              }
-                            }
-                          },
-                          tracks: [
-                            _NleTrackData(
-                              color: const Color(0xFF2D824A),
-                              clips: hasVoice
-                                  ? [_NleClipData(id: 'voice', label: voiceLabel, startFrac: 0.0, endFrac: 1.0)]
-                                  : [],
-                            ),
-                            _NleTrackData(
-                              color: const Color(0xFF2D5AA0),
-                              clips: hasVideo
-                                  ? _selectedBackgrounds.isNotEmpty
-                                      ? _selectedBackgrounds.asMap().entries.map((e) {
-                                          final frac = 1.0 / _selectedBackgrounds.length;
-                                          final desc = e.value['description'] as String? ?? 'Clip ${e.key + 1}';
-                                          return _NleClipData(
-                                            id: 'video_${e.key}',
-                                            label: desc.length > 20 ? desc.substring(0, 20) : desc,
-                                            startFrac: e.key * frac,
-                                            endFrac: (e.key + 1) * frac,
-                                          );
-                                        }).toList()
-                                      : [_NleClipData(id: 'video_bg', label: 'Gradient background', startFrac: 0.0, endFrac: 1.0)]
-                                  : [],
-                            ),
-                            _NleTrackData(
-                              color: const Color(0xFF6C5CE7),
-                              clips: hasAudio
-                                  ? [_NleClipData(id: 'audio', label: audioLabel, startFrac: 0.0, endFrac: 1.0)]
-                                  : [],
-                            ),
-                            _NleTrackData(
-                              color: const Color(0xFF82782D),
-                              clips: List.generate(segmentCount, (i) {
-                                final frac = 1.0 / segmentCount;
-                                // Show actual slide text as label (truncated)
-                                final slideText = i < captionSlides.length ? captionSlides[i] : '';
-                                final label = slideText.length > 25
-                                    ? '${slideText.substring(0, 25)}...'
-                                    : slideText.isNotEmpty ? slideText : 'Slide ${i + 1}';
-                                return _NleClipData(
-                                  id: 'caption_$i',
-                                  label: label,
-                                  startFrac: i * frac,
-                                  endFrac: (i + 1) * frac,
-                                );
-                              }),
-                            ),
-                          ],
+                        child: SizedBox(
+                          width: contentWidth,
+                          child: Column(
+                            children: [
+                              // Time ruler (scrolls with tracks)
+                              _buildTimeRuler(contentWidth),
+                              const Divider(height: 1, color: Colors.white10),
+                              // Track rows
+                              Expanded(
+                                child: _TimelineTrackArea(
+                                  totalWidth: contentWidth,
+                                  scrubPosition: _scrubPosition,
+                                  estimatedDuration: _estimatedDuration,
+                                  onScrub: (pos) {
+                                    _userScrubbing = true;
+                                    setState(() => _scrubPosition = pos);
+                                    _seekActivePlayer(pos);
+                                  },
+                                  onScrubEnd: () => _userScrubbing = false,
+                                  selectedClipId: _selectedTrackClip,
+                                  onClipSelected: (id) {
+                                    setState(() => _selectedTrackClip = id);
+                                    if (id != null) {
+                                      if (id.startsWith('voice')) {
+                                        _activePropertiesSection = 'voice';
+                                      } else if (id.startsWith('video')) {
+                                        _activePropertiesSection = 'bg';
+                                      } else if (id.startsWith('audio')) {
+                                        _activePropertiesSection = 'audio';
+                                      } else if (id.startsWith('caption')) {
+                                        _activePropertiesSection = 'body';
+                                      }
+                                    }
+                                  },
+                                  tracks: tracks,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       );
                     },
@@ -3356,67 +3382,51 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     );
   }
 
-  Widget _buildTimeRuler() {
+  Widget _buildTimeRuler(double totalWidth) {
+    final duration = _estimatedDuration;
+    double tickInterval = 5.0;
+    if (duration <= 15) tickInterval = 1.0;
+    else if (duration <= 30) tickInterval = 2.0;
+    else if (duration <= 60) tickInterval = 5.0;
+    else tickInterval = 10.0;
+
     return SizedBox(
-      height: 24,
-      child: Row(
+      height: 22,
+      width: totalWidth,
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          // Spacer for track label column
-          const SizedBox(width: 101),
-          // Ruler
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final totalWidth = constraints.maxWidth;
-                final duration = _estimatedDuration;
-                // Determine tick interval based on zoom/duration
-                double tickInterval = 5.0; // seconds
-                if (duration <= 15) tickInterval = 1.0;
-                else if (duration <= 30) tickInterval = 2.0;
-                else if (duration <= 60) tickInterval = 5.0;
-                else tickInterval = 10.0;
-
-                final ticks = <Widget>[];
-                for (double t = 0; t <= duration; t += tickInterval) {
-                  final x = (t / duration) * totalWidth;
-                  ticks.add(Positioned(
-                    left: x,
-                    top: 0,
-                    bottom: 0,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Container(width: 1, height: 10, color: Colors.white.withOpacity(0.15)),
-                        const SizedBox(width: 2),
-                        Text(
-                          _formatTime(t),
-                          style: TextStyle(
-                            fontSize: 8,
-                            fontFamily: 'monospace',
-                            color: Colors.white.withOpacity(0.3),
-                          ),
-                        ),
-                      ],
+          Container(color: const Color(0xFF1A1A28)),
+          // Tick marks
+          for (double t = 0; t <= duration; t += tickInterval)
+            Positioned(
+              left: (t / duration) * totalWidth,
+              top: 0,
+              bottom: 0,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Container(width: 1, height: 10, color: Colors.white.withOpacity(0.15)),
+                  const SizedBox(width: 2),
+                  Text(
+                    formatTimeMMSS(t),
+                    style: TextStyle(
+                      fontSize: 8,
+                      fontFamily: 'monospace',
+                      color: Colors.white.withOpacity(0.3),
                     ),
-                  ));
-                }
-
-                // Playhead indicator on ruler
-                ticks.add(Positioned(
-                  left: _scrubPosition * totalWidth - 5,
-                  bottom: 0,
-                  child: CustomPaint(
-                    size: const Size(10, 10),
-                    painter: _PlayheadTrianglePainter(),
                   ),
-                ));
-
-                return Container(
-                  color: const Color(0xFF1A1A28),
-                  child: Stack(children: ticks),
-                );
-              },
+                ],
+              ),
+            ),
+          // Playhead triangle
+          Positioned(
+            left: (_scrubPosition * totalWidth - 5).clamp(0.0, totalWidth - 10),
+            bottom: 0,
+            child: CustomPaint(
+              size: const Size(10, 10),
+              painter: _PlayheadTrianglePainter(),
             ),
           ),
         ],
@@ -3450,11 +3460,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     );
   }
 
-  String _formatTime(double seconds) {
-    final m = (seconds ~/ 60).toString().padLeft(2, '0');
-    final s = (seconds.toInt() % 60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -3483,8 +3488,7 @@ class _NleTrackData {
 }
 
 class _TimelineTrackArea extends StatelessWidget {
-  final double parentWidth;
-  final double zoom;
+  final double totalWidth;
   final double scrubPosition;
   final double estimatedDuration;
   final ValueChanged<double> onScrub;
@@ -3494,8 +3498,7 @@ class _TimelineTrackArea extends StatelessWidget {
   final List<_NleTrackData> tracks;
 
   const _TimelineTrackArea({
-    required this.parentWidth,
-    required this.zoom,
+    required this.totalWidth,
     required this.scrubPosition,
     required this.estimatedDuration,
     required this.onScrub,
@@ -3505,31 +3508,27 @@ class _TimelineTrackArea extends StatelessWidget {
     required this.tracks,
   });
 
+  void _handlePointerScrub(Offset localPosition) {
+    final pos = (localPosition.dx / totalWidth).clamp(0.0, 1.0);
+    onScrub(pos);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final totalWidth = (parentWidth * zoom).clamp(parentWidth, parentWidth * 4.0);
+    final playheadX = (scrubPosition * totalWidth).clamp(0.0, totalWidth);
 
-    return GestureDetector(
-      onTapDown: (details) {
-        final pos = (details.localPosition.dx / totalWidth).clamp(0.0, 1.0);
-        onScrub(pos);
-      },
-      onTapUp: (_) => onScrubEnd(),
-      onPanStart: (details) {
-        final pos = (details.localPosition.dx / totalWidth).clamp(0.0, 1.0);
-        onScrub(pos);
-      },
-      onPanUpdate: (details) {
-        final pos = (details.localPosition.dx / totalWidth).clamp(0.0, 1.0);
-        onScrub(pos);
-      },
-      onPanEnd: (_) => onScrubEnd(),
-      child: SizedBox(
-        width: totalWidth,
-        child: Stack(
-          children: [
-            // Track rows
-            Column(
+    return SizedBox(
+      width: totalWidth,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Background: track rows (tappable for scrubbing via Listener)
+          Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (e) => _handlePointerScrub(e.localPosition),
+            onPointerMove: (e) => _handlePointerScrub(e.localPosition),
+            onPointerUp: (_) => onScrubEnd(),
+            child: Column(
               children: tracks.map((track) {
                 return Expanded(
                   child: Container(
@@ -3538,99 +3537,101 @@ class _TimelineTrackArea extends StatelessWidget {
                       color: track.color.withOpacity(0.06),
                     ),
                     child: Stack(
+                      clipBehavior: Clip.none,
                       children: [
-                        // Grid lines (every 5s or appropriate interval)
-                        ...List.generate(
-                          (estimatedDuration / 5).ceil() + 1,
-                          (i) {
-                            final x = (i * 5 / estimatedDuration) * totalWidth;
+                        // Grid lines
+                        for (int i = 0; i <= (estimatedDuration / 5).ceil(); i++)
+                          Positioned(
+                            left: (i * 5 / estimatedDuration) * totalWidth,
+                            top: 0,
+                            bottom: 0,
+                            child: Container(
+                              width: 1,
+                              color: Colors.white.withOpacity(0.03),
+                            ),
+                          ),
+                        // Clips — use GestureDetector so taps on clips are handled
+                        for (final clip in track.clips)
+                          Builder(builder: (context) {
+                            final isSelected = clip.id == selectedClipId;
+                            final clipLeft = clip.startFrac * totalWidth;
+                            final clipWidth = (clip.endFrac - clip.startFrac) * totalWidth;
+
                             return Positioned(
-                              left: x,
-                              top: 0,
-                              bottom: 0,
-                              child: Container(
-                                width: 1,
-                                color: Colors.white.withOpacity(0.03),
+                              left: clipLeft + 2,
+                              top: 3,
+                              bottom: 3,
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () => onClipSelected(isSelected ? null : clip.id),
+                                child: Container(
+                                  width: (clipWidth - 4).clamp(8.0, double.infinity),
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? track.color.withOpacity(0.55)
+                                        : track.color.withOpacity(0.35),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? Colors.white.withOpacity(0.6)
+                                          : track.color.withOpacity(0.5),
+                                      width: isSelected ? 1.5 : 0.5,
+                                    ),
+                                    boxShadow: isSelected
+                                        ? [BoxShadow(color: track.color.withOpacity(0.3), blurRadius: 6)]
+                                        : null,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        clip.label,
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w600,
+                                          color: Colors.white.withOpacity(isSelected ? 0.95 : 0.7),
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                        maxLines: 1,
+                                      ),
+                                      if (clipWidth > 60)
+                                        Text(
+                                          '${(clip.startFrac * estimatedDuration).toStringAsFixed(1)}s – ${(clip.endFrac * estimatedDuration).toStringAsFixed(1)}s',
+                                          style: TextStyle(
+                                            fontSize: 8,
+                                            color: Colors.white.withOpacity(0.35),
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             );
-                          },
-                        ),
-                        // Clips
-                        ...track.clips.map((clip) {
-                          final isSelected = clip.id == selectedClipId;
-                          final clipLeft = clip.startFrac * totalWidth;
-                          final clipWidth = (clip.endFrac - clip.startFrac) * totalWidth;
-
-                          return Positioned(
-                            left: clipLeft + 2,
-                            top: 3,
-                            bottom: 3,
-                            child: GestureDetector(
-                              onTap: () => onClipSelected(isSelected ? null : clip.id),
-                              child: Container(
-                                width: (clipWidth - 4).clamp(8.0, double.infinity),
-                                decoration: BoxDecoration(
-                                  color: isSelected
-                                      ? track.color.withOpacity(0.55)
-                                      : track.color.withOpacity(0.35),
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(
-                                    color: isSelected
-                                        ? Colors.white.withOpacity(0.6)
-                                        : track.color.withOpacity(0.5),
-                                    width: isSelected ? 1.5 : 0.5,
-                                  ),
-                                  boxShadow: isSelected
-                                      ? [BoxShadow(color: track.color.withOpacity(0.3), blurRadius: 6)]
-                                      : null,
-                                ),
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text(
-                                      clip.label,
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w600,
-                                        color: Colors.white.withOpacity(isSelected ? 0.95 : 0.7),
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                      maxLines: 1,
-                                    ),
-                                    if (clipWidth > 60)
-                                      Text(
-                                        '${(clip.startFrac * estimatedDuration).toStringAsFixed(1)}s – ${(clip.endFrac * estimatedDuration).toStringAsFixed(1)}s',
-                                        style: TextStyle(
-                                          fontSize: 8,
-                                          color: Colors.white.withOpacity(0.35),
-                                          fontFamily: 'monospace',
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        }),
+                          }),
                       ],
                     ),
                   ),
                 );
               }).toList(),
             ),
-            // Playhead
-            Positioned(
-              left: scrubPosition * totalWidth,
-              top: 0,
-              bottom: 0,
+          ),
+          // Playhead line
+          Positioned(
+            left: playheadX,
+            top: 0,
+            bottom: 0,
+            child: IgnorePointer(
               child: Container(width: 2, color: Colors.redAccent),
             ),
-            // Playhead handle
-            Positioned(
-              left: scrubPosition * totalWidth - 6,
-              top: 0,
+          ),
+          // Playhead handle
+          Positioned(
+            left: (playheadX - 6).clamp(0.0, totalWidth - 12),
+            top: 0,
+            child: IgnorePointer(
               child: Container(
                 width: 12,
                 height: 12,
@@ -3640,8 +3641,8 @@ class _TimelineTrackArea extends StatelessWidget {
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

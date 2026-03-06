@@ -66,9 +66,11 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   // Preview player
   Player? _previewPlayer;
   VideoController? _previewController;
-  bool _previewPlaying = false;
-  Duration _previewPosition = Duration.zero;
-  Duration _previewDuration = Duration.zero;
+  // Use ValueNotifiers instead of setState for high-frequency stream updates
+  // so only the transport bar rebuilds — NOT the entire widget tree.
+  final ValueNotifier<bool> _previewPlayingNotifier = ValueNotifier(false);
+  final ValueNotifier<Duration> _previewPositionNotifier = ValueNotifier(Duration.zero);
+  final ValueNotifier<Duration> _previewDurationNotifier = ValueNotifier(Duration.zero);
   StreamSubscription? _positionSub;
   StreamSubscription? _durationSub;
   StreamSubscription? _playingSub;
@@ -85,6 +87,9 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   void dispose() {
     _horizontalScroll.dispose();
     _stockSearchController.dispose();
+    _previewPlayingNotifier.dispose();
+    _previewPositionNotifier.dispose();
+    _previewDurationNotifier.dispose();
     _positionSub?.cancel();
     _durationSub?.cancel();
     _playingSub?.cancel();
@@ -106,16 +111,20 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     _previewPlayer!.setPlaylistMode(PlaylistMode.loop);
     // Enable audio volume
     _previewPlayer!.setVolume(100);
-    _previewPlaying = true;
+    _previewPlayingNotifier.value = true;
+    // Use ValueNotifiers — these update ONLY the widgets listening to them,
+    // NOT the entire widget tree.  This prevents scroll-fighting.
     _playingSub = _previewPlayer!.stream.playing.listen((playing) {
-      if (mounted) setState(() => _previewPlaying = playing);
+      if (mounted) _previewPlayingNotifier.value = playing;
     });
     _positionSub = _previewPlayer!.stream.position.listen((pos) {
-      if (mounted) setState(() => _previewPosition = pos);
+      if (mounted) _previewPositionNotifier.value = pos;
     });
     _durationSub = _previewPlayer!.stream.duration.listen((dur) {
-      if (mounted) setState(() => _previewDuration = dur);
+      if (mounted) _previewDurationNotifier.value = dur;
     });
+    // Trigger one rebuild so the VideoController widget appears.
+    if (mounted) setState(() {});
   }
 
   Future<void> _importVideo() async {
@@ -1092,8 +1101,13 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         : '';
 
     // Auto-load background from URL if no local video is loaded
+    // Schedule for after build — never call _initPreviewPlayer during build.
     if (bgUrl.isNotEmpty && _previewController == null) {
-      _initPreviewPlayer(bgUrl);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _previewController == null) {
+          _initPreviewPlayer(bgUrl);
+        }
+      });
     }
 
     return SizedBox(
@@ -1400,132 +1414,149 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
 
   /// Transport bar with play/pause, skip, scrub, and time display
   /// — now positioned directly above the timeline tracks.
+  /// Uses ValueListenableBuilder so only this bar rebuilds on playback
+  /// updates, leaving all scroll views untouched.
   Widget _buildTransportBar(ProjectState project) {
-    final posMs = _previewPosition.inMilliseconds;
-    final durMs = _previewDuration.inMilliseconds;
-    final posStr = _formatDuration(_previewPosition);
-    final durStr = _formatDuration(_previewDuration);
+    return ValueListenableBuilder<Duration>(
+      valueListenable: _previewPositionNotifier,
+      builder: (context, previewPosition, _) {
+        return ValueListenableBuilder<Duration>(
+          valueListenable: _previewDurationNotifier,
+          builder: (context, previewDuration, _) {
+            return ValueListenableBuilder<bool>(
+              valueListenable: _previewPlayingNotifier,
+              builder: (context, previewPlaying, _) {
+                final posMs = previewPosition.inMilliseconds;
+                final durMs = previewDuration.inMilliseconds;
+                final posStr = _formatDuration(previewPosition);
+                final durStr = _formatDuration(previewDuration);
 
-    return Container(
-      height: 48,
-      color: const Color(0xFF141420),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        children: [
-          // Skip to start
-          IconButton(
-            icon: const Icon(Icons.skip_previous, size: 20),
-            onPressed: () {
-              _previewPlayer?.seek(Duration.zero);
-              setState(() => _playheadPosition = 0);
-            },
-            tooltip: 'Go to start',
-          ),
-          // Rewind 5s
-          IconButton(
-            icon: const Icon(Icons.replay_5, size: 20),
-            onPressed: () {
-              if (_previewPlayer != null) {
-                final newPos = _previewPosition - const Duration(seconds: 5);
-                _previewPlayer!.seek(newPos < Duration.zero ? Duration.zero : newPos);
-              }
-            },
-            tooltip: 'Back 5s',
-          ),
-          // Play / Pause
-          IconButton(
-            icon: Icon(
-              _previewPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
-              size: 32,
-              color: const Color(0xFF6C5CE7),
-            ),
-            onPressed: () => _previewPlayer?.playOrPause(),
-            tooltip: _previewPlaying ? 'Pause' : 'Play',
-          ),
-          // Forward 5s
-          IconButton(
-            icon: const Icon(Icons.forward_5, size: 20),
-            onPressed: () {
-              if (_previewPlayer != null) {
-                final newPos = _previewPosition + const Duration(seconds: 5);
-                _previewPlayer!.seek(newPos > _previewDuration ? _previewDuration : newPos);
-              }
-            },
-            tooltip: 'Forward 5s',
-          ),
-          // Skip to end
-          IconButton(
-            icon: const Icon(Icons.skip_next, size: 20),
-            onPressed: () {
-              if (_previewPlayer != null && _previewDuration > Duration.zero) {
-                _previewPlayer!.seek(_previewDuration);
-              }
-            },
-            tooltip: 'Go to end',
-          ),
-          const SizedBox(width: 8),
-          // Time display
-          Text(
-            '$posStr / $durStr',
-            style: TextStyle(
-              fontSize: 12,
-              fontFamily: 'monospace',
-              color: Colors.white.withOpacity(0.6),
-            ),
-          ),
-          const SizedBox(width: 12),
-          // Scrubber / seek bar
-          Expanded(
-            child: SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 4,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-                activeTrackColor: const Color(0xFF6C5CE7),
-                inactiveTrackColor: Colors.white12,
-                thumbColor: const Color(0xFF6C5CE7),
-              ),
-              child: Slider(
-                value: durMs > 0 ? (posMs / durMs).clamp(0.0, 1.0) : 0.0,
-                onChanged: (v) {
-                  if (_previewPlayer != null && durMs > 0) {
-                    _previewPlayer!.seek(Duration(milliseconds: (v * durMs).toInt()));
-                  }
-                },
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          // Zoom control
-          const Text('Zoom:', style: TextStyle(fontSize: 11, color: Colors.white38)),
-          SizedBox(
-            width: 100,
-            child: Slider(
-              value: _zoomLevel,
-              min: 0.25,
-              max: 4.0,
-              onChanged: (v) => setState(() => _zoomLevel = v),
-            ),
-          ),
-          const SizedBox(width: 8),
-          FilterChip(
-            label: const Text('Snap', style: TextStyle(fontSize: 10)),
-            selected: true,
-            onSelected: (_) {},
-            visualDensity: VisualDensity.compact,
-          ),
-          const SizedBox(width: 4),
-          FilterChip(
-            label: Text(
-              _proxyPath != null ? 'Proxy ON' : 'Proxy',
-              style: const TextStyle(fontSize: 10),
-            ),
-            selected: _proxyPath != null,
-            onSelected: (_) {},
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
-      ),
+                return Container(
+                  height: 48,
+                  color: const Color(0xFF141420),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Row(
+                    children: [
+                      // Skip to start
+                      IconButton(
+                        icon: const Icon(Icons.skip_previous, size: 20),
+                        onPressed: () {
+                          _previewPlayer?.seek(Duration.zero);
+                          setState(() => _playheadPosition = 0);
+                        },
+                        tooltip: 'Go to start',
+                      ),
+                      // Rewind 5s
+                      IconButton(
+                        icon: const Icon(Icons.replay_5, size: 20),
+                        onPressed: () {
+                          if (_previewPlayer != null) {
+                            final newPos = previewPosition - const Duration(seconds: 5);
+                            _previewPlayer!.seek(newPos < Duration.zero ? Duration.zero : newPos);
+                          }
+                        },
+                        tooltip: 'Back 5s',
+                      ),
+                      // Play / Pause
+                      IconButton(
+                        icon: Icon(
+                          previewPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                          size: 32,
+                          color: const Color(0xFF6C5CE7),
+                        ),
+                        onPressed: () => _previewPlayer?.playOrPause(),
+                        tooltip: previewPlaying ? 'Pause' : 'Play',
+                      ),
+                      // Forward 5s
+                      IconButton(
+                        icon: const Icon(Icons.forward_5, size: 20),
+                        onPressed: () {
+                          if (_previewPlayer != null) {
+                            final newPos = previewPosition + const Duration(seconds: 5);
+                            _previewPlayer!.seek(newPos > previewDuration ? previewDuration : newPos);
+                          }
+                        },
+                        tooltip: 'Forward 5s',
+                      ),
+                      // Skip to end
+                      IconButton(
+                        icon: const Icon(Icons.skip_next, size: 20),
+                        onPressed: () {
+                          if (_previewPlayer != null && previewDuration > Duration.zero) {
+                            _previewPlayer!.seek(previewDuration);
+                          }
+                        },
+                        tooltip: 'Go to end',
+                      ),
+                      const SizedBox(width: 8),
+                      // Time display
+                      Text(
+                        '$posStr / $durStr',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontFamily: 'monospace',
+                          color: Colors.white.withOpacity(0.6),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Scrubber / seek bar
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 4,
+                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                            activeTrackColor: const Color(0xFF6C5CE7),
+                            inactiveTrackColor: Colors.white12,
+                            thumbColor: const Color(0xFF6C5CE7),
+                          ),
+                          child: Slider(
+                            value: durMs > 0 ? (posMs / durMs).clamp(0.0, 1.0) : 0.0,
+                            onChanged: (v) {
+                              if (_previewPlayer != null && durMs > 0) {
+                                _previewPlayer!.seek(Duration(milliseconds: (v * durMs).toInt()));
+                              }
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Zoom control
+                      const Text('Zoom:', style: TextStyle(fontSize: 11, color: Colors.white38)),
+                      SizedBox(
+                        width: 100,
+                        child: Slider(
+                          value: _zoomLevel,
+                          min: 0.25,
+                          max: 4.0,
+                          onChanged: (v) => setState(() => _zoomLevel = v),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilterChip(
+                        label: const Text('Snap', style: TextStyle(fontSize: 10)),
+                        selected: true,
+                        onSelected: (_) {},
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      const SizedBox(width: 4),
+                      FilterChip(
+                        label: Text(
+                          _proxyPath != null ? 'Proxy ON' : 'Proxy',
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                        selected: _proxyPath != null,
+                        onSelected: (_) {},
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 

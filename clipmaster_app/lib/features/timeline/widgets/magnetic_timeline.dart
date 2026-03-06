@@ -871,7 +871,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         if (_rightPanel != _RightPanel.none) ...[
           Container(width: 1, color: Colors.white.withOpacity(0.06)),
           SizedBox(
-            width: _rightPanel == _RightPanel.aiCreate ? 400 : 320,
+            width: _rightPanel == _RightPanel.aiCreate ? 480 : 320,
             child: _rightPanel == _RightPanel.stockFootage
                 ? _buildStockFootagePanel()
                 : _rightPanel == _RightPanel.textEditor
@@ -929,7 +929,9 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
           ),
           const SizedBox(height: 16),
           FilledButton.icon(
-            onPressed: _openFactShortsDialog,
+            onPressed: () => setState(() {
+              _rightPanel = _RightPanel.aiCreate;
+            }),
             icon: const Icon(Icons.auto_awesome, size: 18),
             label: const Text('Fact Shorts'),
             style: FilledButton.styleFrom(
@@ -3008,162 +3010,10 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
             ),
           ),
           const Divider(height: 1),
-          Expanded(
-            child: SingleChildScrollView(
-              physics: const ClampingScrollPhysics(),
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Generate AI content directly into your timeline.',
-                      style: TextStyle(fontSize: 12, color: Colors.white54)),
-                  const SizedBox(height: 16),
-                  // Open full Fact Shorts creator
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: () {
-                        // Navigate to Fact Shorts page
-                        final tabNotifier = ref.read(selectedTabProvider.notifier);
-                        // Find the Fact Shorts page — it's no longer in main nav,
-                        // so open as a dialog
-                        _openFactShortsDialog();
-                      },
-                      icon: const Icon(Icons.auto_awesome, size: 18),
-                      label: const Text('Open AI Script Generator'),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Divider(),
-                  const SizedBox(height: 16),
-                  // Quick actions
-                  const Text('Quick Actions',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white70)),
-                  const SizedBox(height: 8),
-                  _buildQuickAction(
-                    icon: Icons.record_voice_over,
-                    label: 'Generate Voiceover',
-                    subtitle: 'Create TTS audio from script',
-                    onTap: project.scriptText != null ? () {
-                      // Use existing _renderVideo or generate TTS
-                    } : null,
-                  ),
-                  _buildQuickAction(
-                    icon: Icons.movie_filter,
-                    label: 'Find Stock Footage',
-                    subtitle: 'Search Pexels & Pixabay',
-                    onTap: () => setState(() {
-                      _rightPanel = _RightPanel.stockFootage;
-                    }),
-                  ),
-                  _buildQuickAction(
-                    icon: Icons.subtitles,
-                    label: 'Auto-Caption',
-                    subtitle: 'Transcribe audio to captions',
-                    onTap: _importedVideoPath != null && !_isBusy
-                        ? _transcribeVideo
-                        : null,
-                  ),
-                  _buildQuickAction(
-                    icon: Icons.text_fields,
-                    label: 'Edit Text Overlays',
-                    subtitle: 'Title and body text styling',
-                    onTap: project.scriptText != null
-                        ? () => setState(() {
-                              _rightPanel = _RightPanel.textEditor;
-                            })
-                        : null,
-                  ),
-                  _buildQuickAction(
-                    icon: Icons.movie_creation,
-                    label: 'Render Video',
-                    subtitle: 'Export final 9:16 short',
-                    onTap: project.scriptText != null && !_isBusy
-                        ? _renderVideo
-                        : null,
-                  ),
-                ],
-              ),
-            ),
+          const Expanded(
+            child: FactShortsPage(),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildQuickAction({
-    required IconData icon,
-    required String label,
-    required String subtitle,
-    VoidCallback? onTap,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(onTap != null ? 0.04 : 0.02),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: Colors.white.withOpacity(onTap != null ? 0.08 : 0.04),
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(icon, size: 20,
-                  color: onTap != null
-                      ? const Color(0xFF6C5CE7)
-                      : Colors.white24),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(label,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: onTap != null ? Colors.white70 : Colors.white30,
-                        )),
-                    Text(subtitle,
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: onTap != null ? Colors.white38 : Colors.white.withOpacity(0.2),
-                        )),
-                  ],
-                ),
-              ),
-              Icon(Icons.arrow_forward_ios, size: 12,
-                  color: onTap != null ? Colors.white24 : Colors.white10),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _openFactShortsDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder: (ctx) => Dialog(
-        backgroundColor: const Color(0xFF1A1A2A),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        insetPadding: const EdgeInsets.all(24),
-        child: SizedBox(
-          width: MediaQuery.of(ctx).size.width * 0.85,
-          height: MediaQuery.of(ctx).size.height * 0.85,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: const FactShortsPage(),
-          ),
-        ),
       ),
     );
   }

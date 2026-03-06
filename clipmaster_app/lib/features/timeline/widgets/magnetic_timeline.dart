@@ -13,6 +13,7 @@ import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/api_key_service.dart';
 import '../../../core/services/project_state.dart';
+import '../../../core/ui/video_player_overlay.dart';
 import '../../../core/utils/time_format.dart';
 import 'script_generator_panel.dart';
 
@@ -652,7 +653,15 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                 onPressed: () => Navigator.of(ctx).pop(),
                 child: const Text('Close'),
               ),
-              if (outputPath.isNotEmpty)
+              if (outputPath.isNotEmpty) ...[
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.play_circle_outline, size: 18),
+                  label: const Text('Preview'),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    VideoPlayerOverlay.show(context, url: outputPath, title: 'Render Preview');
+                  },
+                ),
                 FilledButton.icon(
                   icon: const Icon(Icons.folder_open, size: 18),
                   label: const Text('Open Folder'),
@@ -661,6 +670,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     _openOutputFolder(outputPath);
                   },
                 ),
+              ],
             ],
           ),
         );
@@ -1303,6 +1313,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
 
     return SizedBox(
       width: 200,
+      height: 380, // Fixed 9:16 phone frame (static, non-resizable)
       child: Column(
         children: [
           // Phone frame header

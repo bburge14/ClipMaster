@@ -175,9 +175,9 @@ async def download_clip(
     stdout, stderr = await proc.communicate()
 
     if proc.returncode != 0:
-        raise RuntimeError(f"yt-dlp -g failed: {stderr.decode()[:300]}")
+        raise RuntimeError(f"yt-dlp -g failed: {stderr.decode(errors="replace")[:300]}")
 
-    stream_urls = stdout.decode().strip().split("\n")
+    stream_urls = stdout.decode(errors="replace").strip().split("\n")
 
     if on_progress:
         await on_progress(30, "Extracting clip from stream")
@@ -216,7 +216,7 @@ async def download_clip(
     _, stderr2 = await proc2.communicate()
 
     if proc2.returncode != 0:
-        raise RuntimeError(f"FFmpeg clip extraction failed: {stderr2.decode()[:300]}")
+        raise RuntimeError(f"FFmpeg clip extraction failed: {stderr2.decode(errors="replace")[:300]}")
 
     if on_progress:
         await on_progress(95, "Clip extracted")
@@ -276,7 +276,7 @@ async def generate_proxy(
     await proc.wait()
 
     if proc.returncode != 0:
-        stderr = (await proc.stderr.read()).decode()
+        stderr = (await proc.stderr.read()).decode(errors="replace")
         raise RuntimeError(f"FFmpeg proxy failed: {stderr[:500]}")
 
     if on_progress:
@@ -362,7 +362,7 @@ async def ffmpeg_render(
     await proc.wait()
 
     if proc.returncode != 0:
-        stderr = (await proc.stderr.read()).decode()
+        stderr = (await proc.stderr.read()).decode(errors="replace")
         raise RuntimeError(f"FFmpeg render failed: {stderr[:500]}")
 
     if on_progress:
@@ -533,7 +533,7 @@ async def _get_duration(ffmpeg: str, file_path: str) -> float:
             stderr=asyncio.subprocess.DEVNULL,
         )
         stdout, _ = await proc.communicate()
-        data = json.loads(stdout.decode())
+        data = json.loads(stdout.decode(errors="replace"))
         return float(data.get("format", {}).get("duration", 0))
     except Exception:
         return 60.0  # Default fallback

@@ -160,11 +160,11 @@ class ViralScout:
             return []
 
         if proc.returncode != 0:
-            logger.error("yt-dlp exited %d: %s", proc.returncode, stderr.decode()[:500])
+            logger.error("yt-dlp exited %d: %s", proc.returncode, stderr.decode(errors="replace")[:500])
             return []
 
         try:
-            data = json.loads(stdout.decode())
+            data = json.loads(stdout.decode(errors="replace"))
         except json.JSONDecodeError:
             logger.error("Failed to parse yt-dlp JSON output")
             return []
@@ -210,12 +210,12 @@ class ViralScout:
 
         # yt-dlp -J with multiple URLs outputs a JSON object with "entries" key.
         try:
-            batch_data = json.loads(stdout2.decode())
+            batch_data = json.loads(stdout2.decode(errors="replace"))
             video_entries = batch_data.get("entries", [batch_data])
         except json.JSONDecodeError:
             # Sometimes yt-dlp outputs one JSON per line for multiple URLs.
             video_entries = []
-            for line in stdout2.decode().strip().split("\n"):
+            for line in stdout2.decode(errors="replace").strip().split("\n"):
                 try:
                     video_entries.append(json.loads(line))
                 except json.JSONDecodeError:

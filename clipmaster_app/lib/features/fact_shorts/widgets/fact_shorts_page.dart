@@ -1543,7 +1543,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
-                                _wrapText(bodyText, boxW - 12, previewBodySize),
+                                _wrapText(bodyText, boxW - 12, previewBodySize, bold: _bodyBold),
                                 textAlign: bodyTextAlign,
                                 overflow: TextOverflow.clip,
                                 style: _googleFont(
@@ -1775,6 +1775,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               'words_per_slide': _wordsPerSlide,
               if (_bgVideoLocalPath != null)
                 'bg_video_local_path': _bgVideoLocalPath,
+              if (_previewAudioPath != null)
+                'tts_audio_path': _previewAudioPath,
             },
           ),
           timeout: const Duration(seconds: 30),
@@ -1845,8 +1847,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
 
   /// Word-wrap text identically to the Python server's _wrap_text().
   /// This ensures the preview shows the same line breaks as the render.
-  String _wrapText(String text, double boxWidthPx, double fontSizePx) {
-    final avgCharW = fontSizePx * 0.52;
+  String _wrapText(String text, double boxWidthPx, double fontSizePx, {bool bold = false}) {
+    final avgCharW = fontSizePx * (bold ? 0.60 : 0.52);
     final charsPerLine = (boxWidthPx / avgCharW).floor().clamp(15, 200);
     final words = text.split(' ');
     final lines = <String>[];

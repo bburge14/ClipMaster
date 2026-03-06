@@ -24,6 +24,10 @@ class TimelineAsset {
   final String? thumbnailUrl;
   final double startSec;
   final double durationSec;
+  final double speed; // 0.25x – 4.0x playback speed
+  final bool visible;
+  final bool locked;
+  final double volume; // 0.0 – 1.0 for audio-bearing assets
   final Map<String, dynamic> metadata;
 
   TimelineAsset({
@@ -35,6 +39,10 @@ class TimelineAsset {
     this.thumbnailUrl,
     this.startSec = 0,
     this.durationSec = 0,
+    this.speed = 1.0,
+    this.visible = true,
+    this.locked = false,
+    this.volume = 1.0,
     Map<String, dynamic>? metadata,
   }) : metadata = metadata ?? {};
 
@@ -45,17 +53,26 @@ class TimelineAsset {
     String? thumbnailUrl,
     double? startSec,
     double? durationSec,
+    double? speed,
+    bool? visible,
+    bool? locked,
+    double? volume,
+    TimelineTrack? track,
     Map<String, dynamic>? metadata,
   }) {
     return TimelineAsset(
       id: id,
-      track: track,
+      track: track ?? this.track,
       label: label ?? this.label,
       filePath: filePath ?? this.filePath,
       url: url ?? this.url,
       thumbnailUrl: thumbnailUrl ?? this.thumbnailUrl,
       startSec: startSec ?? this.startSec,
       durationSec: durationSec ?? this.durationSec,
+      speed: speed ?? this.speed,
+      visible: visible ?? this.visible,
+      locked: locked ?? this.locked,
+      volume: volume ?? this.volume,
       metadata: metadata ?? this.metadata,
     );
   }
@@ -156,6 +173,19 @@ class ProjectNotifier extends StateNotifier<ProjectState> {
     state = state.copyWith(
       assets: state.assets.map((a) => a.id == id ? updater(a) : a).toList(),
     );
+  }
+
+  void reorderAsset(String id, int newIndex) {
+    final list = [...state.assets];
+    final oldIndex = list.indexWhere((a) => a.id == id);
+    if (oldIndex < 0 || oldIndex == newIndex) return;
+    final item = list.removeAt(oldIndex);
+    list.insert(newIndex.clamp(0, list.length), item);
+    state = state.copyWith(assets: list);
+  }
+
+  void moveAssetToTrack(String id, TimelineTrack track) {
+    updateAsset(id, (a) => a.copyWith(track: track));
   }
 
   void setVoice(TtsVoice voice) {

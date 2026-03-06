@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -66,27 +67,54 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   Player? _previewPlayer;
   VideoController? _previewController;
   bool _previewPlaying = false;
+  Duration _previewPosition = Duration.zero;
+  Duration _previewDuration = Duration.zero;
+  StreamSubscription? _positionSub;
+  StreamSubscription? _durationSub;
+  StreamSubscription? _playingSub;
+
+  // Resizable timeline panel height
+  double _timelinePanelHeight = 280.0;
+  static const double _minTimelineHeight = 160.0;
+  static const double _maxTimelineHeight = 600.0;
+
+  // Selected asset for property editing
+  String? _selectedAssetId;
 
   @override
   void dispose() {
     _horizontalScroll.dispose();
     _stockSearchController.dispose();
+    _positionSub?.cancel();
+    _durationSub?.cancel();
+    _playingSub?.cancel();
     _previewPlayer?.dispose();
     super.dispose();
   }
 
   void _initPreviewPlayer(String path) {
+    _positionSub?.cancel();
+    _durationSub?.cancel();
+    _playingSub?.cancel();
     if (_previewPlayer != null) {
       _previewPlayer!.dispose();
     }
     _previewPlayer = Player();
     _previewController = VideoController(_previewPlayer!);
-    final media = path.startsWith('http') ? Media(path) : Media(path);
+    final media = Media(path);
     _previewPlayer!.open(media);
     _previewPlayer!.setPlaylistMode(PlaylistMode.loop);
+    // Enable audio volume
+    _previewPlayer!.setVolume(100);
     _previewPlaying = true;
-    _previewPlayer!.stream.playing.listen((playing) {
+    _playingSub = _previewPlayer!.stream.playing.listen((playing) {
       if (mounted) setState(() => _previewPlaying = playing);
+    });
+    _positionSub = _previewPlayer!.stream.position.listen((pos) {
+      if (mounted) setState(() => _previewPosition = pos);
+    });
+    _durationSub = _previewPlayer!.stream.duration.listen((dur) {
+      if (mounted) setState(() => _previewDuration = dur);
     });
   }
 
@@ -476,30 +504,37 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
             (response.payload['duration'] as num?)?.toDouble() ?? 0;
         setState(() => _isRendering = false);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Short rendered! ${duration.toStringAsFixed(0)}s video saved.',
+        if (!mounted) return;
+
+        // Show a persistent banner instead of SnackBar for better UX
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF1E1E2E),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
             ),
-            duration: const Duration(seconds: 6),
-            action: outputPath.isNotEmpty
-                ? SnackBarAction(
-                    label: 'Open Folder',
-                    onPressed: () {
-                      final dir = outputPath.substring(
-                        0,
-                        outputPath.lastIndexOf(Platform.pathSeparator),
-                      );
-                      if (Platform.isWindows) {
-                        Process.run('explorer.exe', [dir]);
-                      } else if (Platform.isMacOS) {
-                        Process.run('open', [dir]);
-                      } else {
-                        Process.run('xdg-open', [dir]);
-                      }
-                    },
-                  )
-                : null,
+            icon: const Icon(Icons.check_circle, color: Color(0xFF00C853), size: 48),
+            title: const Text('Render Complete!'),
+            content: Text(
+              '${duration.toStringAsFixed(0)}s video saved successfully.\n$outputPath',
+              style: const TextStyle(fontSize: 13, color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Close'),
+              ),
+              if (outputPath.isNotEmpty)
+                FilledButton.icon(
+                  icon: const Icon(Icons.folder_open, size: 18),
+                  label: const Text('Open Folder'),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    _openOutputFolder(outputPath);
+                  },
+                ),
+            ],
           ),
         );
       }
@@ -510,6 +545,23 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
           SnackBar(content: Text('Render failed: $e')),
         );
       }
+    }
+  }
+
+  void _openOutputFolder(String outputPath) {
+    try {
+      final dir = outputPath.contains(Platform.pathSeparator)
+          ? outputPath.substring(0, outputPath.lastIndexOf(Platform.pathSeparator))
+          : outputPath;
+      if (Platform.isWindows) {
+        Process.run('explorer.exe', [dir]);
+      } else if (Platform.isMacOS) {
+        Process.run('open', [dir]);
+      } else {
+        Process.run('xdg-open', [dir]);
+      }
+    } catch (_) {
+      // Silently ignore if folder can't be opened
     }
   }
 
@@ -558,7 +610,6 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
             children: [
               // Top bar: video preview + controls + script
               Expanded(
-                flex: 3,
                 child: Container(
                   color: const Color(0xFF0A0A14),
                   child: _importedVideoPath == null && project.scriptText == null
@@ -566,8 +617,6 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                       : _buildProjectView(project),
                 ),
               ),
-              const Divider(height: 1),
-              _buildTimelineToolbar(project),
               const Divider(height: 1),
               // Progress bar (when busy)
               if (_isBusy)
@@ -608,15 +657,44 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   ),
                 ),
               const Divider(height: 1),
-              // Timeline tracks
-              Expanded(
-                flex: 2,
+              // Resizable drag handle for timeline
+              GestureDetector(
+                onVerticalDragUpdate: (details) {
+                  setState(() {
+                    _timelinePanelHeight = (_timelinePanelHeight - details.delta.dy)
+                        .clamp(_minTimelineHeight, _maxTimelineHeight);
+                  });
+                },
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.resizeRow,
+                  child: Container(
+                    height: 8,
+                    color: const Color(0xFF1A1A2A),
+                    child: Center(
+                      child: Container(
+                        width: 40,
+                        height: 3,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // Transport controls bar (play/pause/etc) — now above the timeline tracks
+              _buildTransportBar(project),
+              const Divider(height: 1),
+              // Timeline tracks — resizable
+              SizedBox(
+                height: _timelinePanelHeight,
                 child: _buildTimelineTracks(project),
               ),
             ],
           ),
         ),
-        // Right side panel (stock footage / text editor)
+        // Right side panel (stock footage / text editor / asset properties)
         if (_rightPanel != _RightPanel.none) ...[
           Container(width: 1, color: Colors.white.withOpacity(0.06)),
           SizedBox(
@@ -625,7 +703,11 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                 ? _buildStockFootagePanel()
                 : _rightPanel == _RightPanel.textEditor
                     ? _buildTextEditorPanel(project)
-                    : _buildVoicePanel(project),
+                    : _rightPanel == _RightPanel.voicePicker
+                        ? _buildVoicePanel(project)
+                        : _rightPanel == _RightPanel.assetProperties
+                            ? _buildAssetPropertiesPanel(project)
+                            : _buildLayersPanel(project),
           ),
         ],
       ],
@@ -689,10 +771,10 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Left: 9:16 Phone Frame Preview with draggable text ──
+          // Left: 9:16 Phone Frame Preview with draggable text
           _buildPhonePreview(project),
           const SizedBox(width: 20),
-          // ── Right: controls + script ──
+          // Right: controls + script — wrapped in a non-auto-scrolling column
           Expanded(
             flex: 3,
             child: Column(
@@ -721,7 +803,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   ),
                   const SizedBox(height: 8),
                 ],
-                // Quick-action chips
+                // Quick-action chips — use a non-scrolling Wrap
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
@@ -767,6 +849,20 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                             : _RightPanel.stockFootage;
                       }),
                     ),
+                    // Layers panel button
+                    _buildActionChip(
+                      icon: Icons.layers,
+                      label: 'Layers',
+                      color: _rightPanel == _RightPanel.layers
+                          ? const Color(0xFF00C853)
+                          : const Color(0xFF2D6482),
+                      busy: false,
+                      onTap: () => setState(() {
+                        _rightPanel = _rightPanel == _RightPanel.layers
+                            ? _RightPanel.none
+                            : _RightPanel.layers;
+                      }),
+                    ),
                     if (project.scriptText != null) ...[
                       _buildActionChip(
                         icon: Icons.text_fields,
@@ -798,7 +894,23 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                // Script preview
+                // Render button
+                if (project.scriptText != null) ...[
+                  FilledButton.icon(
+                    onPressed: _isBusy ? null : _renderVideo,
+                    icon: _isRendering
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.movie_creation, size: 18),
+                    label: Text(_isRendering ? 'Rendering...' : 'Render Short'),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                // Script preview — fixed in place, no auto-scroll
                 if (project.scriptText != null) ...[
                   Row(
                     children: [
@@ -838,6 +950,8 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                             color: Colors.white.withOpacity(0.06)),
                       ),
                       child: SingleChildScrollView(
+                        // NeverScrollable by default — only scrolls on user gesture
+                        physics: const ClampingScrollPhysics(),
                         child: Text(
                           project.scriptText!,
                           style: TextStyle(
@@ -861,6 +975,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   const SizedBox(height: 8),
                   Expanded(
                     child: ListView.builder(
+                      physics: const ClampingScrollPhysics(),
                       itemCount: _transcriptSegments.length,
                       itemBuilder: (context, index) {
                         final seg = _transcriptSegments[index];
@@ -945,6 +1060,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   const SizedBox(height: 8),
                   Expanded(
                     child: ListView(
+                      physics: const ClampingScrollPhysics(),
                       children: project.assets
                           .where((a) => a.track == TimelineTrack.broll)
                           .map((a) => _buildBrollThumb(a))
@@ -961,8 +1077,6 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   }
 
   /// 9:16 phone-frame preview with live video + draggable text overlay.
-  /// Matches the Fact Shorts composer layout: title at top, script body
-  /// at positionY, stock footage or gradient background.
   Widget _buildPhonePreview(ProjectState project) {
     final style = project.captionStyle;
     final titleText = project.scriptTitle ?? '';
@@ -970,7 +1084,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     final hasTitle = titleText.isNotEmpty;
     final hasScript = scriptText.isNotEmpty;
 
-    // Check if there's a video-track asset with a URL (stock footage from composer)
+    // Check if there's a video-track asset with a URL
     final videoAssets =
         project.assets.where((a) => a.track == TimelineTrack.video).toList();
     final bgUrl = videoAssets.isNotEmpty
@@ -1049,7 +1163,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         // Dark overlay for readability
                         if (_previewController != null)
                           Container(color: Colors.black.withOpacity(0.3)),
-                        // Title text (top area — matches Fact Shorts at 8%)
+                        // Title text (top area)
                         if (hasTitle)
                           Positioned(
                             top: frameH * 0.08,
@@ -1128,7 +1242,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                               ),
                             ),
                           ),
-                        // Position presets (top / center / bottom)
+                        // Position presets
                         if (hasScript)
                           Positioned(
                             right: 4,
@@ -1144,13 +1258,16 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                               ],
                             ),
                           ),
-                        // Play/pause button
+                        // Volume indicator in the preview
                         if (_previewPlayer != null)
                           Positioned(
-                            left: 4,
+                            right: 4,
                             bottom: 4,
                             child: GestureDetector(
-                              onTap: () => _previewPlayer!.playOrPause(),
+                              onTap: () {
+                                final current = _previewPlayer!.state.volume;
+                                _previewPlayer!.setVolume(current > 0 ? 0 : 100);
+                              },
                               child: Container(
                                 width: 28,
                                 height: 28,
@@ -1159,10 +1276,10 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                                   borderRadius: BorderRadius.circular(14),
                                 ),
                                 child: Icon(
-                                  _previewPlaying
-                                      ? Icons.pause
-                                      : Icons.play_arrow,
-                                  size: 16,
+                                  _previewPlayer!.state.volume > 0
+                                      ? Icons.volume_up
+                                      : Icons.volume_off,
+                                  size: 14,
                                   color: Colors.white70,
                                 ),
                               ),
@@ -1281,6 +1398,143 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     );
   }
 
+  /// Transport bar with play/pause, skip, scrub, and time display
+  /// — now positioned directly above the timeline tracks.
+  Widget _buildTransportBar(ProjectState project) {
+    final posMs = _previewPosition.inMilliseconds;
+    final durMs = _previewDuration.inMilliseconds;
+    final posStr = _formatDuration(_previewPosition);
+    final durStr = _formatDuration(_previewDuration);
+
+    return Container(
+      height: 48,
+      color: const Color(0xFF141420),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          // Skip to start
+          IconButton(
+            icon: const Icon(Icons.skip_previous, size: 20),
+            onPressed: () {
+              _previewPlayer?.seek(Duration.zero);
+              setState(() => _playheadPosition = 0);
+            },
+            tooltip: 'Go to start',
+          ),
+          // Rewind 5s
+          IconButton(
+            icon: const Icon(Icons.replay_5, size: 20),
+            onPressed: () {
+              if (_previewPlayer != null) {
+                final newPos = _previewPosition - const Duration(seconds: 5);
+                _previewPlayer!.seek(newPos < Duration.zero ? Duration.zero : newPos);
+              }
+            },
+            tooltip: 'Back 5s',
+          ),
+          // Play / Pause
+          IconButton(
+            icon: Icon(
+              _previewPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+              size: 32,
+              color: const Color(0xFF6C5CE7),
+            ),
+            onPressed: () => _previewPlayer?.playOrPause(),
+            tooltip: _previewPlaying ? 'Pause' : 'Play',
+          ),
+          // Forward 5s
+          IconButton(
+            icon: const Icon(Icons.forward_5, size: 20),
+            onPressed: () {
+              if (_previewPlayer != null) {
+                final newPos = _previewPosition + const Duration(seconds: 5);
+                _previewPlayer!.seek(newPos > _previewDuration ? _previewDuration : newPos);
+              }
+            },
+            tooltip: 'Forward 5s',
+          ),
+          // Skip to end
+          IconButton(
+            icon: const Icon(Icons.skip_next, size: 20),
+            onPressed: () {
+              if (_previewPlayer != null && _previewDuration > Duration.zero) {
+                _previewPlayer!.seek(_previewDuration);
+              }
+            },
+            tooltip: 'Go to end',
+          ),
+          const SizedBox(width: 8),
+          // Time display
+          Text(
+            '$posStr / $durStr',
+            style: TextStyle(
+              fontSize: 12,
+              fontFamily: 'monospace',
+              color: Colors.white.withOpacity(0.6),
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Scrubber / seek bar
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 4,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                activeTrackColor: const Color(0xFF6C5CE7),
+                inactiveTrackColor: Colors.white12,
+                thumbColor: const Color(0xFF6C5CE7),
+              ),
+              child: Slider(
+                value: durMs > 0 ? (posMs / durMs).clamp(0.0, 1.0) : 0.0,
+                onChanged: (v) {
+                  if (_previewPlayer != null && durMs > 0) {
+                    _previewPlayer!.seek(Duration(milliseconds: (v * durMs).toInt()));
+                  }
+                },
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Zoom control
+          const Text('Zoom:', style: TextStyle(fontSize: 11, color: Colors.white38)),
+          SizedBox(
+            width: 100,
+            child: Slider(
+              value: _zoomLevel,
+              min: 0.25,
+              max: 4.0,
+              onChanged: (v) => setState(() => _zoomLevel = v),
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilterChip(
+            label: const Text('Snap', style: TextStyle(fontSize: 10)),
+            selected: true,
+            onSelected: (_) {},
+            visualDensity: VisualDensity.compact,
+          ),
+          const SizedBox(width: 4),
+          FilterChip(
+            label: Text(
+              _proxyPath != null ? 'Proxy ON' : 'Proxy',
+              style: const TextStyle(fontSize: 10),
+            ),
+            selected: _proxyPath != null,
+            onSelected: (_) {},
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDuration(Duration d) {
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
   Widget _buildTimelineTracks(ProjectState project) {
     final brollAssets =
         project.assets.where((a) => a.track == TimelineTrack.broll).toList();
@@ -1295,14 +1549,14 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
               children: [
                 // Track labels column
                 SizedBox(
-                  width: 100,
+                  width: 110,
                   child: Column(
                     children: [
-                      _buildTrackLabel('Video', Icons.videocam),
-                      _buildTrackLabel('B-Roll', Icons.movie_filter),
-                      _buildTrackLabel('Audio', Icons.audiotrack),
-                      _buildTrackLabel('Captions', Icons.subtitles),
-                      _buildTrackLabel('Crops', Icons.crop),
+                      _buildTrackLabel('Video', Icons.videocam, const Color(0xFF2D5AA0)),
+                      _buildTrackLabel('B-Roll', Icons.movie_filter, const Color(0xFF5A2D82)),
+                      _buildTrackLabel('Audio', Icons.audiotrack, const Color(0xFF2D824A)),
+                      _buildTrackLabel('Captions', Icons.subtitles, const Color(0xFF82782D)),
+                      _buildTrackLabel('Crops', Icons.crop, const Color(0xFF822D5A)),
                     ],
                   ),
                 ),
@@ -1312,6 +1566,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   child: SingleChildScrollView(
                     controller: _horizontalScroll,
                     scrollDirection: Axis.horizontal,
+                    physics: const ClampingScrollPhysics(),
                     child: SizedBox(
                       width: 2000 * _zoomLevel,
                       child: Stack(
@@ -1320,34 +1575,37 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                             children: [
                               _buildTrackRow(
                                 const Color(0xFF2D5AA0),
-                                hasClip: _importedVideoPath != null,
-                                clipLabel: _importedVideoName,
+                                track: TimelineTrack.video,
+                                assets: project.assets.where((a) => a.track == TimelineTrack.video).toList(),
                               ),
                               _buildTrackRow(
                                 const Color(0xFF5A2D82),
-                                hasClip: brollAssets.isNotEmpty,
-                                clipLabel: brollAssets.isNotEmpty
-                                    ? '${brollAssets.length} B-Roll clips'
-                                    : null,
+                                track: TimelineTrack.broll,
+                                assets: brollAssets,
                               ),
                               _buildTrackRow(
                                 const Color(0xFF2D824A),
-                                hasClip: _ttsAudioPath != null,
-                                clipLabel: _ttsAudioPath != null
+                                track: TimelineTrack.audio,
+                                assets: project.assets.where((a) => a.track == TimelineTrack.audio).toList(),
+                                extraLabel: _ttsAudioPath != null && project.assets.where((a) => a.track == TimelineTrack.audio).isEmpty
                                     ? 'Voiceover (${project.selectedVoice.label})'
                                     : null,
                               ),
                               _buildTrackRow(
                                 const Color(0xFF82782D),
-                                hasClip: _transcriptSegments.isNotEmpty ||
-                                    project.scriptText != null,
-                                clipLabel: _transcriptSegments.isNotEmpty
+                                track: TimelineTrack.captions,
+                                assets: project.assets.where((a) => a.track == TimelineTrack.captions).toList(),
+                                extraLabel: _transcriptSegments.isNotEmpty
                                     ? '${_transcriptSegments.length} captions'
                                     : project.scriptText != null
                                         ? 'Script captions'
                                         : null,
                               ),
-                              _buildTrackRow(const Color(0xFF822D5A)),
+                              _buildTrackRow(
+                                const Color(0xFF822D5A),
+                                track: TimelineTrack.crops,
+                                assets: project.assets.where((a) => a.track == TimelineTrack.crops).toList(),
+                              ),
                             ],
                           ),
                           // Playhead
@@ -1373,7 +1631,514 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     );
   }
 
-  // ─── Right panels ───
+  // ─── Layers Panel — shows all assets with full control ───
+
+  Widget _buildLayersPanel(ProjectState project) {
+    final allAssets = project.assets;
+
+    return Container(
+      color: const Color(0xFF1A1A2A),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                const Icon(Icons.layers, size: 18, color: Color(0xFF2D6482)),
+                const SizedBox(width: 8),
+                const Text('Layers / Assets',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () =>
+                      setState(() => _rightPanel = _RightPanel.none),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          // Asset list
+          Expanded(
+            child: allAssets.isEmpty
+                ? Center(
+                    child: Text(
+                      'No assets on the timeline.\nImport media or use Fact Shorts.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withOpacity(0.3),
+                      ),
+                    ),
+                  )
+                : ReorderableListView.builder(
+                    padding: const EdgeInsets.all(8),
+                    itemCount: allAssets.length,
+                    onReorder: (oldIndex, newIndex) {
+                      if (newIndex > oldIndex) newIndex--;
+                      ref.read(projectProvider.notifier).reorderAsset(
+                            allAssets[oldIndex].id,
+                            newIndex,
+                          );
+                    },
+                    itemBuilder: (context, index) {
+                      final asset = allAssets[index];
+                      final isSelected = asset.id == _selectedAssetId;
+                      final trackColor = _trackColor(asset.track);
+                      final trackIcon = _trackIcon(asset.track);
+
+                      return Card(
+                        key: ValueKey(asset.id),
+                        color: isSelected
+                            ? const Color(0xFF6C5CE7).withOpacity(0.15)
+                            : const Color(0xFF1E1E2E),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          side: isSelected
+                              ? const BorderSide(color: Color(0xFF6C5CE7), width: 1)
+                              : BorderSide.none,
+                        ),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: () {
+                            setState(() {
+                              _selectedAssetId = isSelected ? null : asset.id;
+                              if (_selectedAssetId != null) {
+                                _rightPanel = _RightPanel.assetProperties;
+                              }
+                            });
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.all(8),
+                            child: Row(
+                              children: [
+                                // Drag handle
+                                const Icon(Icons.drag_handle, size: 16, color: Colors.white24),
+                                const SizedBox(width: 4),
+                                // Track color indicator
+                                Container(
+                                  width: 4,
+                                  height: 32,
+                                  decoration: BoxDecoration(
+                                    color: trackColor,
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                // Icon
+                                Icon(trackIcon, size: 16, color: trackColor),
+                                const SizedBox(width: 8),
+                                // Label + track name
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        asset.label,
+                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      Text(
+                                        '${asset.track.name.toUpperCase()} | ${asset.speed}x',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.white.withOpacity(0.4),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                // Visibility toggle
+                                IconButton(
+                                  icon: Icon(
+                                    asset.visible ? Icons.visibility : Icons.visibility_off,
+                                    size: 16,
+                                    color: asset.visible ? Colors.white54 : Colors.white24,
+                                  ),
+                                  onPressed: () {
+                                    ref.read(projectProvider.notifier).updateAsset(
+                                      asset.id,
+                                      (a) => a.copyWith(visible: !a.visible),
+                                    );
+                                  },
+                                  visualDensity: VisualDensity.compact,
+                                  tooltip: asset.visible ? 'Hide' : 'Show',
+                                ),
+                                // Lock toggle
+                                IconButton(
+                                  icon: Icon(
+                                    asset.locked ? Icons.lock : Icons.lock_open,
+                                    size: 14,
+                                    color: asset.locked ? Colors.orangeAccent : Colors.white24,
+                                  ),
+                                  onPressed: () {
+                                    ref.read(projectProvider.notifier).updateAsset(
+                                      asset.id,
+                                      (a) => a.copyWith(locked: !a.locked),
+                                    );
+                                  },
+                                  visualDensity: VisualDensity.compact,
+                                  tooltip: asset.locked ? 'Unlock' : 'Lock',
+                                ),
+                                // Delete
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline, size: 16, color: Colors.redAccent),
+                                  onPressed: () {
+                                    ref.read(projectProvider.notifier).removeAsset(asset.id);
+                                    if (_selectedAssetId == asset.id) {
+                                      setState(() => _selectedAssetId = null);
+                                    }
+                                  },
+                                  visualDensity: VisualDensity.compact,
+                                  tooltip: 'Remove',
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Asset Properties Panel — per-asset controls (speed, volume, position) ───
+
+  Widget _buildAssetPropertiesPanel(ProjectState project) {
+    final asset = _selectedAssetId != null
+        ? project.assets.where((a) => a.id == _selectedAssetId).firstOrNull
+        : null;
+
+    if (asset == null) {
+      // Fallback to layers panel
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        setState(() => _rightPanel = _RightPanel.layers);
+      });
+      return const SizedBox.shrink();
+    }
+
+    final trackColor = _trackColor(asset.track);
+
+    return Container(
+      color: const Color(0xFF1A1A2A),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Icon(_trackIcon(asset.track), size: 18, color: trackColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    asset.label,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.arrow_back, size: 18),
+                  onPressed: () => setState(() => _rightPanel = _RightPanel.layers),
+                  tooltip: 'Back to Layers',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () => setState(() => _rightPanel = _RightPanel.none),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Track info
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: trackColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: trackColor.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(color: trackColor, shape: BoxShape.circle),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Track: ${asset.track.name.toUpperCase()}',
+                          style: TextStyle(fontSize: 12, color: trackColor, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Label editor
+                  const Text('Label', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                  const SizedBox(height: 4),
+                  TextFormField(
+                    initialValue: asset.label,
+                    style: const TextStyle(fontSize: 13),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    ),
+                    onFieldSubmitted: (v) {
+                      ref.read(projectProvider.notifier).updateAsset(
+                        asset.id,
+                        (a) => a.copyWith(label: v),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Speed control
+                  Row(
+                    children: [
+                      const Text('Speed', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                      const Spacer(),
+                      Text(
+                        '${asset.speed.toStringAsFixed(2)}x',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6C5CE7)),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: asset.speed,
+                    min: 0.25,
+                    max: 4.0,
+                    divisions: 15,
+                    label: '${asset.speed.toStringAsFixed(2)}x',
+                    onChanged: (v) {
+                      ref.read(projectProvider.notifier).updateAsset(
+                        asset.id,
+                        (a) => a.copyWith(speed: v),
+                      );
+                    },
+                  ),
+                  // Speed presets
+                  Wrap(
+                    spacing: 4,
+                    children: [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0].map((s) {
+                      final isActive = (asset.speed - s).abs() < 0.01;
+                      return ActionChip(
+                        label: Text('${s}x', style: TextStyle(fontSize: 10, color: isActive ? Colors.white : Colors.white54)),
+                        backgroundColor: isActive ? const Color(0xFF6C5CE7) : Colors.white.withOpacity(0.05),
+                        side: BorderSide.none,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () {
+                          ref.read(projectProvider.notifier).updateAsset(
+                            asset.id,
+                            (a) => a.copyWith(speed: s),
+                          );
+                        },
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Volume control (for video & audio tracks)
+                  if (asset.track == TimelineTrack.video ||
+                      asset.track == TimelineTrack.audio ||
+                      asset.track == TimelineTrack.broll) ...[
+                    Row(
+                      children: [
+                        const Text('Volume', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                        const Spacer(),
+                        Text(
+                          '${(asset.volume * 100).toInt()}%',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF2D824A)),
+                        ),
+                      ],
+                    ),
+                    Slider(
+                      value: asset.volume,
+                      min: 0.0,
+                      max: 1.0,
+                      divisions: 20,
+                      label: '${(asset.volume * 100).toInt()}%',
+                      activeColor: const Color(0xFF2D824A),
+                      onChanged: (v) {
+                        ref.read(projectProvider.notifier).updateAsset(
+                          asset.id,
+                          (a) => a.copyWith(volume: v),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+
+                  // Start time
+                  Row(
+                    children: [
+                      const Text('Start', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                      const Spacer(),
+                      Text(
+                        '${asset.startSec.toStringAsFixed(1)}s',
+                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: asset.startSec,
+                    min: 0,
+                    max: 120,
+                    onChanged: (v) {
+                      ref.read(projectProvider.notifier).updateAsset(
+                        asset.id,
+                        (a) => a.copyWith(startSec: v),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Duration
+                  Row(
+                    children: [
+                      const Text('Duration', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                      const Spacer(),
+                      Text(
+                        '${asset.durationSec.toStringAsFixed(1)}s',
+                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: asset.durationSec,
+                    min: 0,
+                    max: 300,
+                    onChanged: (v) {
+                      ref.read(projectProvider.notifier).updateAsset(
+                        asset.id,
+                        (a) => a.copyWith(durationSec: v),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Visibility & Lock
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SwitchListTile(
+                          title: const Text('Visible', style: TextStyle(fontSize: 12)),
+                          value: asset.visible,
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          onChanged: (v) {
+                            ref.read(projectProvider.notifier).updateAsset(
+                              asset.id,
+                              (a) => a.copyWith(visible: v),
+                            );
+                          },
+                        ),
+                      ),
+                      Expanded(
+                        child: SwitchListTile(
+                          title: const Text('Locked', style: TextStyle(fontSize: 12)),
+                          value: asset.locked,
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          onChanged: (v) {
+                            ref.read(projectProvider.notifier).updateAsset(
+                              asset.id,
+                              (a) => a.copyWith(locked: v),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  // File info
+                  if (asset.filePath != null) ...[
+                    const Text('File', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                    const SizedBox(height: 4),
+                    Text(
+                      asset.filePath!,
+                      style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.4)),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                  if (asset.url != null) ...[
+                    const SizedBox(height: 8),
+                    const Text('URL', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                    const SizedBox(height: 4),
+                    Text(
+                      asset.url!,
+                      style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.4)),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+
+                  // Delete button
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        ref.read(projectProvider.notifier).removeAsset(asset.id);
+                        setState(() {
+                          _selectedAssetId = null;
+                          _rightPanel = _RightPanel.layers;
+                        });
+                      },
+                      icon: const Icon(Icons.delete_outline, size: 16),
+                      label: const Text('Remove Asset'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.redAccent,
+                        side: const BorderSide(color: Colors.redAccent),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _trackColor(TimelineTrack track) {
+    return switch (track) {
+      TimelineTrack.video => const Color(0xFF2D5AA0),
+      TimelineTrack.broll => const Color(0xFF5A2D82),
+      TimelineTrack.audio => const Color(0xFF2D824A),
+      TimelineTrack.captions => const Color(0xFF82782D),
+      TimelineTrack.crops => const Color(0xFF822D5A),
+    };
+  }
+
+  IconData _trackIcon(TimelineTrack track) {
+    return switch (track) {
+      TimelineTrack.video => Icons.videocam,
+      TimelineTrack.broll => Icons.movie_filter,
+      TimelineTrack.audio => Icons.audiotrack,
+      TimelineTrack.captions => Icons.subtitles,
+      TimelineTrack.crops => Icons.crop,
+    };
+  }
+
+  // ─── Right panels (stock, text, voice) ───
 
   Widget _buildStockFootagePanel() {
     return Container(
@@ -1456,6 +2221,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   )
                 : GridView.builder(
                     padding: const EdgeInsets.all(8),
+                    physics: const ClampingScrollPhysics(),
                     gridDelegate:
                         const SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: 2,
@@ -1591,6 +2357,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
           const Divider(height: 1),
           Expanded(
             child: SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.all(12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1800,6 +2567,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
           const Divider(height: 1),
           Expanded(
             child: ListView(
+              physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.all(12),
               children: TtsVoice.values.map((voice) {
                 final isSelected = project.selectedVoice == voice;
@@ -1875,88 +2643,21 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     );
   }
 
-  Widget _buildTimelineToolbar(ProjectState project) {
-    return Container(
-      height: 40,
-      color: const Color(0xFF141420),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.skip_previous, size: 20),
-            onPressed: () => setState(() => _playheadPosition = 0),
-            tooltip: 'Go to start',
-          ),
-          IconButton(
-            icon: const Icon(Icons.play_arrow, size: 20),
-            onPressed: () {},
-            tooltip: 'Play/Pause',
-          ),
-          IconButton(
-            icon: const Icon(Icons.skip_next, size: 20),
-            onPressed: () {},
-            tooltip: 'Go to end',
-          ),
-          const SizedBox(width: 16),
-          const Text('Zoom:', style: TextStyle(fontSize: 12)),
-          SizedBox(
-            width: 150,
-            child: Slider(
-              value: _zoomLevel,
-              min: 0.25,
-              max: 4.0,
-              onChanged: (v) => setState(() => _zoomLevel = v),
-            ),
-          ),
-          const Spacer(),
-          FilterChip(
-            label: const Text('Magnetic Snap', style: TextStyle(fontSize: 11)),
-            selected: true,
-            onSelected: (_) {},
-          ),
-          const SizedBox(width: 8),
-          FilterChip(
-            label: Text(
-              _proxyPath != null ? 'Proxy Mode (ON)' : 'Proxy Mode',
-              style: const TextStyle(fontSize: 11),
-            ),
-            selected: _proxyPath != null,
-            onSelected: (_) {},
-          ),
-          if (project.scriptText != null) ...[
-            const SizedBox(width: 16),
-            FilledButton.icon(
-              onPressed: _isBusy ? null : _renderVideo,
-              icon: _isRendering
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Icon(Icons.movie_creation, size: 18),
-              label: Text(_isRendering ? 'Rendering...' : 'Render Short'),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTrackLabel(String name, IconData icon) {
+  Widget _buildTrackLabel(String name, IconData icon, Color color) {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: Colors.white10)),
+        decoration: BoxDecoration(
+          border: const Border(bottom: BorderSide(color: Colors.white10)),
+          color: color.withOpacity(0.05),
         ),
         child: Row(
           children: [
-            Icon(icon, size: 14, color: Colors.white54),
+            Icon(icon, size: 14, color: color.withOpacity(0.7)),
             const SizedBox(width: 4),
             Text(
               name,
-              style: const TextStyle(fontSize: 11, color: Colors.white54),
+              style: TextStyle(fontSize: 11, color: color.withOpacity(0.8), fontWeight: FontWeight.w500),
             ),
           ],
         ),
@@ -1964,42 +2665,132 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     );
   }
 
-  Widget _buildTrackRow(Color color,
-      {bool hasClip = false, String? clipLabel}) {
+  Widget _buildTrackRow(
+    Color color, {
+    required TimelineTrack track,
+    List<TimelineAsset> assets = const [],
+    String? extraLabel,
+  }) {
+    final hasClips = assets.isNotEmpty || extraLabel != null;
+    final clipLabel = assets.isNotEmpty
+        ? assets.length == 1
+            ? '${assets.first.label} (${assets.first.speed}x)'
+            : '${assets.length} clips'
+        : extraLabel;
+
     return Expanded(
-      child: Container(
-        decoration: BoxDecoration(
-          border: const Border(bottom: BorderSide(color: Colors.white10)),
-          color: color.withOpacity(0.1),
-        ),
-        child: hasClip && clipLabel != null
-            ? Align(
-                alignment: Alignment.centerLeft,
-                child: Container(
-                  margin: const EdgeInsets.symmetric(
-                      horizontal: 4, vertical: 3),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: color.withOpacity(0.4),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: color.withOpacity(0.6)),
-                  ),
-                  child: Text(
-                    clipLabel,
-                    style:
-                        const TextStyle(fontSize: 10, color: Colors.white70),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              )
-            : const SizedBox.expand(),
+      child: DragTarget<TimelineAsset>(
+        onAcceptWithDetails: (details) {
+          ref.read(projectProvider.notifier).moveAssetToTrack(details.data.id, track);
+        },
+        builder: (context, candidateData, rejectedData) {
+          final isHovering = candidateData.isNotEmpty;
+          return Container(
+            decoration: BoxDecoration(
+              border: const Border(bottom: BorderSide(color: Colors.white10)),
+              color: isHovering ? color.withOpacity(0.25) : color.withOpacity(0.1),
+            ),
+            child: hasClips && clipLabel != null
+                ? Row(
+                    children: [
+                      ...assets.map((asset) => Draggable<TimelineAsset>(
+                            data: asset,
+                            feedback: Material(
+                              color: Colors.transparent,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: color.withOpacity(0.8),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  asset.label,
+                                  style: const TextStyle(fontSize: 10, color: Colors.white),
+                                ),
+                              ),
+                            ),
+                            childWhenDragging: Container(
+                              margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: color.withOpacity(0.15),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: color.withOpacity(0.3), style: BorderStyle.solid),
+                              ),
+                              child: Text(
+                                asset.label,
+                                style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.3)),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            child: GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _selectedAssetId = asset.id;
+                                  _rightPanel = _RightPanel.assetProperties;
+                                });
+                              },
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: asset.id == _selectedAssetId
+                                      ? color.withOpacity(0.7)
+                                      : color.withOpacity(0.4),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                    color: asset.id == _selectedAssetId
+                                        ? Colors.white54
+                                        : color.withOpacity(0.6),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (!asset.visible)
+                                      Padding(
+                                        padding: const EdgeInsets.only(right: 4),
+                                        child: Icon(Icons.visibility_off, size: 10, color: Colors.white.withOpacity(0.4)),
+                                      ),
+                                    Text(
+                                      '${asset.label} ${asset.speed != 1.0 ? "(${asset.speed}x)" : ""}',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: asset.visible ? Colors.white70 : Colors.white30,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          )),
+                      if (assets.isEmpty && extraLabel != null)
+                        Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(0.4),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: color.withOpacity(0.6)),
+                          ),
+                          child: Text(
+                            extraLabel,
+                            style: const TextStyle(fontSize: 10, color: Colors.white70),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                  )
+                : const SizedBox.expand(),
+          );
+        },
       ),
     );
   }
 }
 
-enum _RightPanel { none, stockFootage, textEditor, voicePicker }
+enum _RightPanel { none, stockFootage, textEditor, voicePicker, layers, assetProperties }
 
 class _ActionButton extends StatelessWidget {
   final IconData icon;

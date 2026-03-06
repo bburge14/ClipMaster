@@ -14,6 +14,7 @@ import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/api_key_service.dart';
 import '../../../core/services/project_state.dart';
+import '../../../core/utils/time_format.dart';
 
 const _categories = ['Space', 'History', 'Science', 'Technology', 'Nature'];
 
@@ -92,6 +93,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   bool _isPreviewingVoice = false;
   String? _previewAudioPath;
   bool _voicePlaying = false;
+  Player? _voicePlayer;                          // temp player for TTS preview
+  StreamSubscription<bool>? _voiceCompletedSub;  // cleaned up on dispose
 
   // Background footage — multiple backgrounds that cycle
   List<Map<String, dynamic>> _bgResults = [];
@@ -234,9 +237,14 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     _durationSub?.cancel();
     _playingSub?.cancel();
 
-    _positionSub = player.stream.position.listen((pos) {
+    // Capture a weak reference: if the player we attached to is no longer
+    // the active player (e.g. it was disposed and replaced), skip the update.
+    final attachedPlayer = player;
+
+    _positionSub = attachedPlayer.stream.position.listen((pos) {
       if (!mounted || _userScrubbing) return;
-      final dur = player.state.duration;
+      if (_activePlayer != attachedPlayer) return; // player was swapped out
+      final dur = attachedPlayer.state.duration;
       if (dur.inMilliseconds > 0) {
         setState(() {
           _scrubPosition =
@@ -244,14 +252,16 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         });
       }
     });
-    _durationSub = player.stream.duration.listen((dur) {
+    _durationSub = attachedPlayer.stream.duration.listen((dur) {
       if (!mounted) return;
+      if (_activePlayer != attachedPlayer) return;
       if (dur.inSeconds > 0) {
         setState(() => _estimatedDuration = dur.inSeconds.toDouble());
       }
     });
-    _playingSub = player.stream.playing.listen((playing) {
+    _playingSub = attachedPlayer.stream.playing.listen((playing) {
       if (!mounted) return;
+      if (_activePlayer != attachedPlayer) return;
       setState(() => _isPlaying = playing);
     });
   }
@@ -262,12 +272,20 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     if (_livePreviewMode) _requestPreviewClip();
   }
 
+  void _disposeVoicePlayer() {
+    _voiceCompletedSub?.cancel();
+    _voiceCompletedSub = null;
+    _voicePlayer?.dispose();
+    _voicePlayer = null;
+  }
+
   @override
   void dispose() {
     _positionSub?.cancel();
     _durationSub?.cancel();
     _playingSub?.cancel();
     _previewClipDebounce?.cancel();
+    _disposeVoicePlayer();
     _scriptEditController.dispose();
     _bgSearchController.dispose();
     _customPromptController.dispose();
@@ -477,13 +495,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       // Pause the active video player during voice preview
       _activePlayer?.pause();
 
-      // Play voice through a temporary player, tracking completion
-      final voicePlayer = Player();
-      voicePlayer.open(Media(audioPath));
-      voicePlayer.stream.completed.listen((completed) {
+      // Clean up any previous voice player
+      _voiceCompletedSub?.cancel();
+      _voicePlayer?.dispose();
+
+      _voicePlayer = Player();
+      _voicePlayer!.open(Media(audioPath));
+      _voiceCompletedSub = _voicePlayer!.stream.completed.listen((completed) {
         if (completed && mounted) {
-          voicePlayer.dispose();
-          // Resume the active video player
+          _disposeVoicePlayer();
           _activePlayer?.play();
           setState(() {
             _voicePlaying = false;
@@ -1998,16 +2018,30 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
   }
 
+  // Memoized slide cache — avoids recomputing on every rebuild (scrub, zoom, etc.)
+  List<String>? _cachedSlides;
+  String? _cachedSlidesScript;
+  int? _cachedSlidesWps;
+
   /// Split body text into slideshow slides (each with _wordsPerSlide words).
   List<String> _getSlides() {
-    final words = _composerScript.split(' ');
-    if (words.isEmpty) return [_composerScript];
-    final slides = <String>[];
-    for (var i = 0; i < words.length; i += _wordsPerSlide) {
-      final end = (i + _wordsPerSlide).clamp(0, words.length);
-      slides.add(words.sublist(i, end).join(' '));
+    if (_cachedSlidesScript == _composerScript && _cachedSlidesWps == _wordsPerSlide) {
+      return _cachedSlides!;
     }
-    return slides;
+    final words = _composerScript.split(' ');
+    if (words.isEmpty) {
+      _cachedSlides = [_composerScript];
+    } else {
+      final slides = <String>[];
+      for (var i = 0; i < words.length; i += _wordsPerSlide) {
+        final end = (i + _wordsPerSlide).clamp(0, words.length);
+        slides.add(words.sublist(i, end).join(' '));
+      }
+      _cachedSlides = slides;
+    }
+    _cachedSlidesScript = _composerScript;
+    _cachedSlidesWps = _wordsPerSlide;
+    return _cachedSlides!;
   }
 
   /// Word-wrap text identically to the Python server's _wrap_text().
@@ -3157,7 +3191,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           ),
           const SizedBox(width: 6),
           Text(
-            '${_formatTime(_scrubPosition * _estimatedDuration)} / ${_formatTime(_estimatedDuration)}',
+            '${formatTimeMMSS(_scrubPosition * _estimatedDuration)} / ${formatTimeMMSS(_estimatedDuration)}',
             style: TextStyle(
               fontSize: 11,
               fontFamily: 'monospace',
@@ -3376,7 +3410,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                   Container(width: 1, height: 10, color: Colors.white.withOpacity(0.15)),
                   const SizedBox(width: 2),
                   Text(
-                    _formatTime(t),
+                    formatTimeMMSS(t),
                     style: TextStyle(
                       fontSize: 8,
                       fontFamily: 'monospace',
@@ -3426,11 +3460,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     );
   }
 
-  String _formatTime(double seconds) {
-    final m = (seconds ~/ 60).toString().padLeft(2, '0');
-    final s = (seconds.toInt() % 60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
 }
 
 // ────────────────────────────────────────────────────────────────

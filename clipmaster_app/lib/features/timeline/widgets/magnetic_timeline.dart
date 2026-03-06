@@ -12,6 +12,7 @@ import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/api_key_service.dart';
 import '../../../core/services/project_state.dart';
+import '../../../core/utils/time_format.dart';
 
 /// The Magnetic Timeline — the core editing UI for ClipMaster Pro.
 ///
@@ -1002,7 +1003,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                               SizedBox(
                                 width: 60,
                                 child: Text(
-                                  _formatTime(start),
+                                  formatTimeMMSS(start),
                                   style: TextStyle(
                                     fontSize: 11,
                                     fontFamily: 'monospace',
@@ -2737,11 +2738,6 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
 
   // ─── Shared helpers ───
 
-  String _formatTime(double seconds) {
-    final m = (seconds ~/ 60).toString().padLeft(2, '0');
-    final s = (seconds.toInt() % 60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
 
   Widget _buildActionChip({
     required IconData icon,

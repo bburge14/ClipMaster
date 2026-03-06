@@ -20,6 +20,27 @@ import httpx
 
 logger = logging.getLogger("clipmaster_sidecar.media_tools")
 
+# Browser for --cookies-from-browser.  Set via IPC (setCookieBrowser) or
+# the CLIPMASTER_COOKIE_BROWSER env var.  None = disabled.
+_cookie_browser: str | None = os.environ.get("CLIPMASTER_COOKIE_BROWSER")
+
+
+def get_cookie_browser() -> str | None:
+    return _cookie_browser
+
+
+def set_cookie_browser(browser: str | None) -> None:
+    global _cookie_browser
+    _cookie_browser = browser.strip().lower() if browser else None
+    logger.info("Cookie browser set to: %s", _cookie_browser)
+
+
+def ytdlp_cookie_args() -> list[str]:
+    """Return yt-dlp args for browser cookie authentication."""
+    if _cookie_browser:
+        return ["--cookies-from-browser", _cookie_browser]
+    return []
+
 
 def _find_binary(name: str) -> str | None:
     """Find a binary on PATH or in bundled_binaries/."""
@@ -63,6 +84,7 @@ async def download_video(
 
     cmd = [
         ytdlp,
+        *ytdlp_cookie_args(),
         "--no-playlist",
         "-N", "16",  # 16-thread parallel fragment download
         "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
@@ -166,7 +188,7 @@ async def download_clip(
 
     # Step 1: Get the direct stream URL from yt-dlp.
     proc = await asyncio.create_subprocess_exec(
-        ytdlp, "-g",
+        ytdlp, *ytdlp_cookie_args(), "-g",
         "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         url,
         stdout=asyncio.subprocess.PIPE,
@@ -175,7 +197,7 @@ async def download_clip(
     stdout, stderr = await proc.communicate()
 
     if proc.returncode != 0:
-        raise RuntimeError(f"yt-dlp -g failed: {stderr.decode(errors="replace")[:300]}")
+        raise RuntimeError(f"yt-dlp -g failed: {stderr.decode(errors='replace')[:300]}")
 
     stream_urls = stdout.decode(errors="replace").strip().split("\n")
 
@@ -216,7 +238,7 @@ async def download_clip(
     _, stderr2 = await proc2.communicate()
 
     if proc2.returncode != 0:
-        raise RuntimeError(f"FFmpeg clip extraction failed: {stderr2.decode(errors="replace")[:300]}")
+        raise RuntimeError(f"FFmpeg clip extraction failed: {stderr2.decode(errors='replace')[:300]}")
 
     if on_progress:
         await on_progress(95, "Clip extracted")

@@ -17,6 +17,8 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from .media_tools import ytdlp_cookie_args
+
 logger = logging.getLogger("clipmaster_sidecar.viral_scout")
 
 
@@ -137,6 +139,7 @@ class ViralScout:
         # Step 1: Get video IDs from the trending page.
         cmd = [
             ytdlp,
+            *ytdlp_cookie_args(),
             "--flat-playlist",
             "-J",
             "--playlist-end", str(limit),
@@ -184,6 +187,7 @@ class ViralScout:
 
         batch_cmd = [
             ytdlp,
+            *ytdlp_cookie_args(),
             "--skip-download",
             "-J",
             "--no-warnings",

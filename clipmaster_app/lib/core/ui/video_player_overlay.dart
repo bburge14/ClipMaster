@@ -80,10 +80,18 @@ class _VideoPlayerOverlayState extends ConsumerState<VideoPlayerOverlay> {
           if (!mounted) return;
 
           if (response.type == MessageType.error) {
+            final msg = response.payload['message'] as String? ??
+                'Failed to resolve video URL';
+            final isAuthError = msg.contains('Sign in') ||
+                msg.contains('cookies') ||
+                msg.contains('not a bot');
             setState(() {
               _isResolving = false;
-              _error = response.payload['message'] as String? ??
-                  'Failed to resolve video URL';
+              _error = isAuthError
+                  ? 'YouTube requires sign-in verification. '
+                    'Go to Settings > Browser Cookies and select the browser '
+                    'where you are logged into YouTube, then retry.'
+                  : msg;
             });
             return;
           }

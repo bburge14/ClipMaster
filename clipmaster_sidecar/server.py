@@ -21,7 +21,10 @@ from .services.media_tools import (
     ffmpeg_render,
     generate_proxy,
     generate_tts,
+    get_cookie_browser,
+    set_cookie_browser,
     transcribe_audio,
+    ytdlp_cookie_args,
 )
 from .services.script_analyzer import ScriptAnalyzer
 from .services.stock_footage import StockFootageService
@@ -146,6 +149,14 @@ async def _dispatch(
 
             case MessageType.download_clip:
                 await _handle_download_clip(ws, msg)
+
+            case MessageType.set_cookie_browser:
+                browser = msg.payload.get("browser")
+                set_cookie_browser(browser)
+                await _send(ws, IpcMessage.result(msg.id, {"browser": get_cookie_browser()}))
+
+            case MessageType.get_cookie_browser:
+                await _send(ws, IpcMessage.result(msg.id, {"browser": get_cookie_browser()}))
 
             case MessageType.preview_snapshot:
                 await _handle_preview_snapshot(ws, msg)
@@ -1986,7 +1997,7 @@ async def _extract_youtube_chapters(video_id: str, limit: int = 20) -> list[dict
         raise ValueError("yt-dlp not found. Cannot extract video chapters.")
 
     url = f"https://www.youtube.com/watch?v={video_id}"
-    cmd = [ytdlp, "--skip-download", "-J", "--no-warnings", url]
+    cmd = [ytdlp, *ytdlp_cookie_args(), "--skip-download", "-J", "--no-warnings", url]
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -2064,6 +2075,7 @@ async def _handle_resolve_stream_url(ws: WebSocket, msg: IpcMessage) -> None:
     try:
         cmd = [
             ytdlp,
+            *ytdlp_cookie_args(),
             "--get-url",
             "--no-warnings",
             "-f", "best[height<=720]/best",

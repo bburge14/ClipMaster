@@ -1433,43 +1433,41 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                   horizontal: 12, vertical: 6),
                             ),
                           ),
+                          const SizedBox(width: 8),
+                          TextButton.icon(
+                            onPressed: () {
+                              if (!_livePreviewMode) {
+                                _requestPreviewClip();
+                              } else if (_bgPlayer != null) {
+                                _syncPlayback(_bgPlayer!);
+                              }
+                              setState(() => _livePreviewMode = !_livePreviewMode);
+                            },
+                            icon: Icon(
+                              _livePreviewMode ? Icons.edit : Icons.play_circle,
+                              size: 14,
+                            ),
+                            label: Text(
+                              _livePreviewMode ? 'Edit Mode' : 'Live Preview',
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                            style: TextButton.styleFrom(
+                              foregroundColor: _livePreviewMode
+                                  ? const Color(0xFF6C5CE7) : Colors.white54,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            ),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 12),
                       Expanded(
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Flexible(child: _buildPhonePreview()),
-                              const SizedBox(height: 6),
-                              TextButton.icon(
-                                onPressed: () {
-                                  if (!_livePreviewMode) {
-                                    _requestPreviewClip();
-                                  } else if (_bgPlayer != null) {
-                                    // Switching back to edit mode — reconnect timeline to _bgPlayer
-                                    _syncPlayback(_bgPlayer!);
-                                  }
-                                  setState(() => _livePreviewMode = !_livePreviewMode);
-                                },
-                                icon: Icon(
-                                  _livePreviewMode ? Icons.edit : Icons.play_circle,
-                                  size: 14,
-                                ),
-                                label: Text(
-                                  _livePreviewMode ? 'Edit Mode' : 'Live Preview',
-                                  style: const TextStyle(fontSize: 11),
-                                ),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: _livePreviewMode
-                                      ? const Color(0xFF6C5CE7)
-                                      : Colors.white54,
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 4),
-                                ),
-                              ),
-                            ],
+                        child: Container(
+                          color: Colors.black,
+                          child: Center(
+                            child: AspectRatio(
+                              aspectRatio: 9 / 16,
+                              child: _buildPhonePreview(),
+                            ),
                           ),
                         ),
                       ),
@@ -1521,17 +1519,16 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // ────────────────────────────────────────────────────────────────
 
   Widget _buildPhonePreview() {
-    return SizedBox(
-      width: 270,
-      height: 480,
-      child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white.withOpacity(0.12), width: 2),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: LayoutBuilder(
+    // No fixed size — the parent AspectRatio(9/16) + Expanded handle sizing.
+    // The preview fills the available space while maintaining 9:16 aspect ratio.
+    return Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withOpacity(0.12), width: 2),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: LayoutBuilder(
               builder: (context, constraints) {
                 final frameW = constraints.maxWidth;
                 final frameH = constraints.maxHeight;
@@ -1541,10 +1538,10 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                 final boxLeft = (_textPosX * frameW) - (boxW / 2);
                 final boxTop = (_textPosY * frameH) - (boxH / 2);
 
-                // Scale factor for edit mode text (270×480 vs 1080×1920)
-                const double scale = 0.25;
-                final previewTitleSize = (_titleFontSize * scale).clamp(8.0, 30.0);
-                final previewBodySize = (_bodyFontSize * scale).clamp(6.0, 20.0);
+                // Scale factor: preview width / 1080 (the render target width)
+                final double scale = frameW / 1080.0;
+                final previewTitleSize = (_titleFontSize * scale).clamp(6.0, 60.0);
+                final previewBodySize = (_bodyFontSize * scale).clamp(5.0, 48.0);
 
                 // Body text (slideshow-aware)
                 String bodyText;
@@ -1654,10 +1651,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                   fontStyle: _titleItalic ? FontStyle.italic : null,
                                   color: Color(_titleColorHex),
                                   shadows: _titleShadow
-                                      ? [
-                                          const Shadow(color: Colors.black, blurRadius: 6),
-                                          const Shadow(color: Colors.black, blurRadius: 12),
-                                        ]
+                                      ? [Shadow(color: Colors.black, blurRadius: 3 * scale, offset: Offset(1 * scale, 1 * scale))]
                                       : null,
                                 ),
                               ),
@@ -1697,7 +1691,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
-                                _wrapText(bodyText, boxW - 12, previewBodySize, bold: _bodyBold),
+                                _wrapText(bodyText, _textBoxW * 1080 - 12, _bodyFontSize, bold: _bodyBold),
                                 textAlign: bodyTextAlign,
                                 overflow: TextOverflow.clip,
                                 style: _googleFont(
@@ -1708,7 +1702,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                   color: Color(_bodyColorHex),
                                   height: 1.4,
                                   shadows: _bodyShadow
-                                      ? [const Shadow(color: Colors.black, blurRadius: 4)]
+                                      ? [Shadow(color: Colors.black, blurRadius: 3 * scale, offset: Offset(1 * scale, 1 * scale))]
                                       : null,
                                 ),
                               ),
@@ -1902,7 +1896,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               },
             ),
           ),
-        ),
     );
   }
 
@@ -3270,6 +3263,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                   label: desc.length > 20 ? desc.substring(0, 20) : desc,
                   startFrac: e.key * frac,
                   endFrac: (e.key + 1) * frac,
+                  deletable: true,
                 );
               }).toList()
             : [_NleClipData(id: 'video_bg', label: 'Gradient background', startFrac: 0.0, endFrac: 1.0)],
@@ -3277,7 +3271,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       _NleTrackData(
         color: const Color(0xFF6C5CE7),
         clips: hasAudio
-            ? [_NleClipData(id: 'audio', label: _bgMusicLabel ?? 'Audio', startFrac: 0.0, endFrac: 1.0)]
+            ? [_NleClipData(id: 'audio', label: _bgMusicLabel ?? 'Audio', startFrac: 0.0, endFrac: 1.0, deletable: true)]
             : [],
       ),
       _NleTrackData(
@@ -3362,6 +3356,25 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                       } else if (id.startsWith('caption')) {
                                         _activePropertiesSection = 'body';
                                       }
+                                    }
+                                  },
+                                  onClipDeleted: (clipId) {
+                                    if (clipId.startsWith('video_')) {
+                                      final idx = int.tryParse(clipId.replaceFirst('video_', ''));
+                                      if (idx != null && idx < _selectedBackgrounds.length) {
+                                        setState(() {
+                                          _selectedBackgrounds.removeAt(idx);
+                                          if (_activeBgIndex >= _selectedBackgrounds.length) {
+                                            _activeBgIndex = _selectedBackgrounds.isEmpty ? 0 : _selectedBackgrounds.length - 1;
+                                          }
+                                        });
+                                        _loadActiveBgPreview();
+                                      }
+                                    } else if (clipId == 'audio') {
+                                      setState(() {
+                                        _bgMusicPath = null;
+                                        _bgMusicLabel = null;
+                                      });
                                     }
                                   },
                                   tracks: tracks,
@@ -3471,12 +3484,14 @@ class _NleClipData {
   final String label;
   final double startFrac; // 0.0–1.0
   final double endFrac;   // 0.0–1.0
+  final bool deletable;   // shows delete option on right-click
 
   _NleClipData({
     required this.id,
     required this.label,
     required this.startFrac,
     required this.endFrac,
+    this.deletable = false,
   });
 }
 
@@ -3495,6 +3510,7 @@ class _TimelineTrackArea extends StatelessWidget {
   final VoidCallback onScrubEnd;
   final String? selectedClipId;
   final ValueChanged<String?> onClipSelected;
+  final ValueChanged<String>? onClipDeleted;
   final List<_NleTrackData> tracks;
 
   const _TimelineTrackArea({
@@ -3505,6 +3521,7 @@ class _TimelineTrackArea extends StatelessWidget {
     required this.onScrubEnd,
     this.selectedClipId,
     required this.onClipSelected,
+    this.onClipDeleted,
     required this.tracks,
   });
 
@@ -3564,6 +3581,25 @@ class _TimelineTrackArea extends StatelessWidget {
                               child: GestureDetector(
                                 behavior: HitTestBehavior.opaque,
                                 onTap: () => onClipSelected(isSelected ? null : clip.id),
+                                onSecondaryTapUp: clip.deletable ? (details) {
+                                  final renderBox = context.findRenderObject() as RenderBox;
+                                  final offset = renderBox.localToGlobal(details.localPosition);
+                                  showMenu<String>(
+                                    context: context,
+                                    position: RelativeRect.fromLTRB(offset.dx, offset.dy, offset.dx + 1, offset.dy + 1),
+                                    items: [
+                                      const PopupMenuItem(value: 'delete', child: Row(
+                                        children: [
+                                          Icon(Icons.delete_outline, size: 16, color: Colors.redAccent),
+                                          SizedBox(width: 8),
+                                          Text('Remove clip', style: TextStyle(fontSize: 12)),
+                                        ],
+                                      )),
+                                    ],
+                                  ).then((value) {
+                                    if (value == 'delete') onClipDeleted?.call(clip.id);
+                                  });
+                                } : null,
                                 child: Container(
                                   width: (clipWidth - 4).clamp(8.0, double.infinity),
                                   decoration: BoxDecoration(

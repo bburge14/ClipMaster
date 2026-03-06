@@ -927,6 +927,15 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _openFactShortsDialog,
+            icon: const Icon(Icons.auto_awesome, size: 18),
+            label: const Text('Fact Shorts'),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF6C5CE7),
+            ),
+          ),
         ],
       ),
     );

@@ -1647,7 +1647,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                 style: _googleFont(
                                   _titleFontFamily,
                                   fontSize: previewTitleSize,
-                                  fontWeight: _titleBold ? FontWeight.w800 : FontWeight.w600,
+                                  fontWeight: _titleBold ? FontWeight.w800 : FontWeight.w400,
                                   fontStyle: _titleItalic ? FontStyle.italic : null,
                                   color: Color(_titleColorHex),
                                   shadows: _titleShadow
@@ -1697,7 +1697,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                 style: _googleFont(
                                   _bodyFontFamily,
                                   fontSize: previewBodySize,
-                                  fontWeight: _bodyBold ? FontWeight.w600 : FontWeight.w400,
+                                  fontWeight: _bodyBold ? FontWeight.w700 : FontWeight.w400,
                                   fontStyle: _bodyItalic ? FontStyle.italic : null,
                                   color: Color(_bodyColorHex),
                                   height: 1.4,

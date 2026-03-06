@@ -221,8 +221,7 @@ class _MainShellState extends ConsumerState<MainShell> {
   }
 
   static const _navItems = [
-    _NavItem(Icons.movie_creation_outlined, Icons.movie_creation, 'Timeline'),
-    _NavItem(Icons.auto_awesome_outlined, Icons.auto_awesome, 'Fact Shorts'),
+    _NavItem(Icons.movie_creation_outlined, Icons.movie_creation, 'Editor'),
     _NavItem(Icons.trending_up_outlined, Icons.trending_up, 'Scout'),
     _NavItem(Icons.downloading_outlined, Icons.downloading, 'Activity'),
     _NavItem(Icons.settings_outlined, Icons.settings, 'Settings'),
@@ -300,7 +299,7 @@ class _MainShellState extends ConsumerState<MainShell> {
                         final selected = selectedIndex == i;
                         // Activity tab badge — count unseen + running tasks
                         int badge = 0;
-                        if (i == 3) {
+                        if (i == 2) {
                           final tasks = ref.watch(activityProvider);
                           badge = tasks
                               .where((t) =>
@@ -339,7 +338,6 @@ class _MainShellState extends ConsumerState<MainShell> {
                     index: selectedIndex,
                     children: const [
                       MagneticTimeline(),
-                      FactShortsPage(),
                       ViralScoutPage(),
                       ActivityPage(),
                       SettingsPage(),

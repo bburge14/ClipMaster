@@ -1611,8 +1611,10 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
         r"C:\Windows\Fonts",
     ]
 
+    want_bold = bold
+    want_italic = italic
+
     # When bold/italic is requested, only search for the user's preferred font
-    # Don't fall back to other font families — that defeats the purpose
     if want_bold or want_italic:
         preferred = []
         if preferred_name:
@@ -1626,10 +1628,6 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
             "LiberationSans", "Liberation Sans", "DejaVuSans", "DejaVu Sans",
             "NotoSans", "Noto Sans", "Arial", "Helvetica", "FreeSans",
         ])
-
-    # Build style keywords to match or exclude
-    want_bold = bold
-    want_italic = italic
 
     for font_dir in font_dirs:
         if not os.path.isdir(font_dir):

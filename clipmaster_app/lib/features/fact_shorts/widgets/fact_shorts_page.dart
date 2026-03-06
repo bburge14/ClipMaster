@@ -104,12 +104,20 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   VideoController? _bgController;
   final _bgSearchController = TextEditingController(); // manual search
 
-  // Timeline scrubber
+  // Timeline state
   double _scrubPosition = 0.0;
   double _estimatedDuration = 30.0;
   bool _userScrubbing = false;
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<Duration>? _durationSub;
+
+  // NLE timeline panel
+  double _timelinePanelHeight = 240.0;
+  static const double _minTimelineHeight = 120.0;
+  static const double _maxTimelineHeight = 500.0;
+  double _timelineZoom = 1.0;
+  final ScrollController _timelineHScroll = ScrollController();
+  String? _selectedTrackClip; // id of selected clip on the timeline
 
   // Rendering
   bool _isRendering = false;
@@ -252,6 +260,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     _bgSearchController.dispose();
     _customPromptController.dispose();
     _propertiesScrollController.dispose();
+    _timelineHScroll.dispose();
     _voicePreviewPlayer?.dispose();
     _previewPlayer?.dispose();
     _bgPlayer?.dispose();
@@ -870,8 +879,40 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             },
           ),
         ),
-        // ── Bottom: timeline scrubber ──
-        _buildTimelineScrubber(),
+        // ── Resizable drag handle for timeline ──
+        GestureDetector(
+          onVerticalDragUpdate: (details) {
+            setState(() {
+              _timelinePanelHeight = (_timelinePanelHeight - details.delta.dy)
+                  .clamp(_minTimelineHeight, _maxTimelineHeight);
+            });
+          },
+          child: MouseRegion(
+            cursor: SystemMouseCursors.resizeRow,
+            child: Container(
+              height: 8,
+              color: const Color(0xFF1A1A2A),
+              child: Center(
+                child: Container(
+                  width: 40,
+                  height: 3,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        // ── Transport bar ──
+        _buildTransportBar(),
+        const Divider(height: 1),
+        // ── Timeline tracks ──
+        SizedBox(
+          height: _timelinePanelHeight,
+          child: _buildTimelineTracks(),
+        ),
       ],
     );
   }
@@ -2054,6 +2095,38 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
 
   final _propertiesScrollController = ScrollController();
 
+  /// Apply a layout preset — auto-configures title, body position, sizing, and style.
+  void _applyPreset(_LayoutPreset preset) {
+    _setStyleAndRefresh(() {
+      _titleFontFamily = preset.titleFont;
+      _titleFontSize = preset.titleSize;
+      _titleBold = preset.titleBold;
+      _titleItalic = false;
+      _titleAlign = preset.titleAlign;
+      _titleColorHex = preset.titleColor;
+      _titleShadow = preset.titleShadow;
+      _titleBgEnabled = preset.titleBgEnabled;
+      _titleBgColorHex = preset.titleBgColor;
+      _titleBgOpacity = preset.titleBgOpacity;
+      _titlePosX = preset.titlePosX;
+      _titlePosY = preset.titlePosY;
+      _bodyFontFamily = preset.bodyFont;
+      _bodyFontSize = preset.bodySize;
+      _bodyBold = preset.bodyBold;
+      _bodyItalic = false;
+      _bodyAlign = preset.bodyAlign;
+      _bodyColorHex = preset.bodyColor;
+      _bodyShadow = preset.bodyShadow;
+      _bodyBgEnabled = preset.bodyBgEnabled;
+      _bodyBgColorHex = preset.bodyBgColor;
+      _bodyBgOpacity = preset.bodyBgOpacity;
+      _textPosX = preset.bodyPosX;
+      _textPosY = preset.bodyPosY;
+      _textBoxW = preset.bodyBoxW;
+      _textBoxH = preset.bodyBoxH;
+    });
+  }
+
   Widget _buildPropertiesPanel() {
     return Container(
       color: const Color(0xFF141420),
@@ -2061,6 +2134,42 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         controller: _propertiesScrollController,
         padding: const EdgeInsets.all(12),
         children: [
+          // ══════════════════════════════════════
+          // ── QUICK SETUP PRESETS ──
+          // ══════════════════════════════════════
+          _sectionHeader('Quick Setup', Icons.auto_fix_high),
+          const SizedBox(height: 6),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: () => _applyPreset(_LayoutPreset.standard),
+              icon: const Icon(Icons.auto_awesome, size: 16),
+              label: const Text('Auto Setup', style: TextStyle(fontSize: 12)),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF6C5CE7),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: _LayoutPreset.all.map((preset) {
+              return ActionChip(
+                avatar: Icon(preset.icon, size: 14, color: preset.accentColor),
+                label: Text(preset.name, style: const TextStyle(fontSize: 10)),
+                onPressed: () => _applyPreset(preset),
+                backgroundColor: preset.accentColor.withOpacity(0.1),
+                side: BorderSide(color: preset.accentColor.withOpacity(0.2)),
+                visualDensity: VisualDensity.compact,
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 12),
+          Divider(color: Colors.white.withOpacity(0.06)),
+          const SizedBox(height: 12),
+
           // ── Voice section ──
           _sectionHeader('Voice', Icons.record_voice_over),
           const SizedBox(height: 8),
@@ -3019,152 +3128,254 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   }
 
   // ────────────────────────────────────────────────────────────────
-  //  BOTTOM: TIMELINE SCRUBBER
+  //  BOTTOM: NLE TIMELINE
   // ────────────────────────────────────────────────────────────────
 
-  Widget _buildTimelineScrubber() {
-    final words = _composerScript.split(' ');
-    final totalWords = words.length;
-    // Create segments: each ~10 words is a "segment" on the timeline
-    final segmentCount = (totalWords / 10).ceil().clamp(1, 20);
+  /// Get the active player for transport controls.
+  Player? get _activePlayer =>
+      _livePreviewMode ? (_previewPlayer ?? _bgPlayer) : _bgPlayer;
+
+  /// Whether playback is currently active.
+  bool get _isPlaying => _activePlayer?.state.playing ?? false;
+
+  Widget _buildTransportBar() {
+    final player = _activePlayer;
+    final dur = player?.state.duration ?? Duration.zero;
+    final pos = player?.state.position ?? Duration.zero;
+    final durMs = dur.inMilliseconds;
 
     return Container(
-      height: 80,
+      height: 44,
+      color: const Color(0xFF141420),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        children: [
+          // Skip to start
+          IconButton(
+            icon: const Icon(Icons.skip_previous, size: 18),
+            onPressed: () {
+              player?.seek(Duration.zero);
+              setState(() => _scrubPosition = 0);
+            },
+            tooltip: 'Go to start',
+            visualDensity: VisualDensity.compact,
+          ),
+          // Rewind 5s
+          IconButton(
+            icon: const Icon(Icons.replay_5, size: 18),
+            onPressed: () {
+              if (player != null) {
+                final newPos = pos - const Duration(seconds: 5);
+                player.seek(newPos < Duration.zero ? Duration.zero : newPos);
+              }
+            },
+            tooltip: 'Back 5s',
+            visualDensity: VisualDensity.compact,
+          ),
+          // Play / Pause
+          IconButton(
+            icon: Icon(
+              _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+              size: 28,
+              color: const Color(0xFF6C5CE7),
+            ),
+            onPressed: () {
+              if (player != null) {
+                player.playOrPause();
+                setState(() {});
+              }
+            },
+            tooltip: _isPlaying ? 'Pause' : 'Play',
+            visualDensity: VisualDensity.compact,
+          ),
+          // Forward 5s
+          IconButton(
+            icon: const Icon(Icons.forward_5, size: 18),
+            onPressed: () {
+              if (player != null) {
+                final newPos = pos + const Duration(seconds: 5);
+                player.seek(newPos > dur ? dur : newPos);
+              }
+            },
+            tooltip: 'Forward 5s',
+            visualDensity: VisualDensity.compact,
+          ),
+          // Skip to end
+          IconButton(
+            icon: const Icon(Icons.skip_next, size: 18),
+            onPressed: () {
+              if (player != null && dur > Duration.zero) {
+                player.seek(dur);
+              }
+            },
+            tooltip: 'Go to end',
+            visualDensity: VisualDensity.compact,
+          ),
+          const SizedBox(width: 6),
+          // Time display
+          Text(
+            '${_formatTime(_scrubPosition * _estimatedDuration)} / ${_formatTime(_estimatedDuration)}',
+            style: TextStyle(
+              fontSize: 11,
+              fontFamily: 'monospace',
+              color: Colors.white.withOpacity(0.6),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Seek slider
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+                activeTrackColor: const Color(0xFF6C5CE7),
+                inactiveTrackColor: Colors.white12,
+                thumbColor: const Color(0xFF6C5CE7),
+              ),
+              child: Slider(
+                value: _scrubPosition.clamp(0.0, 1.0),
+                onChangeStart: (_) => _userScrubbing = true,
+                onChanged: (v) {
+                  setState(() => _scrubPosition = v);
+                  _seekActivePlayer(v);
+                },
+                onChangeEnd: (_) => _userScrubbing = false,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Zoom control
+          const Icon(Icons.zoom_in, size: 14, color: Colors.white38),
+          SizedBox(
+            width: 80,
+            child: Slider(
+              value: _timelineZoom,
+              min: 0.5,
+              max: 4.0,
+              onChanged: (v) => setState(() => _timelineZoom = v),
+            ),
+          ),
+          Text('${_timelineZoom.toStringAsFixed(1)}x',
+              style: const TextStyle(fontSize: 9, color: Colors.white38)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimelineTracks() {
+    // Compute text segments for caption track
+    final words = _composerScript.split(' ').where((w) => w.isNotEmpty).toList();
+    final totalWords = words.length;
+    final segmentCount = (totalWords / 10).ceil().clamp(1, 20);
+
+    // Build clips data for each track
+    final voiceLabel = _previewAudioPath != null
+        ? _selectedVoice.label
+        : 'TTS (${_selectedVoice.label})';
+    final hasVoice = _composerScript.isNotEmpty;
+
+    final videoLabel = _selectedBackgrounds.isNotEmpty
+        ? '${_selectedBackgrounds.length} clip${_selectedBackgrounds.length > 1 ? 's' : ''} cycling'
+        : 'Gradient background';
+    final hasVideo = true;
+
+    final audioLabel = _bgMusicLabel ?? 'No audio clip';
+    final hasAudio = _bgMusicPath != null;
+
+    return Container(
       color: const Color(0xFF141420),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Divider(height: 1, color: Colors.white.withOpacity(0.06)),
-          // Track labels + segments
+          // Time ruler
+          _buildTimeRuler(),
+          const Divider(height: 1, color: Colors.white10),
+          // Track rows
           Expanded(
             child: Row(
               children: [
-                // Track labels
+                // Track labels column
                 SizedBox(
-                  width: 80,
+                  width: 100,
                   child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      _trackLabel('Voice', Icons.record_voice_over,
-                          const Color(0xFF2D824A)),
-                      _trackLabel(
-                          'Video', Icons.videocam, const Color(0xFF2D5AA0)),
-                      _trackLabel(
-                          'Audio', Icons.music_note, const Color(0xFF6C5CE7)),
-                      _trackLabel(
-                          'Text', Icons.text_fields, const Color(0xFF82782D)),
+                      _buildNleTrackLabel('Voice', Icons.record_voice_over, const Color(0xFF2D824A)),
+                      _buildNleTrackLabel('Video', Icons.videocam, const Color(0xFF2D5AA0)),
+                      _buildNleTrackLabel('Audio', Icons.music_note, const Color(0xFF6C5CE7)),
+                      _buildNleTrackLabel('Text', Icons.text_fields, const Color(0xFF82782D)),
                     ],
                   ),
                 ),
-                Container(
-                    width: 1, color: Colors.white.withOpacity(0.06)),
-                // Segment bars + scrubber
+                const VerticalDivider(width: 1),
+                // Scrollable track area
                 Expanded(
-                  child: GestureDetector(
-                    onTapDown: (details) {
-                      final renderBox =
-                          context.findRenderObject() as RenderBox;
-                      final localX =
-                          details.localPosition.dx;
-                      final totalWidth = renderBox.size.width - 80;
-                      _userScrubbing = true;
-                      final pos = (localX / totalWidth).clamp(0.0, 1.0);
-                      setState(() => _scrubPosition = pos);
-                      _seekActivePlayer(pos);
-                    },
-                    onTapUp: (_) => _userScrubbing = false,
-                    onPanStart: (_) => _userScrubbing = true,
-                    onPanUpdate: (details) {
-                      final renderBox =
-                          context.findRenderObject() as RenderBox;
-                      final totalWidth = renderBox.size.width - 80;
-                      final pos =
-                          (_scrubPosition + details.delta.dx / totalWidth)
-                              .clamp(0.0, 1.0);
-                      setState(() => _scrubPosition = pos);
-                      _seekActivePlayer(pos);
-                    },
-                    onPanEnd: (_) => _userScrubbing = false,
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final trackWidth = constraints.maxWidth;
-                        return Stack(
-                          children: [
-                            Column(
-                              children: [
-                                // Voice track
-                                _trackBar(const Color(0xFF2D824A), trackWidth,
-                                    _previewAudioPath != null
-                                        ? _selectedVoice.label
-                                        : 'TTS (${_selectedVoice.label})'),
-                                // Video track
-                                _trackBar(const Color(0xFF2D5AA0), trackWidth,
-                                    _selectedBackgrounds.isNotEmpty
-                                        ? '${_selectedBackgrounds.length} clip${_selectedBackgrounds.length > 1 ? 's' : ''} (cycling)'
-                                        : 'Gradient background'),
-                                // Audio/music track
-                                _trackBar(
-                                    const Color(0xFF6C5CE7),
-                                    trackWidth,
-                                    _bgMusicLabel ?? 'No audio clip'),
-                                // Text track — show segments
-                                _trackBarSegmented(
-                                    const Color(0xFF82782D),
-                                    trackWidth,
-                                    segmentCount),
-                              ],
+                  child: LayoutBuilder(
+                    builder: (context, outerConstraints) {
+                      final parentWidth = outerConstraints.maxWidth > 0 ? outerConstraints.maxWidth : 800.0;
+                      return SingleChildScrollView(
+                        controller: _timelineHScroll,
+                        scrollDirection: Axis.horizontal,
+                        physics: const ClampingScrollPhysics(),
+                        child: _TimelineTrackArea(
+                          parentWidth: parentWidth,
+                          zoom: _timelineZoom,
+                          scrubPosition: _scrubPosition,
+                          estimatedDuration: _estimatedDuration,
+                          onScrub: (pos) {
+                            _userScrubbing = true;
+                            setState(() => _scrubPosition = pos);
+                            _seekActivePlayer(pos);
+                          },
+                          onScrubEnd: () => _userScrubbing = false,
+                          selectedClipId: _selectedTrackClip,
+                          onClipSelected: (id) => setState(() => _selectedTrackClip = id),
+                          tracks: [
+                            _NleTrackData(
+                              color: const Color(0xFF2D824A),
+                              clips: hasVoice
+                                  ? [_NleClipData(id: 'voice', label: voiceLabel, startFrac: 0.0, endFrac: 1.0)]
+                                  : [],
                             ),
-                            // Playhead
-                            Positioned(
-                              left: _scrubPosition * trackWidth,
-                              top: 0,
-                              bottom: 0,
-                              child: Container(
-                                width: 2,
-                                color: Colors.redAccent,
-                              ),
+                            _NleTrackData(
+                              color: const Color(0xFF2D5AA0),
+                              clips: hasVideo
+                                  ? _selectedBackgrounds.isNotEmpty
+                                      ? _selectedBackgrounds.asMap().entries.map((e) {
+                                          final frac = 1.0 / _selectedBackgrounds.length;
+                                          final desc = e.value['description'] as String? ?? 'Clip ${e.key + 1}';
+                                          return _NleClipData(
+                                            id: 'video_${e.key}',
+                                            label: desc.length > 20 ? desc.substring(0, 20) : desc,
+                                            startFrac: e.key * frac,
+                                            endFrac: (e.key + 1) * frac,
+                                          );
+                                        }).toList()
+                                      : [_NleClipData(id: 'video_bg', label: 'Gradient background', startFrac: 0.0, endFrac: 1.0)]
+                                  : [],
                             ),
-                            // Scrub handle
-                            Positioned(
-                              left: _scrubPosition * trackWidth - 6,
-                              top: -2,
-                              child: Container(
-                                width: 12,
-                                height: 12,
-                                decoration: const BoxDecoration(
-                                  color: Colors.redAccent,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
+                            _NleTrackData(
+                              color: const Color(0xFF6C5CE7),
+                              clips: hasAudio
+                                  ? [_NleClipData(id: 'audio', label: audioLabel, startFrac: 0.0, endFrac: 1.0)]
+                                  : [],
+                            ),
+                            _NleTrackData(
+                              color: const Color(0xFF82782D),
+                              clips: List.generate(segmentCount, (i) {
+                                final frac = 1.0 / segmentCount;
+                                return _NleClipData(
+                                  id: 'caption_$i',
+                                  label: 'Caption ${i + 1}',
+                                  startFrac: i * frac,
+                                  endFrac: (i + 1) * frac,
+                                );
+                              }),
                             ),
                           ],
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Time labels
-          Padding(
-            padding: const EdgeInsets.only(left: 80, right: 8, bottom: 4),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  _formatTime(_scrubPosition * _estimatedDuration),
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontFamily: 'monospace',
-                    color: Colors.white.withOpacity(0.3),
-                  ),
-                ),
-                Text(
-                  _formatTime(_estimatedDuration),
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontFamily: 'monospace',
-                    color: Colors.white.withOpacity(0.3),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ],
@@ -3175,81 +3386,95 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     );
   }
 
-  Widget _trackLabel(String name, IconData icon, Color color) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+  Widget _buildTimeRuler() {
+    return SizedBox(
+      height: 24,
       child: Row(
         children: [
-          Icon(icon, size: 10, color: color.withOpacity(0.6)),
-          const SizedBox(width: 4),
-          Text(name,
-              style: TextStyle(
-                  fontSize: 9, color: Colors.white.withOpacity(0.4))),
+          // Spacer for track label column
+          const SizedBox(width: 101),
+          // Ruler
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final totalWidth = constraints.maxWidth;
+                final duration = _estimatedDuration;
+                // Determine tick interval based on zoom/duration
+                double tickInterval = 5.0; // seconds
+                if (duration <= 15) tickInterval = 1.0;
+                else if (duration <= 30) tickInterval = 2.0;
+                else if (duration <= 60) tickInterval = 5.0;
+                else tickInterval = 10.0;
+
+                final ticks = <Widget>[];
+                for (double t = 0; t <= duration; t += tickInterval) {
+                  final x = (t / duration) * totalWidth;
+                  ticks.add(Positioned(
+                    left: x,
+                    top: 0,
+                    bottom: 0,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Container(width: 1, height: 10, color: Colors.white.withOpacity(0.15)),
+                        const SizedBox(width: 2),
+                        Text(
+                          _formatTime(t),
+                          style: TextStyle(
+                            fontSize: 8,
+                            fontFamily: 'monospace',
+                            color: Colors.white.withOpacity(0.3),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ));
+                }
+
+                // Playhead indicator on ruler
+                ticks.add(Positioned(
+                  left: _scrubPosition * totalWidth - 5,
+                  bottom: 0,
+                  child: CustomPaint(
+                    size: const Size(10, 10),
+                    painter: _PlayheadTrianglePainter(),
+                  ),
+                ));
+
+                return Container(
+                  color: const Color(0xFF1A1A28),
+                  child: Stack(children: ticks),
+                );
+              },
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _trackBar(Color color, double width, String label) {
+  Widget _buildNleTrackLabel(String name, IconData icon, Color color) {
     return Expanded(
       child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.15),
-          border: Border(
-              bottom:
-                  BorderSide(color: Colors.white.withOpacity(0.04))),
-        ),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Container(
-            width: width * 0.95,
-            margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.35),
-              borderRadius: BorderRadius.circular(3),
-            ),
-            child: Text(label,
-                style: const TextStyle(fontSize: 8, color: Colors.white60),
-                overflow: TextOverflow.ellipsis),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _trackBarSegmented(Color color, double width, int segments) {
-    return Expanded(
-      child: Container(
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.15),
-          border: Border(
-              bottom:
-                  BorderSide(color: Colors.white.withOpacity(0.04))),
+          border: const Border(bottom: BorderSide(color: Colors.white10)),
+          color: color.withOpacity(0.05),
         ),
         child: Row(
-          children: List.generate(segments, (i) {
-            return Expanded(
-              child: Container(
-                margin: const EdgeInsets.symmetric(
-                    horizontal: 1, vertical: 2),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.35),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-                child: i == 0
-                    ? Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Text('Caption ${i + 1}',
-                            style: const TextStyle(
-                                fontSize: 7, color: Colors.white54),
-                            overflow: TextOverflow.ellipsis),
-                      )
-                    : null,
+          children: [
+            Icon(icon, size: 13, color: color.withOpacity(0.7)),
+            const SizedBox(width: 6),
+            Text(
+              name,
+              style: TextStyle(
+                fontSize: 11,
+                color: color.withOpacity(0.8),
+                fontWeight: FontWeight.w500,
               ),
-            );
-          }),
+            ),
+          ],
         ),
       ),
     );
@@ -3260,4 +3485,365 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     final s = (seconds.toInt() % 60).toString().padLeft(2, '0');
     return '$m:$s';
   }
+}
+
+// ────────────────────────────────────────────────────────────────
+//  NLE Timeline Track Area (handles clip rendering + playhead)
+// ────────────────────────────────────────────────────────────────
+
+class _NleClipData {
+  final String id;
+  final String label;
+  final double startFrac; // 0.0–1.0
+  final double endFrac;   // 0.0–1.0
+
+  _NleClipData({
+    required this.id,
+    required this.label,
+    required this.startFrac,
+    required this.endFrac,
+  });
+}
+
+class _NleTrackData {
+  final Color color;
+  final List<_NleClipData> clips;
+
+  _NleTrackData({required this.color, required this.clips});
+}
+
+class _TimelineTrackArea extends StatelessWidget {
+  final double parentWidth;
+  final double zoom;
+  final double scrubPosition;
+  final double estimatedDuration;
+  final ValueChanged<double> onScrub;
+  final VoidCallback onScrubEnd;
+  final String? selectedClipId;
+  final ValueChanged<String?> onClipSelected;
+  final List<_NleTrackData> tracks;
+
+  const _TimelineTrackArea({
+    required this.parentWidth,
+    required this.zoom,
+    required this.scrubPosition,
+    required this.estimatedDuration,
+    required this.onScrub,
+    required this.onScrubEnd,
+    this.selectedClipId,
+    required this.onClipSelected,
+    required this.tracks,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final totalWidth = (parentWidth * zoom).clamp(parentWidth, parentWidth * 4.0);
+
+    return GestureDetector(
+      onTapDown: (details) {
+        final pos = (details.localPosition.dx / totalWidth).clamp(0.0, 1.0);
+        onScrub(pos);
+      },
+      onTapUp: (_) => onScrubEnd(),
+      onPanStart: (details) {
+        final pos = (details.localPosition.dx / totalWidth).clamp(0.0, 1.0);
+        onScrub(pos);
+      },
+      onPanUpdate: (details) {
+        final pos = (details.localPosition.dx / totalWidth).clamp(0.0, 1.0);
+        onScrub(pos);
+      },
+      onPanEnd: (_) => onScrubEnd(),
+      child: SizedBox(
+        width: totalWidth,
+        child: Stack(
+          children: [
+            // Track rows
+            Column(
+              children: tracks.map((track) {
+                return Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: const Border(bottom: BorderSide(color: Colors.white10)),
+                      color: track.color.withOpacity(0.06),
+                    ),
+                    child: Stack(
+                      children: [
+                        // Grid lines (every 5s or appropriate interval)
+                        ...List.generate(
+                          (estimatedDuration / 5).ceil() + 1,
+                          (i) {
+                            final x = (i * 5 / estimatedDuration) * totalWidth;
+                            return Positioned(
+                              left: x,
+                              top: 0,
+                              bottom: 0,
+                              child: Container(
+                                width: 1,
+                                color: Colors.white.withOpacity(0.03),
+                              ),
+                            );
+                          },
+                        ),
+                        // Clips
+                        ...track.clips.map((clip) {
+                          final isSelected = clip.id == selectedClipId;
+                          final clipLeft = clip.startFrac * totalWidth;
+                          final clipWidth = (clip.endFrac - clip.startFrac) * totalWidth;
+
+                          return Positioned(
+                            left: clipLeft + 2,
+                            top: 3,
+                            bottom: 3,
+                            child: GestureDetector(
+                              onTap: () => onClipSelected(isSelected ? null : clip.id),
+                              child: Container(
+                                width: (clipWidth - 4).clamp(8.0, double.infinity),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? track.color.withOpacity(0.55)
+                                      : track.color.withOpacity(0.35),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                    color: isSelected
+                                        ? Colors.white.withOpacity(0.6)
+                                        : track.color.withOpacity(0.5),
+                                    width: isSelected ? 1.5 : 0.5,
+                                  ),
+                                  boxShadow: isSelected
+                                      ? [BoxShadow(color: track.color.withOpacity(0.3), blurRadius: 6)]
+                                      : null,
+                                ),
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      clip.label,
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.white.withOpacity(isSelected ? 0.95 : 0.7),
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                      maxLines: 1,
+                                    ),
+                                    if (clipWidth > 60)
+                                      Text(
+                                        '${(clip.startFrac * estimatedDuration).toStringAsFixed(1)}s – ${(clip.endFrac * estimatedDuration).toStringAsFixed(1)}s',
+                                        style: TextStyle(
+                                          fontSize: 8,
+                                          color: Colors.white.withOpacity(0.35),
+                                          fontFamily: 'monospace',
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            // Playhead
+            Positioned(
+              left: scrubPosition * totalWidth,
+              top: 0,
+              bottom: 0,
+              child: Container(width: 2, color: Colors.redAccent),
+            ),
+            // Playhead handle
+            Positioned(
+              left: scrubPosition * totalWidth - 6,
+              top: 0,
+              child: Container(
+                width: 12,
+                height: 12,
+                decoration: const BoxDecoration(
+                  color: Colors.redAccent,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Playhead triangle painter for the time ruler
+class _PlayheadTrianglePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = Colors.redAccent;
+    final path = Path()
+      ..moveTo(0, size.height)
+      ..lineTo(size.width / 2, 0)
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ────────────────────────────────────────────────────────────────
+//  LAYOUT PRESETS
+// ────────────────────────────────────────────────────────────────
+
+class _LayoutPreset {
+  final String name;
+  final IconData icon;
+  final Color accentColor;
+  // Title
+  final String titleFont;
+  final double titleSize;
+  final bool titleBold;
+  final String titleAlign;
+  final int titleColor;
+  final bool titleShadow;
+  final bool titleBgEnabled;
+  final int titleBgColor;
+  final double titleBgOpacity;
+  final double titlePosX;
+  final double titlePosY;
+  // Body
+  final String bodyFont;
+  final double bodySize;
+  final bool bodyBold;
+  final String bodyAlign;
+  final int bodyColor;
+  final bool bodyShadow;
+  final bool bodyBgEnabled;
+  final int bodyBgColor;
+  final double bodyBgOpacity;
+  final double bodyPosX;
+  final double bodyPosY;
+  final double bodyBoxW;
+  final double bodyBoxH;
+
+  const _LayoutPreset({
+    required this.name,
+    required this.icon,
+    required this.accentColor,
+    required this.titleFont,
+    required this.titleSize,
+    required this.titleBold,
+    required this.titleAlign,
+    required this.titleColor,
+    required this.titleShadow,
+    required this.titleBgEnabled,
+    required this.titleBgColor,
+    required this.titleBgOpacity,
+    required this.titlePosX,
+    required this.titlePosY,
+    required this.bodyFont,
+    required this.bodySize,
+    required this.bodyBold,
+    required this.bodyAlign,
+    required this.bodyColor,
+    required this.bodyShadow,
+    required this.bodyBgEnabled,
+    required this.bodyBgColor,
+    required this.bodyBgOpacity,
+    required this.bodyPosX,
+    required this.bodyPosY,
+    required this.bodyBoxW,
+    required this.bodyBoxH,
+  });
+
+  /// The default "Auto Setup" — clean, centered, readable.
+  static const standard = _LayoutPreset(
+    name: 'Standard',
+    icon: Icons.auto_awesome,
+    accentColor: Color(0xFF6C5CE7),
+    titleFont: 'Montserrat', titleSize: 52, titleBold: true,
+    titleAlign: 'center', titleColor: 0xFFFFFFFF, titleShadow: true,
+    titleBgEnabled: true, titleBgColor: 0xFF000000, titleBgOpacity: 0.5,
+    titlePosX: 0.5, titlePosY: 0.06,
+    bodyFont: 'Inter', bodySize: 38, bodyBold: false,
+    bodyAlign: 'center', bodyColor: 0xFFFFFFFF, bodyShadow: true,
+    bodyBgEnabled: true, bodyBgColor: 0xFF000000, bodyBgOpacity: 0.4,
+    bodyPosX: 0.5, bodyPosY: 0.75, bodyBoxW: 0.9, bodyBoxH: 0.35,
+  );
+
+  static const all = <_LayoutPreset>[
+    // Bold & Centered — big title top, body center-bottom
+    _LayoutPreset(
+      name: 'Bold Center',
+      icon: Icons.format_bold,
+      accentColor: Color(0xFFFF5252),
+      titleFont: 'Oswald', titleSize: 60, titleBold: true,
+      titleAlign: 'center', titleColor: 0xFFFFFFFF, titleShadow: true,
+      titleBgEnabled: false, titleBgColor: 0xFF000000, titleBgOpacity: 0.5,
+      titlePosX: 0.5, titlePosY: 0.05,
+      bodyFont: 'Inter', bodySize: 36, bodyBold: false,
+      bodyAlign: 'center', bodyColor: 0xFFFFFFFF, bodyShadow: true,
+      bodyBgEnabled: false, bodyBgColor: 0xFF000000, bodyBgOpacity: 0.4,
+      bodyPosX: 0.5, bodyPosY: 0.78, bodyBoxW: 0.85, bodyBoxH: 0.30,
+    ),
+    // News Style — title bar at top, body boxed at bottom
+    _LayoutPreset(
+      name: 'News',
+      icon: Icons.newspaper,
+      accentColor: Color(0xFF40C4FF),
+      titleFont: 'Roboto', titleSize: 44, titleBold: true,
+      titleAlign: 'left', titleColor: 0xFFFFFFFF, titleShadow: false,
+      titleBgEnabled: true, titleBgColor: 0xFF1A1A2E, titleBgOpacity: 0.85,
+      titlePosX: 0.5, titlePosY: 0.04,
+      bodyFont: 'Roboto', bodySize: 34, bodyBold: false,
+      bodyAlign: 'left', bodyColor: 0xFFFFFFFF, bodyShadow: false,
+      bodyBgEnabled: true, bodyBgColor: 0xFF000000, bodyBgOpacity: 0.7,
+      bodyPosX: 0.5, bodyPosY: 0.82, bodyBoxW: 0.95, bodyBoxH: 0.28,
+    ),
+    // Minimal — small text, clean
+    _LayoutPreset(
+      name: 'Minimal',
+      icon: Icons.remove_circle_outline,
+      accentColor: Color(0xFFBDBDBD),
+      titleFont: 'Lato', titleSize: 40, titleBold: false,
+      titleAlign: 'center', titleColor: 0xFFFFFFFF, titleShadow: true,
+      titleBgEnabled: false, titleBgColor: 0xFF000000, titleBgOpacity: 0.5,
+      titlePosX: 0.5, titlePosY: 0.08,
+      bodyFont: 'Lato', bodySize: 32, bodyBold: false,
+      bodyAlign: 'center', bodyColor: 0xFFFFFFFF, bodyShadow: true,
+      bodyBgEnabled: false, bodyBgColor: 0xFF000000, bodyBgOpacity: 0.4,
+      bodyPosX: 0.5, bodyPosY: 0.70, bodyBoxW: 0.80, bodyBoxH: 0.35,
+    ),
+    // Impact — huge title, compact body
+    _LayoutPreset(
+      name: 'Impact',
+      icon: Icons.flash_on,
+      accentColor: Color(0xFFFFD700),
+      titleFont: 'Oswald', titleSize: 72, titleBold: true,
+      titleAlign: 'center', titleColor: 0xFFFFD700, titleShadow: true,
+      titleBgEnabled: false, titleBgColor: 0xFF000000, titleBgOpacity: 0.5,
+      titlePosX: 0.5, titlePosY: 0.08,
+      bodyFont: 'Montserrat', bodySize: 34, bodyBold: false,
+      bodyAlign: 'center', bodyColor: 0xFFFFFFFF, bodyShadow: true,
+      bodyBgEnabled: true, bodyBgColor: 0xFF000000, bodyBgOpacity: 0.5,
+      bodyPosX: 0.5, bodyPosY: 0.80, bodyBoxW: 0.85, bodyBoxH: 0.25,
+    ),
+    // Caption Style — body fills most of the screen
+    _LayoutPreset(
+      name: 'Full Caption',
+      icon: Icons.subtitles,
+      accentColor: Color(0xFF00C853),
+      titleFont: 'Poppins', titleSize: 48, titleBold: true,
+      titleAlign: 'center', titleColor: 0xFFFFFFFF, titleShadow: true,
+      titleBgEnabled: true, titleBgColor: 0xFF6C5CE7, titleBgOpacity: 0.8,
+      titlePosX: 0.5, titlePosY: 0.03,
+      bodyFont: 'Poppins', bodySize: 42, bodyBold: false,
+      bodyAlign: 'center', bodyColor: 0xFFFFFFFF, bodyShadow: true,
+      bodyBgEnabled: true, bodyBgColor: 0xFF000000, bodyBgOpacity: 0.5,
+      bodyPosX: 0.5, bodyPosY: 0.55, bodyBoxW: 0.90, bodyBoxH: 0.50,
+    ),
+  ];
 }

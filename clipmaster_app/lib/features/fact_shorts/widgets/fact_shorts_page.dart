@@ -89,8 +89,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   final _scriptEditController = TextEditingController();
 
   // Voice preview
-  Player? _voicePreviewPlayer;
-  VideoController? _voicePreviewController;
   bool _isPreviewingVoice = false;
   String? _previewAudioPath;
   bool _voicePlaying = false;
@@ -104,12 +102,16 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   VideoController? _bgController;
   final _bgSearchController = TextEditingController(); // manual search
 
-  // Timeline state
-  double _scrubPosition = 0.0;
-  double _estimatedDuration = 30.0;
+  // ── UNIFIED PLAYBACK STATE ──
+  // Single source of truth for timeline position, duration, and playing state.
+  // All players (bg, preview, voice) report through _syncPlayback().
+  double _scrubPosition = 0.0;        // normalized 0.0–1.0
+  double _estimatedDuration = 30.0;   // seconds
+  bool _isPlaying = false;
   bool _userScrubbing = false;
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<Duration>? _durationSub;
+  StreamSubscription<bool>? _playingSub;
 
   // NLE timeline panel
   double _timelinePanelHeight = 240.0;
@@ -208,11 +210,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     return ((opacity * 255).round() << 24) | (colorHex & 0x00FFFFFF);
   }
 
-  /// Seek the active video player to a normalized position (0.0–1.0).
+  /// The ONE active player at any moment.
+  Player? get _activePlayer =>
+      _livePreviewMode ? (_previewPlayer ?? _bgPlayer) : _bgPlayer;
+
+  /// Seek the active player to a normalized position (0.0–1.0).
   void _seekActivePlayer(double pos) {
-    final player = _livePreviewMode
-        ? (_previewPlayer ?? _bgPlayer)
-        : _bgPlayer;
+    final player = _activePlayer;
     if (player == null) return;
     final dur = player.state.duration;
     if (dur.inMilliseconds > 0) {
@@ -222,13 +226,17 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
   }
 
-  /// Reconnect timeline position/duration streams to _bgPlayer (edit mode).
-  void _reconnectTimelineToBgPlayer() {
-    if (_bgPlayer == null) return;
+  /// SINGLE method to wire position/duration/playing streams from any player.
+  /// Call this whenever the active player changes (bg loaded, preview loaded,
+  /// mode toggle). Cancels old subscriptions before attaching new ones.
+  void _syncPlayback(Player player) {
     _positionSub?.cancel();
-    _positionSub = _bgPlayer!.stream.position.listen((pos) {
+    _durationSub?.cancel();
+    _playingSub?.cancel();
+
+    _positionSub = player.stream.position.listen((pos) {
       if (!mounted || _userScrubbing) return;
-      final dur = _bgPlayer?.state.duration ?? Duration.zero;
+      final dur = player.state.duration;
       if (dur.inMilliseconds > 0) {
         setState(() {
           _scrubPosition =
@@ -236,12 +244,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         });
       }
     });
-    _durationSub?.cancel();
-    _durationSub = _bgPlayer!.stream.duration.listen((dur) {
+    _durationSub = player.stream.duration.listen((dur) {
       if (!mounted) return;
       if (dur.inSeconds > 0) {
         setState(() => _estimatedDuration = dur.inSeconds.toDouble());
       }
+    });
+    _playingSub = player.stream.playing.listen((playing) {
+      if (!mounted) return;
+      setState(() => _isPlaying = playing);
     });
   }
 
@@ -255,13 +266,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   void dispose() {
     _positionSub?.cancel();
     _durationSub?.cancel();
+    _playingSub?.cancel();
     _previewClipDebounce?.cancel();
     _scriptEditController.dispose();
     _bgSearchController.dispose();
     _customPromptController.dispose();
     _propertiesScrollController.dispose();
     _timelineHScroll.dispose();
-    _voicePreviewPlayer?.dispose();
     _previewPlayer?.dispose();
     _bgPlayer?.dispose();
     super.dispose();
@@ -463,15 +474,17 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         return;
       }
 
-      // Play the preview audio
-      _voicePreviewPlayer?.dispose();
-      _voicePreviewPlayer = Player();
-      _voicePreviewPlayer!.open(Media(audioPath));
-      _voicePreviewPlayer!.stream.playing.listen((playing) {
-        if (mounted) setState(() => _voicePlaying = playing);
-      });
-      _voicePreviewPlayer!.stream.completed.listen((completed) {
+      // Pause the active video player during voice preview
+      _activePlayer?.pause();
+
+      // Play voice through a temporary player, tracking completion
+      final voicePlayer = Player();
+      voicePlayer.open(Media(audioPath));
+      voicePlayer.stream.completed.listen((completed) {
         if (completed && mounted) {
+          voicePlayer.dispose();
+          // Resume the active video player
+          _activePlayer?.play();
           setState(() {
             _voicePlaying = false;
             _isPreviewingVoice = false;
@@ -586,30 +599,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       _bgPlayer!.open(Media(urlToPlay));
       _bgPlayer!.setPlaylistMode(PlaylistMode.loop);
       _bgPlayer!.setVolume(0);
-      // Listen for play state changes
-      _bgPlayer!.stream.playing.listen((playing) {
-        if (mounted) setState(() => _bgPlaying = playing);
-      });
-      // Sync timeline scrubber with player position
-      _positionSub?.cancel();
-      _positionSub = _bgPlayer!.stream.position.listen((pos) {
-        if (!mounted || _userScrubbing) return;
-        final dur = _bgPlayer?.state.duration ?? Duration.zero;
-        if (dur.inMilliseconds > 0) {
-          setState(() {
-            _scrubPosition =
-                (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
-          });
-        }
-      });
-      _durationSub?.cancel();
-      _durationSub = _bgPlayer!.stream.duration.listen((dur) {
-        if (!mounted) return;
-        if (dur.inSeconds > 0) {
-          setState(() => _estimatedDuration = dur.inSeconds.toDouble());
-        }
-      });
-      setState(() => _bgPlaying = true);
+      // Wire to unified playback state
+      _syncPlayback(_bgPlayer!);
+      setState(() => _isPlaying = true);
     }
 
     // Cache bg video locally for FFmpeg preview clip, then refresh
@@ -1435,9 +1427,9 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                 onPressed: () {
                                   if (!_livePreviewMode) {
                                     _requestPreviewClip();
-                                  } else {
+                                  } else if (_bgPlayer != null) {
                                     // Switching back to edit mode — reconnect timeline to _bgPlayer
-                                    _reconnectTimelineToBgPlayer();
+                                    _syncPlayback(_bgPlayer!);
                                   }
                                   setState(() => _livePreviewMode = !_livePreviewMode);
                                 },
@@ -1766,21 +1758,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       ),
 
                     // ── Play / Pause toggle ──
-                    if (_bgPlayer != null || _previewPlayer != null)
+                    if (_activePlayer != null)
                       Positioned(
                         bottom: 8,
                         left: 8,
                         child: GestureDetector(
                           onTap: () {
-                            final player = _livePreviewMode
-                                ? (_previewPlayer ?? _bgPlayer)
-                                : _bgPlayer;
-                            if (player == null) return;
-                            if (_bgPlaying) {
-                              player.pause();
-                            } else {
-                              player.play();
-                            }
+                            _activePlayer?.playOrPause();
                           },
                           child: Container(
                             width: 32,
@@ -1791,7 +1775,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                               border: Border.all(color: Colors.white24),
                             ),
                             child: Icon(
-                              _bgPlaying ? Icons.pause : Icons.play_arrow,
+                              _isPlaying ? Icons.pause : Icons.play_arrow,
                               size: 18,
                               color: Colors.white,
                             ),
@@ -1902,8 +1886,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     );
   }
 
-  bool _bgPlaying = true;
-
   // ── Live preview clip (FFmpeg-rendered video) ──
   Player? _previewPlayer;
   VideoController? _previewController;
@@ -1982,33 +1964,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     if (_previewPlayer == null) {
       _previewPlayer = Player();
       _previewController = VideoController(_previewPlayer!);
-      _previewPlayer!.stream.playing.listen((playing) {
-        if (mounted) setState(() => _bgPlaying = playing);
-      });
     }
     _previewPlayer!.open(Media(clipPath));
     _previewPlayer!.setPlaylistMode(PlaylistMode.loop);
     _previewPlayer!.setVolume(100);
 
-    // Sync timeline scrubber with preview player position
-    _positionSub?.cancel();
-    _positionSub = _previewPlayer!.stream.position.listen((pos) {
-      if (!mounted || _userScrubbing) return;
-      final dur = _previewPlayer?.state.duration ?? Duration.zero;
-      if (dur.inMilliseconds > 0) {
-        setState(() {
-          _scrubPosition =
-              (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
-        });
-      }
-    });
-    _durationSub?.cancel();
-    _durationSub = _previewPlayer!.stream.duration.listen((dur) {
-      if (!mounted) return;
-      if (dur.inSeconds > 0) {
-        setState(() => _estimatedDuration = dur.inSeconds.toDouble());
-      }
-    });
+    // Wire to unified playback state
+    _syncPlayback(_previewPlayer!);
 
     if (mounted) setState(() => _previewClipLoading = false);
   }
@@ -3131,13 +3093,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   //  BOTTOM: NLE TIMELINE
   // ────────────────────────────────────────────────────────────────
 
-  /// Get the active player for transport controls.
-  Player? get _activePlayer =>
-      _livePreviewMode ? (_previewPlayer ?? _bgPlayer) : _bgPlayer;
-
-  /// Whether playback is currently active.
-  bool get _isPlaying => _activePlayer?.state.playing ?? false;
-
   Widget _buildTransportBar() {
     final player = _activePlayer;
     final dur = player?.state.duration ?? Duration.zero;
@@ -3179,12 +3134,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               size: 28,
               color: const Color(0xFF6C5CE7),
             ),
-            onPressed: () {
-              if (player != null) {
-                player.playOrPause();
-                setState(() {});
-              }
-            },
+            onPressed: () => player?.playOrPause(),
             tooltip: _isPlaying ? 'Pause' : 'Play',
             visualDensity: VisualDensity.compact,
           ),
@@ -3264,10 +3214,11 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   }
 
   Widget _buildTimelineTracks() {
-    // Compute text segments for caption track
-    final words = _composerScript.split(' ').where((w) => w.isNotEmpty).toList();
-    final totalWords = words.length;
-    final segmentCount = (totalWords / 10).ceil().clamp(1, 20);
+    // Compute text segments for caption track — synced with slideshow state
+    final captionSlides = _slideshowEnabled
+        ? _getSlides()
+        : [_composerScript];
+    final segmentCount = captionSlides.length.clamp(1, 20);
 
     // Build clips data for each track
     final voiceLabel = _previewAudioPath != null
@@ -3329,7 +3280,21 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                           },
                           onScrubEnd: () => _userScrubbing = false,
                           selectedClipId: _selectedTrackClip,
-                          onClipSelected: (id) => setState(() => _selectedTrackClip = id),
+                          onClipSelected: (id) {
+                            setState(() => _selectedTrackClip = id);
+                            // Navigate properties panel to the relevant section
+                            if (id != null) {
+                              if (id.startsWith('voice')) {
+                                _activePropertiesSection = 'voice';
+                              } else if (id.startsWith('video')) {
+                                _activePropertiesSection = 'bg';
+                              } else if (id.startsWith('audio')) {
+                                _activePropertiesSection = 'audio';
+                              } else if (id.startsWith('caption')) {
+                                _activePropertiesSection = 'body';
+                              }
+                            }
+                          },
                           tracks: [
                             _NleTrackData(
                               color: const Color(0xFF2D824A),
@@ -3364,9 +3329,14 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                               color: const Color(0xFF82782D),
                               clips: List.generate(segmentCount, (i) {
                                 final frac = 1.0 / segmentCount;
+                                // Show actual slide text as label (truncated)
+                                final slideText = i < captionSlides.length ? captionSlides[i] : '';
+                                final label = slideText.length > 25
+                                    ? '${slideText.substring(0, 25)}...'
+                                    : slideText.isNotEmpty ? slideText : 'Slide ${i + 1}';
                                 return _NleClipData(
                                   id: 'caption_$i',
-                                  label: 'Caption ${i + 1}',
+                                  label: label,
                                   startFrac: i * frac,
                                   endFrac: (i + 1) * frac,
                                 );

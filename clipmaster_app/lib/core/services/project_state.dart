@@ -128,6 +128,7 @@ class ProjectState {
   final List<TimelineAsset> assets;
   final TtsVoice selectedVoice;
   final CaptionStyle captionStyle;
+  final CaptionStyle titleStyle;
   final String? scriptText;
   final String? scriptTitle;
 
@@ -135,6 +136,11 @@ class ProjectState {
     this.assets = const [],
     this.selectedVoice = TtsVoice.onyx,
     this.captionStyle = const CaptionStyle(),
+    this.titleStyle = const CaptionStyle(
+      fontSize: 42,
+      positionX: 0.5,
+      positionY: 0.08,
+    ),
     this.scriptText,
     this.scriptTitle,
   });
@@ -143,6 +149,7 @@ class ProjectState {
     List<TimelineAsset>? assets,
     TtsVoice? selectedVoice,
     CaptionStyle? captionStyle,
+    CaptionStyle? titleStyle,
     String? scriptText,
     String? scriptTitle,
   }) {
@@ -150,6 +157,7 @@ class ProjectState {
       assets: assets ?? this.assets,
       selectedVoice: selectedVoice ?? this.selectedVoice,
       captionStyle: captionStyle ?? this.captionStyle,
+      titleStyle: titleStyle ?? this.titleStyle,
       scriptText: scriptText ?? this.scriptText,
       scriptTitle: scriptTitle ?? this.scriptTitle,
     );
@@ -194,6 +202,10 @@ class ProjectNotifier extends StateNotifier<ProjectState> {
 
   void setCaptionStyle(CaptionStyle style) {
     state = state.copyWith(captionStyle: style);
+  }
+
+  void setTitleStyle(CaptionStyle style) {
+    state = state.copyWith(titleStyle: style);
   }
 
   void setScript({String? text, String? title}) {

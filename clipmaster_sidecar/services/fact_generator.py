@@ -88,6 +88,7 @@ class FactGenerator:
         count: int,
         provider: str,
         api_key: str,
+        custom_prompt: str | None = None,
     ) -> list[dict]:
         """Generate facts for a category using the specified LLM provider.
 
@@ -96,6 +97,7 @@ class FactGenerator:
             count: Number of facts to generate (1-10).
             provider: LLM provider name (openai, claude, gemini).
             api_key: The user's API key for that provider.
+            custom_prompt: Optional custom prompt to override the default.
 
         Returns:
             List of fact dicts with title, fact, and visual_keywords.
@@ -103,11 +105,20 @@ class FactGenerator:
         category = category.lower()
         count = max(1, min(count, 10))
 
-        prompt_template = _CATEGORY_PROMPTS.get(category)
-        if not prompt_template:
-            raise ValueError(f"Unknown category: {category}. Use: {list(_CATEGORY_PROMPTS.keys())}")
-
-        prompt = prompt_template.format(count=count)
+        if custom_prompt:
+            # Use custom prompt but wrap it with our JSON output format instructions
+            prompt = (
+                f"{custom_prompt}\n\n"
+                f"Generate exactly {count} results.\n"
+                f"Return a JSON array of objects with keys: "
+                f'"title" (short catchy title), "fact" (the content/script, 2-4 sentences), '
+                f'"visual_keywords" (list of 3-5 search terms for background video footage).'
+            )
+        else:
+            prompt_template = _CATEGORY_PROMPTS.get(category)
+            if not prompt_template:
+                raise ValueError(f"Unknown category: {category}. Use: {list(_CATEGORY_PROMPTS.keys())}")
+            prompt = prompt_template.format(count=count)
 
         logger.info("Generating %d %s facts via %s", count, category, provider)
 

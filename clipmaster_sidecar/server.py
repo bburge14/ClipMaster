@@ -291,10 +291,13 @@ async def _handle_generate_facts(
         )
         return
 
+    custom_prompt = msg.payload.get("custom_prompt", "")
+
     await _send(ws, IpcMessage.progress(msg.id, "Preparing prompt", 10))
     await _send(ws, IpcMessage.progress(msg.id, "Calling AI provider", 30))
     facts = await generator.generate(
-        category=category, count=count, provider=provider, api_key=api_key
+        category=category, count=count, provider=provider, api_key=api_key,
+        custom_prompt=custom_prompt if custom_prompt else None,
     )
     await _send(ws, IpcMessage.progress(msg.id, "Processing response", 80))
     await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
@@ -1476,7 +1479,7 @@ def _escape_ffmpeg_text(text: str) -> str:
     """Escape a string for use in FFmpeg drawtext text= option."""
     # Must escape in this order: backslash first
     text = text.replace('\\', '\\\\')
-    text = text.replace("'", "\u2019")  # replace with curly quote (will display as quote in most fonts)
+    text = text.replace("'", "'\\''")  # end quote, escaped quote, reopen quote
     text = text.replace(':', '\\:')
     text = text.replace(';', '\\;')
     text = text.replace('%', '%%')

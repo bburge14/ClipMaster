@@ -661,20 +661,19 @@ async def _handle_create_short(
     # Word-wrap title: preview shows left:16, right:16 on 270px → (270-32)/270 ≈ 88%
     # On 1080px canvas that's ~952px usable. Wrap to max 2 lines.
     title_usable_px = int(0.88 * 1080)
-    title_avg_char_w = max(title_font_size * 0.55, 1)
-    title_chars = max(10, int(title_usable_px / title_avg_char_w))
+    # Match Dart _wrapText() factor (0.52); bold text is ~15% wider
+    title_char_w = max(title_font_size * (0.60 if title_bold else 0.52), 1)
+    title_chars = max(10, int(title_usable_px / title_char_w))
     wrapped_title = _wrap_text(title, title_chars)
     # Cap at 2 lines like the preview
     title_lines = wrapped_title.split("\n")[:2]
     wrapped_title = "\n".join(title_lines)
 
     # Word-wrap body text to match the visible text box.
-    # Use same 0.52 factor as Dart _wrapText() for consistency.
     body_box_w_px = int(text_box_w * 1080)
-    # Subtract padding: preview has padding=6 on 270px → ×4 = 24px each side
     body_usable_px = body_box_w_px - 48
-    avg_char_w = max(body_font_size * 0.52, 1)
-    chars_per_line = max(15, int(body_usable_px / avg_char_w))
+    body_char_w = max(body_font_size * (0.60 if body_bold else 0.52), 1)
+    chars_per_line = max(15, int(body_usable_px / body_char_w))
 
     # Prepare title lines (sanitized, inline)
     title_lines_clean = [_sanitize_for_ffmpeg(l) for l in wrapped_title.split("\n") if _sanitize_for_ffmpeg(l)]
@@ -969,18 +968,18 @@ async def _handle_preview_snapshot(
     tmpdir = tempfile.gettempdir()
     snapshot_path = os.path.join(tmpdir, "cm_preview_snapshot.png")
 
-    # ── Write text files (same logic as _handle_create_short) ──
+    # ── Text wrapping (same logic as _handle_create_short) ──
     title_usable_px = int(0.88 * 1080)
-    title_avg_char_w = max(title_font_size * 0.55, 1)
-    title_chars = max(10, int(title_usable_px / title_avg_char_w))
+    title_char_w = max(title_font_size * (0.60 if title_bold else 0.52), 1)
+    title_chars = max(10, int(title_usable_px / title_char_w))
     wrapped_title = _wrap_text(title, title_chars)
     title_lines = wrapped_title.split("\n")[:2]
     wrapped_title = "\n".join(title_lines)
 
     body_box_w_px = int(text_box_w * 1080)
     body_usable_px = body_box_w_px - 48
-    avg_char_w = max(body_font_size * 0.52, 1)
-    chars_per_line = max(15, int(body_usable_px / avg_char_w))
+    body_char_w = max(body_font_size * (0.60 if body_bold else 0.52), 1)
+    chars_per_line = max(15, int(body_usable_px / body_char_w))
 
     # Prepare title and body lines (sanitized)
     title_lines_clean = [_sanitize_for_ffmpeg(l) for l in wrapped_title.split("\n") if _sanitize_for_ffmpeg(l)]
@@ -1181,24 +1180,25 @@ async def _handle_preview_video_clip(
     slideshow_enabled = bool(p.get("slideshow_enabled", False))
     words_per_slide = int(p.get("words_per_slide", 15))
     bg_video_path = p.get("bg_video_local_path", "")
+    tts_audio_path = p.get("tts_audio_path", "")
 
     clip_duration = 5  # seconds
 
     tmpdir = tempfile.gettempdir()
     clip_path = os.path.join(tmpdir, "cm_preview_clip.mp4")
 
-    # ── Write text files (same logic as snapshot/render) ──
+    # ── Text wrapping (same logic as snapshot/render) ──
     title_usable_px = int(0.88 * 1080)
-    title_avg_char_w = max(title_font_size * 0.55, 1)
-    title_chars = max(10, int(title_usable_px / title_avg_char_w))
+    title_char_w = max(title_font_size * (0.60 if title_bold else 0.52), 1)
+    title_chars = max(10, int(title_usable_px / title_char_w))
     wrapped_title = _wrap_text(title, title_chars)
     title_lines = wrapped_title.split("\n")[:2]
     wrapped_title = "\n".join(title_lines)
 
     body_box_w_px = int(text_box_w * 1080)
     body_usable_px = body_box_w_px - 48
-    avg_char_w = max(body_font_size * 0.52, 1)
-    chars_per_line = max(15, int(body_usable_px / avg_char_w))
+    body_char_w = max(body_font_size * (0.60 if body_bold else 0.52), 1)
+    chars_per_line = max(15, int(body_usable_px / body_char_w))
 
     # Prepare title and body lines (sanitized, no files)
     title_lines_clean = [_sanitize_for_ffmpeg(l) for l in wrapped_title.split("\n") if _sanitize_for_ffmpeg(l)]
@@ -1309,18 +1309,26 @@ async def _handle_preview_video_clip(
     vf_str = ",".join(vf_parts)
 
     # Build FFmpeg command: 5-second video clip (ultrafast for speed)
+    has_audio = tts_audio_path and os.path.isfile(tts_audio_path)
+    audio_args = []
+    if has_audio:
+        audio_args = ["-i", os.path.abspath(tts_audio_path), "-c:a", "aac", "-shortest"]
+    else:
+        audio_args = ["-an"]
+
     if bg_video_path and os.path.isfile(bg_video_path):
         bg_abs = os.path.abspath(bg_video_path)
         cmd = [
             ffmpeg, "-y",
             "-stream_loop", "-1",
             "-i", bg_abs,
+        ] + (["-i", os.path.abspath(tts_audio_path)] if has_audio else []) + [
             "-t", str(clip_duration),
             "-vf", vf_str,
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-crf", "28",
-            "-an",
+        ] + (["-c:a", "aac", "-shortest"] if has_audio else ["-an"]) + [
             "-pix_fmt", "yuv420p",
             os.path.abspath(clip_path),
         ]
@@ -1329,12 +1337,13 @@ async def _handle_preview_video_clip(
             ffmpeg, "-y",
             "-f", "lavfi",
             "-i", f"color=c=0x1A1A2E:s=1080x1920:d={clip_duration},format=yuv420p",
+        ] + (["-i", os.path.abspath(tts_audio_path)] if has_audio else []) + [
             "-t", str(clip_duration),
             "-vf", vf_str,
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-crf", "28",
-            "-an",
+        ] + (["-c:a", "aac", "-shortest"] if has_audio else ["-an"]) + [
             "-pix_fmt", "yuv420p",
             os.path.abspath(clip_path),
         ]
@@ -1498,7 +1507,8 @@ def _build_drawtext_lines(
         if not clean:
             continue
         escaped = _escape_ffmpeg_text(clean)
-        y = base_y + i * (font_size + line_spacing)
+        # Match Flutter's line height: 1.4 for body, ~1.3 for title
+        y = base_y + i * int(font_size * 1.4)
         f = (
             f"drawtext=text='{escaped}'"
             f":fontsize={font_size}:fontcolor={font_color}"

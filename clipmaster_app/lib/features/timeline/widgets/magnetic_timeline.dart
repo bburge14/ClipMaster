@@ -965,14 +965,152 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Left: 9:16 Phone Frame Preview with draggable text
-          _buildPhonePreview(project),
-          const SizedBox(width: 20),
-          // Right: controls + script — wrapped in a non-auto-scrolling column
+          // CENTER: 9:16 Phone Frame Preview — main focus
           Expanded(
             flex: 3,
+            child: Column(
+              children: [
+                // Action chips bar at top
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      if (_importedVideoPath != null) ...[
+                        _buildActionChip(
+                          icon: Icons.high_quality,
+                          label: _proxyPath != null
+                              ? 'Proxy Ready'
+                              : 'Generate Proxy',
+                          color: _proxyPath != null
+                              ? const Color(0xFF00C853)
+                              : const Color(0xFF6C5CE7),
+                          busy: _isGeneratingProxy,
+                          onTap: _isBusy || _proxyPath != null
+                              ? null
+                              : _generateProxy,
+                        ),
+                        _buildActionChip(
+                          icon: Icons.subtitles,
+                          label: _transcriptSegments.isNotEmpty
+                              ? '${_transcriptSegments.length} Captions'
+                              : 'Transcribe',
+                          color: _transcriptSegments.isNotEmpty
+                              ? const Color(0xFF00C853)
+                              : const Color(0xFF6C5CE7),
+                          busy: _isTranscribing,
+                          onTap: _isBusy || _transcriptSegments.isNotEmpty
+                              ? null
+                              : _transcribeVideo,
+                        ),
+                      ],
+                      _buildActionChip(
+                        icon: Icons.movie_filter,
+                        label: 'Stock Footage',
+                        color: _rightPanel == _RightPanel.stockFootage
+                            ? const Color(0xFF00C853)
+                            : const Color(0xFF5A2D82),
+                        busy: false,
+                        onTap: () => setState(() {
+                          _rightPanel = _rightPanel == _RightPanel.stockFootage
+                              ? _RightPanel.none
+                              : _RightPanel.stockFootage;
+                        }),
+                      ),
+                      _buildActionChip(
+                        icon: Icons.layers,
+                        label: 'Layers',
+                        color: _rightPanel == _RightPanel.layers
+                            ? const Color(0xFF00C853)
+                            : const Color(0xFF2D6482),
+                        busy: false,
+                        onTap: () => setState(() {
+                          _rightPanel = _rightPanel == _RightPanel.layers
+                              ? _RightPanel.none
+                              : _RightPanel.layers;
+                        }),
+                      ),
+                      if (project.scriptText != null) ...[
+                        _buildActionChip(
+                          icon: Icons.text_fields,
+                          label: 'Text / Font',
+                          color: _rightPanel == _RightPanel.textEditor
+                              ? const Color(0xFF00C853)
+                              : const Color(0xFF82782D),
+                          busy: false,
+                          onTap: () => setState(() {
+                            _rightPanel = _rightPanel == _RightPanel.textEditor
+                                ? _RightPanel.none
+                                : _RightPanel.textEditor;
+                          }),
+                        ),
+                        _buildActionChip(
+                          icon: Icons.record_voice_over,
+                          label: project.selectedVoice.label,
+                          color: _rightPanel == _RightPanel.voicePicker
+                              ? const Color(0xFF00C853)
+                              : const Color(0xFF2D824A),
+                          busy: false,
+                          onTap: () => setState(() {
+                            _rightPanel = _rightPanel == _RightPanel.voicePicker
+                                ? _RightPanel.none
+                                : _RightPanel.voicePicker;
+                          }),
+                        ),
+                      ],
+                      _buildActionChip(
+                        icon: Icons.auto_awesome,
+                        label: 'AI Create',
+                        color: _rightPanel == _RightPanel.aiCreate
+                            ? const Color(0xFF00C853)
+                            : const Color(0xFF6C5CE7),
+                        busy: false,
+                        onTap: () => setState(() {
+                          _rightPanel = _rightPanel == _RightPanel.aiCreate
+                              ? _RightPanel.none
+                              : _RightPanel.aiCreate;
+                        }),
+                      ),
+                    ],
+                  ),
+                ),
+                // Render button
+                if (project.scriptText != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: FilledButton.icon(
+                      onPressed: _isBusy ? null : _renderVideo,
+                      icon: _isRendering
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.movie_creation, size: 18),
+                      label: Text(_isRendering ? 'Rendering...' : 'Render Short'),
+                    ),
+                  ),
+                // Phone preview — expanded to fill remaining space
+                Expanded(
+                  child: Center(
+                    child: AspectRatio(
+                      aspectRatio: 9 / 16,
+                      child: _buildPhonePreview(project),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          // RIGHT: Script / transcript sidebar
+          SizedBox(
+            width: 300,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -999,128 +1137,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   ),
                   const SizedBox(height: 8),
                 ],
-                // Quick-action chips — use a non-scrolling Wrap
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    if (_importedVideoPath != null) ...[
-                      _buildActionChip(
-                        icon: Icons.high_quality,
-                        label: _proxyPath != null
-                            ? 'Proxy Ready'
-                            : 'Generate Proxy',
-                        color: _proxyPath != null
-                            ? const Color(0xFF00C853)
-                            : const Color(0xFF6C5CE7),
-                        busy: _isGeneratingProxy,
-                        onTap: _isBusy || _proxyPath != null
-                            ? null
-                            : _generateProxy,
-                      ),
-                      _buildActionChip(
-                        icon: Icons.subtitles,
-                        label: _transcriptSegments.isNotEmpty
-                            ? '${_transcriptSegments.length} Captions'
-                            : 'Transcribe',
-                        color: _transcriptSegments.isNotEmpty
-                            ? const Color(0xFF00C853)
-                            : const Color(0xFF6C5CE7),
-                        busy: _isTranscribing,
-                        onTap: _isBusy || _transcriptSegments.isNotEmpty
-                            ? null
-                            : _transcribeVideo,
-                      ),
-                    ],
-                    _buildActionChip(
-                      icon: Icons.movie_filter,
-                      label: 'Stock Footage',
-                      color: _rightPanel == _RightPanel.stockFootage
-                          ? const Color(0xFF00C853)
-                          : const Color(0xFF5A2D82),
-                      busy: false,
-                      onTap: () => setState(() {
-                        _rightPanel = _rightPanel == _RightPanel.stockFootage
-                            ? _RightPanel.none
-                            : _RightPanel.stockFootage;
-                      }),
-                    ),
-                    // Layers panel button
-                    _buildActionChip(
-                      icon: Icons.layers,
-                      label: 'Layers',
-                      color: _rightPanel == _RightPanel.layers
-                          ? const Color(0xFF00C853)
-                          : const Color(0xFF2D6482),
-                      busy: false,
-                      onTap: () => setState(() {
-                        _rightPanel = _rightPanel == _RightPanel.layers
-                            ? _RightPanel.none
-                            : _RightPanel.layers;
-                      }),
-                    ),
-                    if (project.scriptText != null) ...[
-                      _buildActionChip(
-                        icon: Icons.text_fields,
-                        label: 'Text / Font',
-                        color: _rightPanel == _RightPanel.textEditor
-                            ? const Color(0xFF00C853)
-                            : const Color(0xFF82782D),
-                        busy: false,
-                        onTap: () => setState(() {
-                          _rightPanel = _rightPanel == _RightPanel.textEditor
-                              ? _RightPanel.none
-                              : _RightPanel.textEditor;
-                        }),
-                      ),
-                      _buildActionChip(
-                        icon: Icons.record_voice_over,
-                        label: project.selectedVoice.label,
-                        color: _rightPanel == _RightPanel.voicePicker
-                            ? const Color(0xFF00C853)
-                            : const Color(0xFF2D824A),
-                        busy: false,
-                        onTap: () => setState(() {
-                          _rightPanel = _rightPanel == _RightPanel.voicePicker
-                              ? _RightPanel.none
-                              : _RightPanel.voicePicker;
-                        }),
-                      ),
-                    ],
-                    // AI Create button — opens Fact Shorts as an add-in
-                    _buildActionChip(
-                      icon: Icons.auto_awesome,
-                      label: 'AI Create',
-                      color: _rightPanel == _RightPanel.aiCreate
-                          ? const Color(0xFF00C853)
-                          : const Color(0xFF6C5CE7),
-                      busy: false,
-                      onTap: () => setState(() {
-                        _rightPanel = _rightPanel == _RightPanel.aiCreate
-                            ? _RightPanel.none
-                            : _RightPanel.aiCreate;
-                      }),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                // Render button
-                if (project.scriptText != null) ...[
-                  FilledButton.icon(
-                    onPressed: _isBusy ? null : _renderVideo,
-                    icon: _isRendering
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white),
-                          )
-                        : const Icon(Icons.movie_creation, size: 18),
-                    label: Text(_isRendering ? 'Rendering...' : 'Render Short'),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                // Script preview — fixed in place, no auto-scroll
+                // Script preview
                 if (project.scriptText != null) ...[
                   Row(
                     children: [
@@ -1160,7 +1177,6 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                             color: Colors.white.withOpacity(0.06)),
                       ),
                       child: SingleChildScrollView(
-                        // NeverScrollable by default — only scrolls on user gesture
                         physics: const ClampingScrollPhysics(),
                         child: Text(
                           project.scriptText!,
@@ -1246,19 +1262,11 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     ),
                   ),
                 ],
-              ],
-            ),
-          ),
-          // Right: B-roll thumbnails from project
-          if (project.assets
-              .where((a) => a.track == TimelineTrack.broll)
-              .isNotEmpty) ...[
-            const SizedBox(width: 16),
-            SizedBox(
-              width: 140,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+                // B-roll thumbnails
+                if (project.assets
+                    .where((a) => a.track == TimelineTrack.broll)
+                    .isNotEmpty) ...[
+                  const SizedBox(height: 12),
                   Text(
                     'B-Roll (${project.assets.where((a) => a.track == TimelineTrack.broll).length})',
                     style: TextStyle(
@@ -1268,8 +1276,10 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Expanded(
+                  SizedBox(
+                    height: 120,
                     child: ListView(
+                      scrollDirection: Axis.horizontal,
                       physics: const ClampingScrollPhysics(),
                       children: project.assets
                           .where((a) => a.track == TimelineTrack.broll)
@@ -1278,9 +1288,9 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     ),
                   ),
                 ],
-              ),
+              ],
             ),
-          ],
+          ),
         ],
       ),
     );
@@ -1311,10 +1321,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       });
     }
 
-    return SizedBox(
-      width: 200,
-      height: 380, // Fixed 9:16 phone frame (static, non-resizable)
-      child: Column(
+    return Column(
         children: [
           // Phone frame header
           Container(
@@ -1352,6 +1359,8 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   builder: (context, constraints) {
                     final frameW = constraints.maxWidth;
                     final frameH = constraints.maxHeight;
+                    // Scale text relative to frame width (base ref: 360px phone width)
+                    final textScale = (frameW / 360).clamp(0.5, 1.5);
 
                     return Stack(
                       fit: StackFit.expand,
@@ -1383,8 +1392,8 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         if (hasTitle)
                           Positioned(
                             top: project.titleStyle.positionY * frameH,
-                            left: 8,
-                            right: 8,
+                            left: 12 * textScale,
+                            right: 12 * textScale,
                             child: GestureDetector(
                               onTap: () {
                                 setState(() {
@@ -1407,7 +1416,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
                                     fontFamily: project.titleStyle.fontFamily,
-                                    fontSize: (project.titleStyle.fontSize * 0.45).clamp(10, 20),
+                                    fontSize: (project.titleStyle.fontSize * 0.45 * textScale).clamp(10.0, 36.0),
                                     fontWeight: FontWeight.w800,
                                     color: Color(project.titleStyle.colorHex),
                                     shadows: project.titleStyle.hasBorder
@@ -1424,9 +1433,9 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         // Script body text (draggable position)
                         if (hasScript)
                           Positioned(
-                            top: style.positionY * frameH - 30,
-                            left: 8,
-                            right: 8,
+                            top: style.positionY * frameH - (30 * textScale),
+                            left: 12 * textScale,
+                            right: 12 * textScale,
                             child: GestureDetector(
                               onTap: () {
                                 setState(() {
@@ -1464,7 +1473,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                                   style: TextStyle(
                                     fontFamily: style.fontFamily,
                                     fontSize:
-                                        (style.fontSize * 0.3).clamp(7, 14),
+                                        (style.fontSize * 0.3 * textScale).clamp(7.0, 28.0),
                                     fontWeight: FontWeight.w600,
                                     color: Color(style.colorHex),
                                     height: 1.4,
@@ -1552,7 +1561,6 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
             ),
           ),
         ],
-      ),
     );
   }
 

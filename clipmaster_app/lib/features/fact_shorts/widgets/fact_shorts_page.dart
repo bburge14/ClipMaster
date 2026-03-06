@@ -141,6 +141,13 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // Preview mode toggle
   bool _livePreviewMode = false;
 
+  // Active properties section (for click-to-edit on preview)
+  String _activePropertiesSection = 'title'; // 'title', 'body', 'voice', 'bg', 'audio'
+
+  // Custom prompt
+  String _customPrompt = '';
+  final _customPromptController = TextEditingController();
+
   // Title position (draggable independently)
   double _titlePosX = 0.5;
   double _titlePosY = 0.08;
@@ -207,6 +214,29 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     }
   }
 
+  /// Reconnect timeline position/duration streams to _bgPlayer (edit mode).
+  void _reconnectTimelineToBgPlayer() {
+    if (_bgPlayer == null) return;
+    _positionSub?.cancel();
+    _positionSub = _bgPlayer!.stream.position.listen((pos) {
+      if (!mounted || _userScrubbing) return;
+      final dur = _bgPlayer?.state.duration ?? Duration.zero;
+      if (dur.inMilliseconds > 0) {
+        setState(() {
+          _scrubPosition =
+              (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
+        });
+      }
+    });
+    _durationSub?.cancel();
+    _durationSub = _bgPlayer!.stream.duration.listen((dur) {
+      if (!mounted) return;
+      if (dur.inSeconds > 0) {
+        setState(() => _estimatedDuration = dur.inSeconds.toDouble());
+      }
+    });
+  }
+
   /// setState + refresh. Only triggers FFmpeg clip if in live preview mode.
   void _setStyleAndRefresh(VoidCallback fn) {
     setState(fn);
@@ -220,6 +250,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     _previewClipDebounce?.cancel();
     _scriptEditController.dispose();
     _bgSearchController.dispose();
+    _customPromptController.dispose();
+    _propertiesScrollController.dispose();
     _voicePreviewPlayer?.dispose();
     _previewPlayer?.dispose();
     _bgPlayer?.dispose();
@@ -268,7 +300,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
     // Fire requests in parallel
     final futures = <Future<void>>[];
     for (final entry in toGenerate.entries) {
-      futures.add(_generateForProvider(ipc, entry.key, entry.value));
+      futures.add(_generateForProvider(ipc, entry.key, entry.value, customPrompt: _customPrompt));
     }
     await Future.wait(futures);
 
@@ -278,7 +310,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   }
 
   Future<void> _generateForProvider(
-      IpcClient ipc, LlmProvider provider, String apiKey) async {
+      IpcClient ipc, LlmProvider provider, String apiKey,
+      {String customPrompt = ''}) async {
     try {
       final response = await ipc.send(
         IpcMessage(
@@ -288,6 +321,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             'count': _factCount,
             'provider': provider.name,
             'api_key': apiKey,
+            if (customPrompt.isNotEmpty) 'custom_prompt': customPrompt,
           },
         ),
         timeout: const Duration(seconds: 90),
@@ -781,10 +815,11 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // Resizable left panel width
   double _leftPanelWidth = 300;
 
+  // Whether left AI panel is visible
+  bool _showAiPanel = true;
+
   @override
   Widget build(BuildContext context) {
-    final hasComposer = _selectedFactIndex != null;
-
     return Column(
       children: [
         Expanded(
@@ -794,16 +829,14 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               final leftW = _leftPanelWidth.clamp(220.0, maxLeftW);
               return Row(
                 children: [
-                  // ── Left panel: fact list ──
-                  if (hasComposer)
+                  // ── Left panel: AI search (collapsible) ──
+                  if (_showAiPanel)
                     SizedBox(
                       width: leftW,
                       child: _buildFactListPanel(),
-                    )
-                  else
-                    Expanded(child: _buildFactListPanel()),
+                    ),
                   // ── Drag handle for left panel ──
-                  if (hasComposer)
+                  if (_showAiPanel)
                     GestureDetector(
                       onHorizontalDragUpdate: (details) {
                         setState(() {
@@ -830,16 +863,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ),
                       ),
                     ),
-                  // ── Composer (when fact selected) ──
-                  if (hasComposer)
-                    Expanded(child: _buildComposer()),
+                  // ── Always show composer ──
+                  Expanded(child: _buildComposer()),
                 ],
               );
             },
           ),
         ),
-        // ── Bottom: timeline scrubber (only in composer mode) ──
-        if (hasComposer) _buildTimelineScrubber(),
+        // ── Bottom: timeline scrubber ──
+        _buildTimelineScrubber(),
       ],
     );
   }
@@ -849,7 +881,6 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // ────────────────────────────────────────────────────────────────
 
   Widget _buildFactListPanel() {
-    final isCompact = _selectedFactIndex != null;
     final apiKeyService = ref.read(apiKeyServiceProvider);
 
     return Container(
@@ -863,29 +894,26 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
             child: Row(
               children: [
                 const Icon(Icons.auto_awesome,
-                    size: 22, color: Color(0xFF6C5CE7)),
+                    size: 18, color: Color(0xFF6C5CE7)),
                 const SizedBox(width: 8),
-                Text(
-                  isCompact ? 'Facts' : 'Fact Shorts',
-                  style: TextStyle(
-                    fontSize: isCompact ? 16 : 22,
-                    fontWeight: FontWeight.w700,
+                const Expanded(
+                  child: Text('AI Facts',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                   ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 16),
+                  onPressed: () => setState(() => _showAiPanel = false),
+                  style: IconButton.styleFrom(
+                    foregroundColor: Colors.white38,
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(28, 28),
+                  ),
+                  tooltip: 'Hide AI Panel',
                 ),
               ],
             ),
           ),
-          if (!isCompact) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                'Generate AI facts and compose them into short-form videos.',
-                style: TextStyle(
-                    fontSize: 13, color: Colors.white.withOpacity(0.35)),
-              ),
-            ),
-            const SizedBox(height: 12),
-          ],
           // Category chips
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -894,96 +922,116 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               runSpacing: 4,
               children: _categories.map((cat) {
                 return ChoiceChip(
-                  label:
-                      Text(cat, style: TextStyle(fontSize: isCompact ? 11 : 13)),
+                  label: Text(cat, style: const TextStyle(fontSize: 11)),
                   selected: _selectedCategory == cat,
                   onSelected: (_) => _setStyleAndRefresh(() => _selectedCategory = cat),
-                  visualDensity: isCompact
-                      ? VisualDensity.compact
-                      : VisualDensity.standard,
+                  visualDensity: VisualDensity.compact,
                 );
               }).toList(),
             ),
           ),
           const SizedBox(height: 8),
 
-          // ── AI Model toggles ──
-          if (!isCompact) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text('AI Models',
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white.withOpacity(0.4))),
-            ),
-            const SizedBox(height: 4),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                children: [LlmProvider.openai, LlmProvider.claude, LlmProvider.gemini]
-                    .map((p) {
-                  final hasKey = apiKeyService.getNextKey(p) != null;
-                  final enabled = _enabledProviders.contains(p);
-                  final label = p == LlmProvider.openai
-                      ? 'GPT-4o'
-                      : p == LlmProvider.claude
-                          ? 'Claude'
-                          : 'Gemini';
-                  return FilterChip(
-                    label: Text(label, style: const TextStyle(fontSize: 10)),
-                    selected: enabled,
-                    onSelected: hasKey
-                        ? (v) {
-                            setState(() {
-                              if (v) {
-                                _enabledProviders.add(p);
-                              } else if (_enabledProviders.length > 1) {
-                                _enabledProviders.remove(p);
-                              }
-                            });
-                          }
-                        : null,
-                    avatar: hasKey
-                        ? null
-                        : Icon(Icons.key_off, size: 12,
-                            color: Colors.white.withOpacity(0.2)),
-                    tooltip: hasKey ? null : 'No API key configured',
-                    visualDensity: VisualDensity.compact,
-                  );
-                }).toList(),
+          // ── Custom Prompt ──
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              controller: _customPromptController,
+              maxLines: 2,
+              style: const TextStyle(fontSize: 11),
+              decoration: InputDecoration(
+                hintText: 'Custom prompt (leave empty for default)...',
+                hintStyle: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.2)),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                  borderSide: BorderSide(color: Colors.white.withOpacity(0.08)),
+                ),
+                suffixIcon: _customPrompt.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 14),
+                        onPressed: () => setState(() {
+                          _customPrompt = '';
+                          _customPromptController.clear();
+                        }),
+                        tooltip: 'Use default prompt',
+                      )
+                    : null,
               ),
+              onChanged: (v) => setState(() => _customPrompt = v.trim()),
             ),
-            const SizedBox(height: 8),
-          ],
+          ),
+          const SizedBox(height: 8),
+
+          // ── AI Model toggles ──
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [LlmProvider.openai, LlmProvider.claude, LlmProvider.gemini]
+                  .map((p) {
+                final hasKey = apiKeyService.getNextKey(p) != null;
+                final enabled = _enabledProviders.contains(p);
+                final label = p == LlmProvider.openai
+                    ? 'GPT-4o'
+                    : p == LlmProvider.claude
+                        ? 'Claude'
+                        : 'Gemini';
+                return FilterChip(
+                  label: Text(label, style: const TextStyle(fontSize: 10)),
+                  selected: enabled,
+                  onSelected: hasKey
+                      ? (v) {
+                          setState(() {
+                            if (v) {
+                              _enabledProviders.add(p);
+                            } else if (_enabledProviders.length > 1) {
+                              _enabledProviders.remove(p);
+                            }
+                          });
+                        }
+                      : null,
+                  avatar: hasKey
+                      ? null
+                      : Icon(Icons.key_off, size: 12,
+                          color: Colors.white.withOpacity(0.2)),
+                  tooltip: hasKey ? null : 'No API key configured',
+                  visualDensity: VisualDensity.compact,
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 8),
 
           // Controls
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: [
-                if (!isCompact) ...[
-                  const Text('Facts:', style: TextStyle(fontSize: 12)),
-                  const SizedBox(width: 4),
-                  DropdownButton<int>(
-                    value: _factCount,
-                    isDense: true,
-                    items: [1, 3, 5, 8, 10]
-                        .map((n) =>
-                            DropdownMenuItem(value: n, child: Text('$n')))
-                        .toList(),
-                    onChanged: (v) => setState(() => _factCount = v!),
-                  ),
-                  const SizedBox(width: 8),
-                ],
+                const Text('Facts:', style: TextStyle(fontSize: 11)),
+                const SizedBox(width: 4),
+                DropdownButton<int>(
+                  value: _factCount,
+                  isDense: true,
+                  items: [1, 3, 5, 8, 10]
+                      .map((n) =>
+                          DropdownMenuItem(value: n, child: Text('$n')))
+                      .toList(),
+                  onChanged: (v) => setState(() => _factCount = v!),
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: FilledButton.icon(
                     onPressed: _isGenerating || _isRendering ? null : _generate,
-                    icon: const Icon(Icons.auto_awesome, size: 16),
-                    label: Text(isCompact ? 'Generate' : 'Generate Facts',
-                        style: const TextStyle(fontSize: 12)),
+                    icon: const Icon(Icons.auto_awesome, size: 14),
+                    label: const Text('Generate',
+                        style: TextStyle(fontSize: 11)),
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 8),
@@ -993,10 +1041,16 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
               ],
             ),
           ),
+          if (_customPrompt.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(left: 16, top: 2),
+              child: Text('Using custom prompt',
+                  style: TextStyle(fontSize: 9, color: const Color(0xFF6C5CE7).withOpacity(0.6))),
+            ),
           const SizedBox(height: 8),
           Divider(height: 1, color: Colors.white.withOpacity(0.06)),
           // Fact list / loading / error / empty
-          Expanded(child: _buildFactListContent(isCompact)),
+          Expanded(child: _buildFactListContent(true)),
         ],
       ),
     );
@@ -1251,15 +1305,55 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       // Title bar
                       Row(
                         children: [
-                          const Icon(Icons.smart_display,
-                              size: 18, color: Color(0xFF6C5CE7)),
-                          const SizedBox(width: 8),
+                          // Toggle AI panel button
+                          IconButton(
+                            icon: Icon(
+                              _showAiPanel ? Icons.chevron_left : Icons.auto_awesome,
+                              size: 18,
+                            ),
+                            onPressed: () => setState(() => _showAiPanel = !_showAiPanel),
+                            style: IconButton.styleFrom(
+                              foregroundColor: const Color(0xFF6C5CE7),
+                              padding: EdgeInsets.zero,
+                              minimumSize: const Size(32, 32),
+                            ),
+                            tooltip: _showAiPanel ? 'Hide AI Panel' : 'Show AI Panel',
+                          ),
+                          const SizedBox(width: 4),
                           Expanded(
-                            child: Text(
-                              _composerTitle,
-                              style: const TextStyle(
-                                  fontSize: 15, fontWeight: FontWeight.w700),
-                              overflow: TextOverflow.ellipsis,
+                            child: GestureDetector(
+                              onTap: () {
+                                // Click title to edit it inline
+                                final controller = TextEditingController(text: _composerTitle);
+                                showDialog(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    backgroundColor: const Color(0xFF1A1A2E),
+                                    title: const Text('Edit Title', style: TextStyle(color: Colors.white, fontSize: 14)),
+                                    content: TextField(
+                                      controller: controller,
+                                      autofocus: true,
+                                      style: const TextStyle(color: Colors.white),
+                                      onSubmitted: (v) => Navigator.pop(ctx, v),
+                                    ),
+                                    actions: [
+                                      TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                                      FilledButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('Save')),
+                                    ],
+                                  ),
+                                ).then((result) {
+                                  controller.dispose();
+                                  if (result != null && result is String && result.isNotEmpty) {
+                                    _setStyleAndRefresh(() => _composerTitle = result);
+                                  }
+                                });
+                              },
+                              child: Text(
+                                _composerTitle.isEmpty ? 'Untitled Short' : _composerTitle,
+                                style: const TextStyle(
+                                    fontSize: 15, fontWeight: FontWeight.w700),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -1298,7 +1392,12 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                               const SizedBox(height: 6),
                               TextButton.icon(
                                 onPressed: () {
-                                  if (!_livePreviewMode) _requestPreviewClip();
+                                  if (!_livePreviewMode) {
+                                    _requestPreviewClip();
+                                  } else {
+                                    // Switching back to edit mode — reconnect timeline to _bgPlayer
+                                    _reconnectTimelineToBgPlayer();
+                                  }
                                   setState(() => _livePreviewMode = !_livePreviewMode);
                                 },
                                 icon: Icon(
@@ -1465,6 +1564,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       right: ((1.0 - _titlePosX - 0.44) * frameW).clamp(0, frameW * 0.12),
                       child: GestureDetector(
                         behavior: HitTestBehavior.translucent,
+                        onTap: () => setState(() => _activePropertiesSection = 'title'),
                         onPanUpdate: (details) {
                           setState(() {
                             _titlePosX = (_titlePosX + details.delta.dx / frameW)
@@ -1520,6 +1620,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       height: boxH,
                       child: GestureDetector(
                         behavior: HitTestBehavior.translucent,
+                        onTap: () => setState(() => _activePropertiesSection = 'body'),
                         onPanUpdate: (details) {
                           setState(() {
                             _textPosX = (_textPosX + details.delta.dx / frameW)
@@ -1660,12 +1761,52 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                     // ── Quick position presets for body (right edge) ──
                     Positioned(
                       right: 4,
-                      top: frameH * 0.35,
+                      top: frameH * 0.25,
                       child: Column(
                         children: [
                           _previewPosButton(Icons.vertical_align_top, 0.3),
                           _previewPosButton(Icons.vertical_align_center, 0.5),
                           _previewPosButton(Icons.vertical_align_bottom, 0.78),
+                          const SizedBox(height: 8),
+                          // Center snap (horiz + vert)
+                          GestureDetector(
+                            onTap: () => _setStyleAndRefresh(() {
+                              _textPosX = 0.5;
+                              _textPosY = 0.5;
+                            }),
+                            child: Container(
+                              width: 22, height: 22,
+                              margin: const EdgeInsets.only(bottom: 2),
+                              decoration: BoxDecoration(
+                                color: (_textPosX - 0.5).abs() < 0.02 && (_textPosY - 0.5).abs() < 0.08
+                                    ? const Color(0xFF6C5CE7).withOpacity(0.6)
+                                    : Colors.black38,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Icon(Icons.center_focus_strong,
+                                  size: 14,
+                                  color: (_textPosX - 0.5).abs() < 0.02 && (_textPosY - 0.5).abs() < 0.08
+                                      ? Colors.white : Colors.white38),
+                            ),
+                          ),
+                          // Center horizontally only
+                          GestureDetector(
+                            onTap: () => _setStyleAndRefresh(() => _textPosX = 0.5),
+                            child: Container(
+                              width: 22, height: 22,
+                              margin: const EdgeInsets.only(bottom: 2),
+                              decoration: BoxDecoration(
+                                color: (_textPosX - 0.5).abs() < 0.02
+                                    ? const Color(0xFF6C5CE7).withOpacity(0.4)
+                                    : Colors.black38,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Icon(Icons.align_horizontal_center,
+                                  size: 14,
+                                  color: (_textPosX - 0.5).abs() < 0.02
+                                      ? Colors.white : Colors.white38),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -1704,7 +1845,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          'Drag text to move',
+                          'Tap text to edit settings',
                           style: TextStyle(
                               fontSize: 8,
                               color: Colors.white.withOpacity(0.4)),
@@ -1801,12 +1942,33 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
       _previewPlayer = Player();
       _previewController = VideoController(_previewPlayer!);
       _previewPlayer!.stream.playing.listen((playing) {
-        if (mounted) setState(() {});
+        if (mounted) setState(() => _bgPlaying = playing);
       });
     }
     _previewPlayer!.open(Media(clipPath));
     _previewPlayer!.setPlaylistMode(PlaylistMode.loop);
-    _previewPlayer!.setVolume(0);
+    _previewPlayer!.setVolume(100);
+
+    // Sync timeline scrubber with preview player position
+    _positionSub?.cancel();
+    _positionSub = _previewPlayer!.stream.position.listen((pos) {
+      if (!mounted || _userScrubbing) return;
+      final dur = _previewPlayer?.state.duration ?? Duration.zero;
+      if (dur.inMilliseconds > 0) {
+        setState(() {
+          _scrubPosition =
+              (pos.inMilliseconds / dur.inMilliseconds).clamp(0.0, 1.0);
+        });
+      }
+    });
+    _durationSub?.cancel();
+    _durationSub = _previewPlayer!.stream.duration.listen((dur) {
+      if (!mounted) return;
+      if (dur.inSeconds > 0) {
+        setState(() => _estimatedDuration = dur.inSeconds.toDouble());
+      }
+    });
+
     if (mounted) setState(() => _previewClipLoading = false);
   }
 
@@ -1890,10 +2052,34 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   //  RIGHT: PROPERTIES PANEL
   // ────────────────────────────────────────────────────────────────
 
+  // ScrollController for properties panel auto-scrolling
+  final _propertiesScrollController = ScrollController();
+
+  // Keys for sections to scroll to
+  final _titleSectionKey = GlobalKey();
+  final _bodySectionKey = GlobalKey();
+
+  void _scrollToSection(GlobalKey key) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = key.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
+      }
+    });
+  }
+
   Widget _buildPropertiesPanel() {
+    // Auto-scroll when section changes
+    if (_activePropertiesSection == 'title') {
+      _scrollToSection(_titleSectionKey);
+    } else if (_activePropertiesSection == 'body') {
+      _scrollToSection(_bodySectionKey);
+    }
+
     return Container(
       color: const Color(0xFF141420),
       child: ListView(
+        controller: _propertiesScrollController,
         padding: const EdgeInsets.all(12),
         children: [
           // ── Voice section ──
@@ -1963,7 +2149,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           // ══════════════════════════════════════
           // ── TITLE STYLE (fully independent) ──
           // ══════════════════════════════════════
-          _sectionHeader('Title Style', Icons.title),
+          Container(key: _titleSectionKey, child: _sectionHeader('Title Style', Icons.title)),
           const SizedBox(height: 8),
           // Font family
           DropdownButton<String>(
@@ -2089,7 +2275,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
           // ══════════════════════════════════════
           // ── BODY STYLE (fully independent) ──
           // ══════════════════════════════════════
-          _sectionHeader('Body Style', Icons.text_fields),
+          Container(key: _bodySectionKey, child: _sectionHeader('Body Style', Icons.text_fields)),
           const SizedBox(height: 8),
           // Font family
           DropdownButton<String>(

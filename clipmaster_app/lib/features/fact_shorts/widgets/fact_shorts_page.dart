@@ -14,6 +14,7 @@ import '../../../core/ipc/ipc_client.dart';
 import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/api_key_service.dart';
 import '../../../core/services/project_state.dart';
+import '../../../core/ui/video_player_overlay.dart';
 import '../../../core/utils/time_format.dart';
 
 const _categories = ['Space', 'History', 'Science', 'Technology', 'Nature'];
@@ -126,6 +127,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
 
   // Rendering
   bool _isRendering = false;
+  String? _lastRenderedPath; // path to last rendered video for preview
 
   // ── TITLE styling (fully independent) ──
   String _titleFontFamily = 'Inter';
@@ -270,6 +272,92 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   void _setStyleAndRefresh(VoidCallback fn) {
     setState(fn);
     if (_livePreviewMode) _requestPreviewClip();
+  }
+
+  /// Open inline edit dialog for the title text.
+  void _editTitleInline() {
+    final controller = TextEditingController(text: _composerTitle);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: const Text('Edit Title',
+            style: TextStyle(color: Colors.white, fontSize: 14)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Enter title...',
+            hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, controller.text),
+              child: const Text('Save')),
+        ],
+      ),
+    ).then((result) {
+      controller.dispose();
+      if (result != null && result is String && result.isNotEmpty) {
+        _setStyleAndRefresh(() => _composerTitle = result);
+      }
+    });
+  }
+
+  /// Open inline edit dialog for the body/script text.
+  void _editBodyInline() {
+    final controller = TextEditingController(text: _composerScript);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: const Text('Edit Body Text',
+            style: TextStyle(color: Colors.white, fontSize: 14)),
+        content: SizedBox(
+          width: 400,
+          height: 250,
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: null,
+            expands: true,
+            style: const TextStyle(color: Colors.white, fontSize: 13),
+            decoration: InputDecoration(
+              hintText: 'Enter body text...',
+              hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+              border: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.white.withOpacity(0.2)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.white.withOpacity(0.2)),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF6C5CE7)),
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, controller.text),
+              child: const Text('Save')),
+        ],
+      ),
+    ).then((result) {
+      controller.dispose();
+      if (result != null && result is String && result.isNotEmpty) {
+        _setStyleAndRefresh(() => _composerScript = result);
+      }
+    });
   }
 
   void _disposeVoicePlayer() {
@@ -793,7 +881,10 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
         final outputPath = response.payload['output_path'] as String? ?? '';
         final duration =
             (response.payload['duration'] as num?)?.toDouble() ?? 0;
-        setState(() => _isRendering = false);
+        setState(() {
+          _isRendering = false;
+          if (outputPath.isNotEmpty) _lastRenderedPath = outputPath;
+        });
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1433,6 +1524,26 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                                   horizontal: 12, vertical: 6),
                             ),
                           ),
+                          // Preview rendered video button
+                          if (_lastRenderedPath != null) ...[
+                            const SizedBox(width: 4),
+                            TextButton.icon(
+                              onPressed: () {
+                                VideoPlayerOverlay.show(
+                                  context,
+                                  url: _lastRenderedPath!,
+                                  title: _composerTitle.isNotEmpty ? _composerTitle : 'Rendered Video',
+                                );
+                              },
+                              icon: const Icon(Icons.movie, size: 14),
+                              label: const Text('Preview Video',
+                                  style: TextStyle(fontSize: 11)),
+                              style: TextButton.styleFrom(
+                                foregroundColor: const Color(0xFF00E676),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              ),
+                            ),
+                          ],
                           const SizedBox(width: 8),
                           TextButton.icon(
                             onPressed: () {
@@ -1460,12 +1571,15 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                         ],
                       ),
                       const SizedBox(height: 12),
+                      // Fixed-size 9:16 preview — accurate representation of the rendered video.
+                      // Uses a fixed height so the preview doesn't resize with the window.
                       Expanded(
                         child: Container(
                           color: Colors.black,
                           child: Center(
-                            child: AspectRatio(
-                              aspectRatio: 9 / 16,
+                            child: SizedBox(
+                              width: 270,  // 9:16 → 270 x 480
+                              height: 480,
                               child: _buildPhonePreview(),
                             ),
                           ),
@@ -1519,8 +1633,8 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
   // ────────────────────────────────────────────────────────────────
 
   Widget _buildPhonePreview() {
-    // No fixed size — the parent AspectRatio(9/16) + Expanded handle sizing.
-    // The preview fills the available space while maintaining 9:16 aspect ratio.
+    // Fixed 270×480 preview (9:16 ratio) — accurate representation of the rendered video.
+    // Parent provides a fixed SizedBox so the preview never resizes.
     return Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
@@ -1615,6 +1729,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       child: GestureDetector(
                         behavior: HitTestBehavior.translucent,
                         onTap: () => setState(() => _activePropertiesSection = 'title'),
+                        onDoubleTap: () => _editTitleInline(),
                         onPanUpdate: (details) {
                           setState(() {
                             _titlePosX = (_titlePosX + details.delta.dx / frameW)
@@ -1668,6 +1783,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                       child: GestureDetector(
                         behavior: HitTestBehavior.translucent,
                         onTap: () => setState(() => _activePropertiesSection = 'body'),
+                        onDoubleTap: () => _editBodyInline(),
                         onPanUpdate: (details) {
                           setState(() {
                             _textPosX = (_textPosX + details.delta.dx / frameW)
@@ -1884,7 +2000,7 @@ class _FactShortsPageState extends ConsumerState<FactShortsPage> {
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          'Tap text to edit settings',
+                          'Tap = settings · Double-tap = edit text',
                           style: TextStyle(
                               fontSize: 8,
                               color: Colors.white.withOpacity(0.4)),

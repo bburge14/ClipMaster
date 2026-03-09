@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -66,7 +67,7 @@ class ConnectedAccount {
 /// Client IDs come from .env file:
 ///   - GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET (for YouTube)
 ///   - TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET (for Twitch)
-class AccountService {
+class AccountService extends ChangeNotifier {
   static const String _storageKey = 'clipmaster_accounts';
 
   /// Fixed port for OAuth redirects. Twitch requires the redirect_uri to
@@ -99,6 +100,11 @@ class AccountService {
         _log.e('Failed to parse stored accounts: $e');
       }
     }
+    // Auto-refresh expired tokens on startup.
+    for (final provider in AccountProvider.values) {
+      await _refreshIfExpired(provider);
+    }
+    notifyListeners();
   }
 
   Future<void> _persist() async {
@@ -143,6 +149,7 @@ class AccountService {
   Future<void> disconnect(AccountProvider provider) async {
     _accounts.remove(provider);
     await _persist();
+    notifyListeners();
     _log.i('Disconnected ${provider.name} account.');
   }
 
@@ -165,7 +172,7 @@ class AccountService {
       'scope': 'https://www.googleapis.com/auth/youtube.readonly '
           'https://www.googleapis.com/auth/userinfo.profile',
       'access_type': 'offline',
-      'prompt': 'consent',
+      'prompt': 'select_account',
     });
 
     final code = await _runOAuthFlow(authUrl.toString(), oauthPort);
@@ -211,6 +218,7 @@ class AccountService {
 
     _accounts[AccountProvider.youtube] = account;
     await _persist();
+    notifyListeners();
     _log.i('Connected YouTube account: ${account.username}');
     return account;
   }
@@ -284,8 +292,103 @@ class AccountService {
 
     _accounts[AccountProvider.twitch] = account;
     await _persist();
+    notifyListeners();
     _log.i('Connected Twitch account: ${account.username}');
     return account;
+  }
+
+  // ─────────────────── Token refresh ───────────────────
+
+  /// Refresh the access token for a provider if it has expired.
+  Future<void> _refreshIfExpired(AccountProvider provider) async {
+    final account = _accounts[provider];
+    if (account == null || !account.isExpired) return;
+    if (account.refreshToken == null) return;
+
+    try {
+      switch (provider) {
+        case AccountProvider.youtube:
+          await _refreshYouTube(account);
+        case AccountProvider.twitch:
+          await _refreshTwitch(account);
+      }
+    } catch (e) {
+      _log.e('Failed to refresh ${provider.name} token: $e');
+    }
+  }
+
+  Future<void> _refreshYouTube(ConnectedAccount account) async {
+    final clientId = EnvConfig.get('GOOGLE_CLIENT_ID') ?? '';
+    final clientSecret = EnvConfig.get('GOOGLE_CLIENT_SECRET') ?? '';
+    if (clientId.isEmpty) return;
+
+    final response = await http.post(
+      Uri.parse('https://oauth2.googleapis.com/token'),
+      body: {
+        'client_id': clientId,
+        'client_secret': clientSecret,
+        'refresh_token': account.refreshToken!,
+        'grant_type': 'refresh_token',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      _log.e('YouTube token refresh failed: ${response.statusCode}');
+      return;
+    }
+
+    final tokens = jsonDecode(response.body) as Map<String, dynamic>;
+    final newAccount = ConnectedAccount(
+      provider: AccountProvider.youtube,
+      accessToken: tokens['access_token'] as String,
+      refreshToken: account.refreshToken,
+      expiresAt: DateTime.now()
+          .add(Duration(seconds: (tokens['expires_in'] as int?) ?? 3600)),
+      username: account.username,
+      avatarUrl: account.avatarUrl,
+      connectedAt: account.connectedAt,
+    );
+
+    _accounts[AccountProvider.youtube] = newAccount;
+    await _persist();
+    _log.i('Refreshed YouTube access token.');
+  }
+
+  Future<void> _refreshTwitch(ConnectedAccount account) async {
+    final clientId = EnvConfig.get('TWITCH_CLIENT_ID') ?? '';
+    final clientSecret = EnvConfig.get('TWITCH_CLIENT_SECRET') ?? '';
+    if (clientId.isEmpty) return;
+
+    final response = await http.post(
+      Uri.parse('https://id.twitch.tv/oauth2/token'),
+      body: {
+        'client_id': clientId,
+        'client_secret': clientSecret,
+        'refresh_token': account.refreshToken!,
+        'grant_type': 'refresh_token',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      _log.e('Twitch token refresh failed: ${response.statusCode}');
+      return;
+    }
+
+    final tokens = jsonDecode(response.body) as Map<String, dynamic>;
+    final newAccount = ConnectedAccount(
+      provider: AccountProvider.twitch,
+      accessToken: tokens['access_token'] as String,
+      refreshToken: tokens['refresh_token'] as String? ?? account.refreshToken,
+      expiresAt: DateTime.now()
+          .add(Duration(seconds: (tokens['expires_in'] as int?) ?? 3600)),
+      username: account.username,
+      avatarUrl: account.avatarUrl,
+      connectedAt: account.connectedAt,
+    );
+
+    _accounts[AccountProvider.twitch] = newAccount;
+    await _persist();
+    _log.i('Refreshed Twitch access token.');
   }
 
   // ─────────────────── Shared helpers ───────────────────
@@ -361,6 +464,6 @@ class AccountService {
 }
 
 /// Riverpod provider for the Account Service.
-final accountServiceProvider = Provider<AccountService>((ref) {
+final accountServiceProvider = ChangeNotifierProvider<AccountService>((ref) {
   return AccountService();
 });

@@ -2,10 +2,12 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:media_kit/media_kit.dart';
 
 import 'core/ipc/ipc_client.dart';
+import 'core/ipc/ipc_message.dart';
 import 'core/logging/dev_console.dart';
 import 'core/services/account_service.dart';
 import 'core/services/activity_service.dart';
@@ -209,6 +211,26 @@ class _MainShellState extends ConsumerState<MainShell> {
       final ipc = ref.read(ipcClientProvider);
       await ipc.start();
       devConsole.info('IPC', 'Sidecar connected.');
+
+      // Restore persisted cookie browser setting to the sidecar.
+      try {
+        const storage = FlutterSecureStorage();
+        final savedBrowser =
+            await storage.read(key: 'clipmaster_cookie_browser');
+        if (savedBrowser != null && savedBrowser.isNotEmpty) {
+          await ipc.send(
+            IpcMessage(
+              type: MessageType.setCookieBrowser,
+              payload: {'browser': savedBrowser},
+            ),
+            timeout: const Duration(seconds: 5),
+          );
+          devConsole.info(
+              'IPC', 'Restored cookie browser: $savedBrowser');
+        }
+      } catch (e) {
+        devConsole.error('IPC', 'Failed to restore cookie browser: $e');
+      }
 
       // Pipe all IPC messages to the dev console.
       ipc.messages.listen((msg) {

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/ipc/ipc_client.dart';
@@ -677,6 +678,8 @@ class _BrowserCookieSection extends ConsumerStatefulWidget {
 
 class _BrowserCookieSectionState
     extends ConsumerState<_BrowserCookieSection> {
+  static const _storageKey = 'clipmaster_cookie_browser';
+  final _storage = const FlutterSecureStorage();
   String _selected = '';
   bool _loading = true;
 
@@ -687,6 +690,15 @@ class _BrowserCookieSectionState
   }
 
   Future<void> _fetchCurrent() async {
+    // Load persisted value from secure storage first.
+    try {
+      final saved = await _storage.read(key: _storageKey);
+      if (saved != null && mounted) {
+        setState(() => _selected = saved);
+      }
+    } catch (_) {}
+
+    // Then sync from sidecar if connected.
     try {
       final ipc = ref.read(ipcClientProvider);
       if (!ipc.isConnected) {
@@ -713,6 +725,11 @@ class _BrowserCookieSectionState
 
   Future<void> _setBrowser(String browser) async {
     setState(() => _selected = browser);
+    // Persist to secure storage so it survives restarts.
+    try {
+      await _storage.write(key: _storageKey, value: browser);
+    } catch (_) {}
+    // Send to sidecar.
     try {
       final ipc = ref.read(ipcClientProvider);
       if (!ipc.isConnected) return;

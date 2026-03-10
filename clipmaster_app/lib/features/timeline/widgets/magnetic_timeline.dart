@@ -575,6 +575,28 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     }
   }
 
+  /// Convert a 0xAARRGGBB int to FFmpeg color string like "0xRRGGBB".
+  static String _hexToFfmpegColor(int hex) {
+    final r = (hex >> 16) & 0xFF;
+    final g = (hex >> 8) & 0xFF;
+    final b = hex & 0xFF;
+    return '0x${r.toRadixString(16).padLeft(2, '0')}'
+        '${g.toRadixString(16).padLeft(2, '0')}'
+        '${b.toRadixString(16).padLeft(2, '0')}';
+  }
+
+  /// Convert a 0xAARRGGBB int to FFmpeg bg color like "0xRRGGBB@0.5".
+  static String _hexToFfmpegBgColor(int hex) {
+    final a = ((hex >> 24) & 0xFF) / 255.0;
+    final r = (hex >> 16) & 0xFF;
+    final g = (hex >> 8) & 0xFF;
+    final b = hex & 0xFF;
+    final colorHex = '0x${r.toRadixString(16).padLeft(2, '0')}'
+        '${g.toRadixString(16).padLeft(2, '0')}'
+        '${b.toRadixString(16).padLeft(2, '0')}';
+    return '$colorHex@${a.toStringAsFixed(2)}';
+  }
+
   Future<void> _renderVideo() async {
     final project = ref.read(projectProvider);
     if (project.scriptText == null || project.scriptText!.isEmpty) {
@@ -631,6 +653,9 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
           .map((a) => a.url!)
           .toList();
 
+      final titleStyle = project.titleStyle;
+      final bodyStyle = project.captionStyle;
+
       final payload = <String, dynamic>{
         'text': project.scriptText,
         'title': project.scriptTitle ?? 'Untitled',
@@ -641,6 +666,37 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         if (bgUrls.isNotEmpty) 'background_video_urls': bgUrls,
         if (pexelsKey != null) 'pexels_key': pexelsKey,
         if (pixabayKey != null) 'pixabay_key': pixabayKey,
+
+        // ─── Title styling ───
+        'title_font_family': titleStyle.fontFamily,
+        'title_font_size_px': titleStyle.fontSize.toInt(),
+        'title_bold': titleStyle.isBold,
+        'title_italic': titleStyle.isItalic,
+        'title_color': _hexToFfmpegColor(titleStyle.colorHex),
+        'title_shadow': titleStyle.hasBorder,
+        'title_pos_x': titleStyle.positionX,
+        'title_pos_y': titleStyle.positionY,
+        'title_bg_enabled': ((titleStyle.bgColorHex >> 24) & 0xFF) > 0,
+        'title_bg_color': _hexToFfmpegBgColor(titleStyle.bgColorHex),
+
+        // ─── Body styling ───
+        'body_font_family': bodyStyle.fontFamily,
+        'body_font_size_px': bodyStyle.fontSize.toInt(),
+        'body_bold': bodyStyle.isBold,
+        'body_italic': bodyStyle.isItalic,
+        'body_color': _hexToFfmpegColor(bodyStyle.colorHex),
+        'body_shadow': bodyStyle.hasBorder,
+        'text_pos_x': bodyStyle.positionX,
+        'text_pos_y': bodyStyle.positionY,
+        'body_bg_enabled': ((bodyStyle.bgColorHex >> 24) & 0xFF) > 0,
+        'body_bg_color': _hexToFfmpegBgColor(bodyStyle.bgColorHex),
+
+        // ─── Box dimensions ───
+        if (bodyStyle.boxWidth != null) 'text_box_w': bodyStyle.boxWidth,
+        if (bodyStyle.boxHeight != null) 'text_box_h': bodyStyle.boxHeight,
+
+        // ─── Pre-generated TTS audio (skip re-generation) ───
+        if (_ttsAudioPath != null) 'tts_audio_path': _ttsAudioPath,
       };
 
       final response = await ipc.send(
@@ -3821,48 +3877,81 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
 
   Future<void> _generateTts(ProjectState project) async {
     if (project.scriptText == null || project.scriptText!.isEmpty) return;
+
+    // Need OpenAI API key for TTS
+    final apiService = ref.read(apiKeyServiceProvider);
+    final openaiKey = apiService.getNextKey(LlmProvider.openai);
+    if (openaiKey == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('OpenAI API key required for voiceover. Add one in Settings.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
     setState(() => _isGeneratingTts = true);
     try {
-      final tempDir = await getTemporaryDirectory();
-      final outputPath = '${tempDir.path}/tts_voiceover_${DateTime.now().millisecondsSinceEpoch}.mp3';
-
-      // Send TTS request via IPC to Python backend
       final ipc = ref.read(ipcClientProvider);
-      final result = await ipc.send(IpcMessage(
-        type: MessageType.generateTts,
-        payload: {
-          'text': project.scriptText!,
-          'voice': project.selectedVoice.name,
-          'output_path': outputPath,
+      final result = await ipc.send(
+        IpcMessage(
+          type: MessageType.generateTts,
+          payload: {
+            'text': project.scriptText!,
+            'api_key': openaiKey,
+            'voice': project.selectedVoice.name,
+          },
+        ),
+        timeout: const Duration(minutes: 2),
+        onProgress: (progress) {
+          if (mounted) {
+            setState(() {
+              _importStage = progress.payload['stage'] as String? ?? 'Generating TTS';
+              _importPercent = progress.payload['percent'] as int? ?? 0;
+            });
+          }
         },
-      ));
+      );
 
-      if (result.payload['success'] == true) {
-        final audioPath = result.payload['audio_path'] as String? ?? outputPath;
-        setState(() {
-          _ttsAudioPath = audioPath;
-        });
-        // Add as a real timeline asset
-        ref.read(projectProvider.notifier).addAsset(TimelineAsset(
-          id: 'tts_${DateTime.now().millisecondsSinceEpoch}',
-          track: TimelineTrack.audio,
-          label: 'Voiceover (${project.selectedVoice.label})',
-          filePath: audioPath,
-        ));
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Voiceover generated and added to timeline'),
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
-      } else {
-        final error = result.payload['error'] ?? 'TTS generation failed';
+      if (result.type == MessageType.error) {
+        final error = result.payload['message'] ?? 'TTS generation failed';
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Error: $error'), duration: const Duration(seconds: 3)),
           );
+        }
+      } else {
+        // Success — result payload has audio_path, voice, duration_estimate
+        final audioPath = result.payload['audio_path'] as String? ?? '';
+        final durationEst = (result.payload['duration_estimate'] as num?)?.toDouble() ?? 0;
+        if (audioPath.isNotEmpty) {
+          setState(() {
+            _ttsAudioPath = audioPath;
+          });
+          // Remove any existing voiceover assets before adding the new one
+          final existing = project.assets
+              .where((a) => a.track == TimelineTrack.audio && a.label.startsWith('Voiceover'))
+              .toList();
+          for (final a in existing) {
+            ref.read(projectProvider.notifier).removeAsset(a.id);
+          }
+          // Add as a real timeline asset
+          ref.read(projectProvider.notifier).addAsset(TimelineAsset(
+            id: 'tts_${DateTime.now().millisecondsSinceEpoch}',
+            track: TimelineTrack.audio,
+            label: 'Voiceover (${project.selectedVoice.label})',
+            filePath: audioPath,
+            durationSec: durationEst,
+          ));
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Voiceover generated and added to timeline'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
         }
       }
     } catch (e) {

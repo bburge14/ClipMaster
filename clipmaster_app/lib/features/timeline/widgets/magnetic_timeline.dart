@@ -1332,7 +1332,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
           height: 30,
           margin: const EdgeInsets.symmetric(horizontal: 1),
           child: Icon(icon, size: 16,
-              color: onTap != null ? Colors.white54 : Colors.white20),
+              color: onTap != null ? Colors.white54 : Colors.white24),
         ),
       ),
     );

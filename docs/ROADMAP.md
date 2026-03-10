@@ -28,9 +28,13 @@
 │  │ Analyzer     │  │ Service      │  │ (Gemini/Claude/OAI)  │   │
 │  └──────────────┘  └──────────────┘  └──────────────────────┘   │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
-│  │ Stock        │  │ Faster-      │  │ Kokoro-82M           │   │
-│  │ Footage API  │  │ Whisper      │  │ TTS Engine           │   │
+│  │ Stock        │  │ Whisper API  │  │ OpenAI TTS           │   │
+│  │ Footage API  │  │ (OpenAI)     │  │ (6 voices)           │   │
 │  └──────────────┘  └──────────────┘  └──────────────────────┘   │
+│  ┌──────────────┐  ┌──────────────┐                             │
+│  │ YouTube      │  │ Twitch       │                             │
+│  │ Data API v3  │  │ Helix API    │                             │
+│  └──────────────┘  └──────────────┘                             │
 │  ┌─────────────────────────────────────┐                        │
 │  │ FFmpeg (h264_nvenc) + yt-dlp        │                        │
 │  │ (bundled binaries, relative paths)  │                        │
@@ -57,26 +61,33 @@ ClipMaster/
 │   │   │   │   └── binary_paths.dart  # Bundled binary path resolution
 │   │   │   └── models/               # Shared data models
 │   │   ├── features/
-│   │   │   ├── timeline/             # Magnetic Timeline UI
-│   │   │   │   ├── models/
+│   │   │   ├── timeline/             # Magnetic Timeline / NLE Editor
 │   │   │   │   ├── widgets/
-│   │   │   │   │   └── magnetic_timeline.dart
+│   │   │   │   │   ├── magnetic_timeline.dart
+│   │   │   │   │   ├── editor_toolbar.dart
+│   │   │   │   │   ├── editor_menu_bar.dart
+│   │   │   │   │   └── script_generator_panel.dart
 │   │   │   │   └── providers/
+│   │   │   │       └── editor_layout_provider.dart
 │   │   │   ├── fact_shorts/          # Fact-Shorts Generator
-│   │   │   │   ├── models/
-│   │   │   │   ├── widgets/
-│   │   │   │   └── providers/
-│   │   │   ├── viral_scout/          # Viral Scout Discovery
-│   │   │   │   ├── models/
-│   │   │   │   ├── widgets/
-│   │   │   │   └── providers/
-│   │   │   ├── api_keys/             # API Key Management UI
 │   │   │   │   └── widgets/
-│   │   │   │       └── api_key_settings.dart
+│   │   │   │       └── fact_shorts_page.dart
+│   │   │   ├── viral_scout/          # Viral Scout Discovery
+│   │   │   │   └── widgets/
+│   │   │   │       └── viral_scout_page.dart
+│   │   │   ├── activity/             # Download/Task Activity Feed
+│   │   │   │   └── widgets/
+│   │   │   │       ├── activity_page.dart
+│   │   │   │       └── media_browser.dart
+│   │   │   ├── settings/             # Settings & API Key Management
+│   │   │   │   └── widgets/
+│   │   │   │       └── settings_page.dart
+│   │   │   ├── onboarding/           # First-launch Onboarding Wizard
+│   │   │   │   └── widgets/
+│   │   │   │       └── onboarding_wizard.dart
 │   │   │   └── dev_console/          # Dev Console UI
 │   │   │       └── widgets/
 │   │   │           └── dev_console_panel.dart
-│   │   └── widgets/                  # Shared widgets
 │   ├── assets/
 │   ├── test/
 │   ├── windows/
@@ -91,11 +102,22 @@ ClipMaster/
 │   │   ├── script_analyzer.py       # Fact-Shorts visual keyword mapper
 │   │   ├── viral_scout.py           # Trending video discovery + ranking
 │   │   ├── stock_footage.py         # Pexels/Pixabay B-roll search
-│   │   └── llm_gateway.py          # Multi-provider LLM interface
+│   │   ├── llm_gateway.py          # Multi-provider LLM interface
+│   │   ├── fact_generator.py       # AI-powered fact generation
+│   │   ├── media_tools.py          # FFmpeg/yt-dlp video processing
+│   │   ├── youtube_search.py       # YouTube Data API v3 integration
+│   │   └── twitch_search.py        # Twitch Helix API integration
 │   ├── utils/
 │   ├── tests/
 │   │   ├── test_script_analyzer.py
-│   │   └── test_viral_scout.py
+│   │   ├── test_viral_scout.py
+│   │   ├── test_fact_generator.py
+│   │   ├── test_stock_footage.py
+│   │   ├── test_media_tools.py
+│   │   ├── test_llm_gateway.py
+│   │   ├── test_youtube_search.py
+│   │   ├── test_twitch_search.py
+│   │   └── test_ipc_models.py
 │   ├── pyproject.toml
 │   └── requirements.txt
 │
@@ -133,25 +155,36 @@ ClipMaster/
 ```
 
 **Message Types:**
-| Type              | Direction         | Description                                |
-|-------------------|-------------------|--------------------------------------------|
-| `ping`            | Flutter → Python  | Health check                               |
-| `pong`            | Python → Flutter  | Health check response                      |
-| `downloadVideo`   | Flutter → Python  | Start yt-dlp download                      |
-| `generateProxy`   | Flutter → Python  | Generate 720p proxy from 4K source         |
-| `transcribe`      | Flutter → Python  | Run Faster-Whisper transcription           |
-| `generateTts`     | Flutter → Python  | Run Kokoro-82M TTS                         |
-| `analyzeScript`   | Flutter → Python  | Extract visual keywords from narration     |
-| `queryStockFootage`| Flutter → Python | Search Pexels/Pixabay for B-roll          |
-| `scoutTrending`   | Flutter → Python  | Fetch & rank trending videos               |
-| `ffmpegRender`    | Flutter → Python  | Start FFmpeg render (h264_nvenc)           |
-| `progress`        | Python → Flutter  | Real-time progress update                  |
-| `result`          | Python → Flutter  | Final result payload                       |
-| `error`           | Python → Flutter  | Error with message and optional code       |
+| Type                | Direction         | Description                                |
+|---------------------|-------------------|--------------------------------------------|
+| `ping`              | Flutter → Python  | Health check                               |
+| `pong`              | Python → Flutter  | Health check response                      |
+| `downloadVideo`     | Flutter → Python  | Start yt-dlp download                      |
+| `downloadClip`      | Flutter → Python  | Download specific time range from video    |
+| `generateProxy`     | Flutter → Python  | Generate 720p proxy from 4K source         |
+| `transcribe`        | Flutter → Python  | Run Whisper API transcription              |
+| `generateTts`       | Flutter → Python  | Run OpenAI TTS generation                  |
+| `analyzeScript`     | Flutter → Python  | Extract visual keywords from narration     |
+| `queryStockFootage` | Flutter → Python  | Search Pexels/Pixabay for B-roll           |
+| `scoutTrending`     | Flutter → Python  | Fetch & rank trending videos               |
+| `scoutChannel`      | Flutter → Python  | Search for a YouTube/Twitch channel        |
+| `scoutVods`         | Flutter → Python  | Fetch VODs for a channel                   |
+| `scoutClips`        | Flutter → Python  | Fetch clips for a broadcaster              |
+| `resolveStreamUrl`  | Flutter → Python  | Resolve direct stream URL via yt-dlp       |
+| `generateFacts`     | Flutter → Python  | AI-generate engagement-optimized facts     |
+| `createShort`       | Flutter → Python  | Full pipeline: TTS + video + text overlay  |
+| `ffmpegRender`      | Flutter → Python  | Start FFmpeg render (h264_nvenc)           |
+| `previewSnapshot`   | Flutter → Python  | Generate WYSIWYG preview PNG               |
+| `previewVideoClip`  | Flutter → Python  | Generate WYSIWYG preview video             |
+| `setCookieBrowser`  | Flutter → Python  | Set browser for yt-dlp cookie auth         |
+| `getCookieBrowser`  | Flutter → Python  | Get current cookie browser setting         |
+| `progress`          | Python → Flutter  | Real-time progress update                  |
+| `result`            | Python → Flutter  | Final result payload                       |
+| `error`             | Python → Flutter  | Error with message and optional code       |
 
 ## Roadmap Phases
 
-### Phase 1: Foundation (Current)
+### Phase 1: Foundation
 - [x] Project structure and folder layout
 - [x] IPC protocol definition and WebSocket transport
 - [x] API Key Service with secure storage + round-robin
@@ -159,46 +192,46 @@ ClipMaster/
 - [x] Bundled binary path resolution
 - [x] Script Analyzer (visual keyword extraction)
 - [x] Viral Scout ranking algorithm
-- [x] LLM Gateway (multi-provider)
-- [x] Stock Footage query service
+- [x] LLM Gateway (multi-provider: OpenAI, Claude, Gemini)
+- [x] Stock Footage query service (Pexels + Pixabay)
 - [x] Magnetic Timeline UI shell
 - [x] API Key Settings UI
 
 ### Phase 2: Video Pipeline
-- [ ] yt-dlp integration with progress reporting
-- [ ] Proxy video generation (4K → 720p)
-- [ ] FFmpeg render pipeline with h264_nvenc
-- [ ] Video preview player (media_kit)
-- [ ] Clip extraction and trimming
+- [x] yt-dlp integration with progress reporting (parallel downloads, aria2c support)
+- [x] Proxy video generation (4K → 720p)
+- [x] FFmpeg render pipeline with h264_nvenc
+- [x] Video preview player (media_kit with transport controls)
+- [x] Clip extraction and trimming (stream-seeking via FFmpeg)
 
 ### Phase 3: AI Integration
-- [ ] Faster-Whisper transcription with word-level timestamps
-- [ ] Kokoro-82M TTS generation
-- [ ] LLM-powered fact brainstorming (10 engagement-optimized facts)
-- [ ] LLM-powered script generation (45-second narrations)
-- [ ] LLM-enhanced visual keyword extraction
+- [x] Whisper API transcription with word-level timestamps
+- [x] OpenAI TTS generation (alloy, echo, fable, onyx, nova, shimmer)
+- [x] LLM-powered fact brainstorming (engagement-optimized facts per category)
+- [x] LLM-powered script generation (45-second narrations)
+- [x] LLM-enhanced visual keyword extraction
 
 ### Phase 4: Timeline Features
-- [ ] Drag-and-drop clip placement with magnetic snapping
-- [ ] Auto-Caption as editable timeline objects
-- [ ] Auto-Crop as editable timeline objects
-- [ ] B-roll auto-assembly (stipple onto video track)
-- [ ] Multi-track audio mixing
-- [ ] Non-destructive effect stack
+- [x] Drag-and-drop clip placement with magnetic snapping
+- [x] Auto-Caption as editable timeline objects
+- [x] Auto-Crop as editable timeline objects
+- [x] B-roll auto-assembly (stock footage stipple onto video track)
+- [x] Multi-track audio mixing (TTS + background music via FFmpeg amix)
+- [x] Non-destructive effect stack (proxy editing, original for render)
 
 ### Phase 5: Viral Scout
-- [ ] YouTube trending integration (API + yt-dlp fallback)
-- [ ] Twitch Helix API integration
-- [ ] In-app WebView with "Analyze for Viral Clips" button
-- [ ] Background monitoring worker
-- [ ] "Recommended to Clip" feed UI
+- [x] YouTube trending integration (Data API v3 + yt-dlp fallback)
+- [x] Twitch Helix API integration (top games → top clips)
+- [x] Channel-first discovery (search channel → VODs → clips)
+- [x] Clip download and stream URL resolution
+- [x] "Recommended to Clip" feed UI with velocity/engagement ranking
 
 ### Phase 6: Polish & Distribution
-- [ ] Windows installer (MSIX)
-- [ ] Auto-update mechanism
-- [ ] Onboarding wizard
-- [ ] Error reporting and crash analytics
-- [ ] Performance profiling and optimization
+- [x] Windows installer (Inno Setup with VBS launcher)
+- [x] Auto-update mechanism (GitHub Releases check + download)
+- [x] Onboarding wizard (first-launch API key setup)
+- [x] Error reporting and dev console logging
+- [x] Performance optimization (proxy playback, ValueNotifier streams)
 
 ## Technical Constraints
 

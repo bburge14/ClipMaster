@@ -1705,12 +1705,11 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
                 if styled:
                     logger.info("Using font (%s): %s", style_suffix, styled[0])
                     return styled[0]
-                # Only fall back to any match if no specific style requested
-                if matches and not want_bold and not want_italic:
-                    valid = [m for m in matches if _is_valid_font_file(m)]
-                    if valid:
-                        logger.info("Using font (fallback): %s", valid[0])
-                        return valid[0]
+                # Fall back to any valid match for the same font family
+                valid = [m for m in matches if _is_valid_font_file(m)]
+                if valid:
+                    logger.info("Using font (style %s not found, fallback): %s", style_suffix, valid[0])
+                    return valid[0]
 
     # Not found on system — download from Google Fonts
     if preferred_name:
@@ -1756,6 +1755,7 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
 
 # Google Fonts direct download URLs (regular weight, TTF only — FFmpeg cannot read woff2)
 _GOOGLE_FONT_URLS = {
+    "Inter": "https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfAZ9hiA.ttf",
     "Roboto": "https://fonts.gstatic.com/s/roboto/v47/KFOMCnqEu92Fr1ME7kSn66aGLdTylUAMQXC89YmC2DPNWubEbGmT.ttf",
     "Montserrat": "https://fonts.gstatic.com/s/montserrat/v29/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw5aXo.ttf",
     "Oswald": "https://fonts.gstatic.com/s/oswald/v53/TK3_WkUHHAIjg75cFRf3bXL8LICs1_FvsUZiYA.ttf",

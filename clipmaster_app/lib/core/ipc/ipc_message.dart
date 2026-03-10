@@ -42,6 +42,7 @@ enum MessageType {
   generateTts,
   analyzeScript,
   queryStockFootage,
+  searchMusic,
   scoutTrending,
   scoutChannel,
   scoutVods,

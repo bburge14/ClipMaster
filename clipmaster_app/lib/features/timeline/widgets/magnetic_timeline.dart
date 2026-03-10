@@ -3827,8 +3827,9 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       final outputPath = '${tempDir.path}/tts_voiceover_${DateTime.now().millisecondsSinceEpoch}.mp3';
 
       // Send TTS request via IPC to Python backend
-      final result = await IpcClient.instance.sendRequest(IpcMessage(
-        type: 'generate_tts',
+      final ipc = ref.read(ipcClientProvider);
+      final result = await ipc.send(IpcMessage(
+        type: MessageType.generateTts,
         payload: {
           'text': project.scriptText!,
           'voice': project.selectedVoice.name,
@@ -4020,8 +4021,9 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       _musicResults = [];
     });
     try {
-      final result = await IpcClient.instance.sendRequest(IpcMessage(
-        type: 'search_music',
+      final ipc = ref.read(ipcClientProvider);
+      final result = await ipc.send(IpcMessage(
+        type: MessageType.searchMusic,
         payload: {'query': query, 'limit': 20},
       ));
       if (mounted) {

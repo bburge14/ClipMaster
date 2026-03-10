@@ -94,6 +94,10 @@ class CaptionStyle {
   final double positionX;
   final double positionY;
 
+  /// Text box size (0.0 – 1.0 normalised, null = auto-fit).
+  final double? boxWidth;
+  final double? boxHeight;
+
   const CaptionStyle({
     this.fontFamily = 'Inter',
     this.fontSize = 36,
@@ -104,6 +108,8 @@ class CaptionStyle {
     this.isItalic = false,
     this.positionX = 0.5,
     this.positionY = 0.75,
+    this.boxWidth,
+    this.boxHeight,
   });
 
   CaptionStyle copyWith({
@@ -116,6 +122,9 @@ class CaptionStyle {
     bool? isItalic,
     double? positionX,
     double? positionY,
+    double? boxWidth,
+    double? boxHeight,
+    bool clearBoxSize = false,
   }) {
     return CaptionStyle(
       fontFamily: fontFamily ?? this.fontFamily,
@@ -127,6 +136,8 @@ class CaptionStyle {
       isItalic: isItalic ?? this.isItalic,
       positionX: positionX ?? this.positionX,
       positionY: positionY ?? this.positionY,
+      boxWidth: clearBoxSize ? null : (boxWidth ?? this.boxWidth),
+      boxHeight: clearBoxSize ? null : (boxHeight ?? this.boxHeight),
     );
   }
 }

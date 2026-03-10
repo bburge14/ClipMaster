@@ -15,6 +15,7 @@ import '../../../core/services/api_key_service.dart';
 import '../../../core/services/project_state.dart';
 import '../../../core/ui/video_player_overlay.dart';
 import '../../../core/utils/time_format.dart';
+import '../providers/editor_layout_provider.dart';
 import 'script_generator_panel.dart';
 
 /// The Magnetic Timeline — the core editing UI for ClipMaster Pro.
@@ -83,6 +84,14 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   double _timelinePanelHeight = 280.0;
   static const double _minTimelineHeight = 160.0;
   static const double _maxTimelineHeight = 600.0;
+
+  // Resizable right panel width
+  double _rightPanelWidth = 340.0;
+  static const double _minRightPanelWidth = 280.0;
+  static const double _maxRightPanelWidth = 600.0;
+
+  // Whether the toolbar strip is visible (toggled via View menu)
+  bool _toolbarVisible = true;
 
   // Selected asset for property editing
   String? _selectedAssetId;
@@ -739,6 +748,8 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       _ttsAudioPath = audioAsset!.filePath;
     }
 
+    final layout = ref.watch(editorLayoutProvider);
+
     return Focus(
       autofocus: true,
       onKeyEvent: (node, event) {
@@ -781,121 +792,645 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         }
         return KeyEventResult.ignored;
       },
-      child: Row(
+      child: Column(
         children: [
-          // Main timeline area
-        Expanded(
-          child: Column(
-            children: [
-              // Top bar: video preview + controls + script
-              Expanded(
-                child: Container(
-                  color: const Color(0xFF0A0A14),
-                  child: _importedVideoPath == null && project.scriptText == null
-                      ? _buildEmptyPreview()
-                      : _buildProjectView(project),
-                ),
-              ),
-              const Divider(height: 1),
-              // Progress bar (when busy)
-              if (_isBusy)
-                Container(
-                  color: const Color(0xFF1E1E2E),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(
+          // ─── MENU BAR (File, Edit, View, Help) ───
+          _buildMenuBar(project),
+          // ─── ACTION TOOLBAR (toggleable via View menu) ───
+          if (_toolbarVisible)
+            _buildActionToolbar(project),
+          // ─── MAIN CONTENT AREA ───
+          Expanded(
+            child: Row(
+              children: [
+                // Main editor area (preview + timeline)
+                Expanded(
+                  child: Column(
                     children: [
-                      SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white.withOpacity(0.5),
+                      // Top bar: video preview + controls + script
+                      Expanded(
+                        child: Container(
+                          color: const Color(0xFF0A0A14),
+                          child: _importedVideoPath == null && project.scriptText == null
+                              ? _buildEmptyPreview()
+                              : _buildProjectView(project),
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      Text(
-                        '$_importStage... $_importPercent%',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.white.withOpacity(0.5),
-                        ),
-                      ),
-                      const Spacer(),
-                      SizedBox(
-                        width: 120,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: _importPercent / 100,
-                            backgroundColor: Colors.white10,
+                      const Divider(height: 1),
+                      // Progress bar (when busy)
+                      if (_isBusy)
+                        Container(
+                          color: const Color(0xFF1E1E2E),
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          child: Row(
+                            children: [
+                              SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white.withOpacity(0.5),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                '$_importStage... $_importPercent%',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.white.withOpacity(0.5),
+                                ),
+                              ),
+                              const Spacer(),
+                              SizedBox(
+                                width: 120,
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: LinearProgressIndicator(
+                                    value: _importPercent / 100,
+                                    backgroundColor: Colors.white10,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
+                      const Divider(height: 1),
+                      // Resizable drag handle for timeline
+                      GestureDetector(
+                        onVerticalDragUpdate: (details) {
+                          setState(() {
+                            _timelinePanelHeight = (_timelinePanelHeight - details.delta.dy)
+                                .clamp(_minTimelineHeight, _maxTimelineHeight);
+                          });
+                        },
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.resizeRow,
+                          child: Container(
+                            height: 8,
+                            color: const Color(0xFF1A1A2A),
+                            child: Center(
+                              child: Container(
+                                width: 40,
+                                height: 3,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Transport controls bar
+                      _buildTransportBar(project),
+                      const Divider(height: 1),
+                      // Editor toolbar (tools, split, delete, etc.)
+                      _buildEditorToolbar(project),
+                      const Divider(height: 1),
+                      // Timeline tracks — resizable
+                      SizedBox(
+                        height: _timelinePanelHeight,
+                        child: _buildTimelineTracks(project),
                       ),
                     ],
                   ),
                 ),
-              const Divider(height: 1),
-              // Resizable drag handle for timeline
-              GestureDetector(
-                onVerticalDragUpdate: (details) {
-                  setState(() {
-                    _timelinePanelHeight = (_timelinePanelHeight - details.delta.dy)
-                        .clamp(_minTimelineHeight, _maxTimelineHeight);
-                  });
-                },
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.resizeRow,
-                  child: Container(
-                    height: 8,
-                    color: const Color(0xFF1A1A2A),
-                    child: Center(
+                // Right side panel (resizable with drag handle)
+                if (_rightPanel != _RightPanel.none) ...[
+                  // Resizable drag handle (vertical)
+                  GestureDetector(
+                    onHorizontalDragUpdate: (details) {
+                      setState(() {
+                        _rightPanelWidth = (_rightPanelWidth - details.delta.dx)
+                            .clamp(_minRightPanelWidth, _maxRightPanelWidth);
+                      });
+                    },
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeColumn,
                       child: Container(
-                        width: 40,
-                        height: 3,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(2),
+                        width: 6,
+                        color: const Color(0xFF1A1A2A),
+                        child: Center(
+                          child: Container(
+                            width: 2,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(1),
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ),
+                  SizedBox(
+                    width: _rightPanelWidth,
+                    child: Column(
+                      children: [
+                        // Panel header with title and close button
+                        _buildPanelHeader(
+                          title: _rightPanelTitle,
+                          onClose: () => setState(() {
+                            _rightPanel = _RightPanel.none;
+                            _selectedTextElement = _SelectedTextElement.none;
+                          }),
+                        ),
+                        Expanded(
+                          child: _rightPanel == _RightPanel.stockFootage
+                              ? _buildStockFootagePanel()
+                              : _rightPanel == _RightPanel.textEditor
+                                  ? _buildTextEditorPanel(project)
+                                  : _rightPanel == _RightPanel.voicePicker
+                                      ? _buildVoicePanel(project)
+                                      : _rightPanel == _RightPanel.assetProperties
+                                          ? _buildAssetPropertiesPanel(project)
+                                          : _rightPanel == _RightPanel.aiCreate
+                                              ? _buildAiCreatePanel(project)
+                                              : _buildLayersPanel(project),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Right panel title getter ───
+  String get _rightPanelTitle => switch (_rightPanel) {
+        _RightPanel.stockFootage => 'Stock Footage',
+        _RightPanel.textEditor => 'Text / Font',
+        _RightPanel.voicePicker => 'Voice Picker',
+        _RightPanel.layers => 'Layers',
+        _RightPanel.assetProperties => 'Properties',
+        _RightPanel.aiCreate => 'AI Create',
+        _RightPanel.none => '',
+      };
+
+  // ─── Menu Bar (File, Edit, View, Help) — Adobe-style ───
+  Widget _buildMenuBar(ProjectState project) {
+    return Container(
+      height: 30,
+      color: const Color(0xFF18182A),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Row(
+        children: [
+          _menuBarButton('File', [
+            _MenuAction('Import File...', Icons.folder_open, _isBusy ? null : _importVideo),
+            _MenuAction('Download URL...', Icons.download, _isBusy ? null : () => _downloadVideo()),
+            _MenuAction.separator(),
+            _MenuAction('Generate Proxy', Icons.high_quality,
+                _importedVideoPath != null && !_isBusy && _proxyPath == null
+                    ? _generateProxy : null),
+            _MenuAction('Transcribe', Icons.subtitles,
+                _importedVideoPath != null && !_isBusy && _transcriptSegments.isEmpty
+                    ? _transcribeVideo : null),
+            _MenuAction.separator(),
+            _MenuAction('Render Short...', Icons.movie_creation,
+                project.scriptText != null && !_isBusy ? _renderVideo : null),
+          ]),
+          _menuBarButton('Edit', [
+            _MenuAction('Split at Playhead', Icons.splitscreen,
+                _selectedAssetId != null ? _splitAtPlayhead : null, shortcut: 'S'),
+            _MenuAction('Duplicate', Icons.copy,
+                _selectedAssetId != null ? _duplicateSelected : null, shortcut: 'Ctrl+D'),
+            _MenuAction('Delete', Icons.delete_outline,
+                _selectedAssetId != null ? _deleteSelected : null, shortcut: 'Del'),
+            _MenuAction.separator(),
+            _MenuAction('Select Tool', Icons.near_me,
+                () => setState(() => _activeTool = _EditorTool.select), shortcut: 'V'),
+            _MenuAction('Razor Tool', Icons.content_cut,
+                () => setState(() => _activeTool = _EditorTool.razor), shortcut: 'C'),
+            _MenuAction('Hand Tool', Icons.pan_tool_alt,
+                () => setState(() => _activeTool = _EditorTool.hand), shortcut: 'H'),
+          ]),
+          _menuBarButton('View', [
+            _MenuAction(
+              _toolbarVisible ? '✓  Toolbar' : '    Toolbar',
+              Icons.build_outlined,
+              () => setState(() => _toolbarVisible = !_toolbarVisible),
+            ),
+            _MenuAction(
+              _rightPanel != _RightPanel.none ? '✓  Right Panel' : '    Right Panel',
+              Icons.view_sidebar_outlined,
+              () => setState(() {
+                if (_rightPanel != _RightPanel.none) {
+                  _rightPanel = _RightPanel.none;
+                } else {
+                  _rightPanel = _RightPanel.layers;
+                }
+              }),
+            ),
+            _MenuAction.separator(),
+            _MenuAction('Stock Footage', Icons.movie_filter,
+                () => setState(() => _rightPanel = _RightPanel.stockFootage)),
+            _MenuAction('Layers', Icons.layers,
+                () => setState(() => _rightPanel = _RightPanel.layers)),
+            _MenuAction('Text / Font', Icons.text_fields,
+                project.scriptText != null
+                    ? () => setState(() => _rightPanel = _RightPanel.textEditor) : null),
+            _MenuAction('Voice Picker', Icons.record_voice_over,
+                project.scriptText != null
+                    ? () => setState(() => _rightPanel = _RightPanel.voicePicker) : null),
+            _MenuAction('AI Create', Icons.auto_awesome,
+                () => setState(() => _rightPanel = _RightPanel.aiCreate)),
+            _MenuAction.separator(),
+            _MenuAction(
+              _snapEnabled ? '✓  Snap to Grid' : '    Snap to Grid',
+              Icons.grid_on,
+              () => setState(() => _snapEnabled = !_snapEnabled),
+            ),
+          ]),
+          _menuBarButton('Help', [
+            _MenuAction('Keyboard Shortcuts', Icons.keyboard, () {
+              _showKeyboardShortcutsDialog();
+            }),
+            _MenuAction('About ClipMaster', Icons.info_outline, () {
+              showAboutDialog(
+                context: context,
+                applicationName: 'ClipMaster Pro',
+                applicationVersion: '1.0.0',
+                applicationIcon: const Icon(Icons.movie_creation, color: Color(0xFF6C5CE7), size: 36),
+              );
+            }),
+          ]),
+          const Spacer(),
+          // Current project info in menu bar
+          if (_importedVideoName != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Text(
+                _importedVideoName!,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.white.withOpacity(0.3),
+                  fontFamily: 'monospace',
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _menuBarButton(String label, List<_MenuAction> actions) {
+    return PopupMenuButton<int>(
+      offset: const Offset(0, 30),
+      color: const Color(0xFF22223A),
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(6),
+        side: BorderSide(color: Colors.white.withOpacity(0.08)),
+      ),
+      itemBuilder: (context) {
+        final items = <PopupMenuEntry<int>>[];
+        for (int i = 0; i < actions.length; i++) {
+          final a = actions[i];
+          if (a.isSeparator) {
+            items.add(const PopupMenuDivider(height: 8));
+          } else {
+            items.add(PopupMenuItem<int>(
+              value: i,
+              enabled: a.onTap != null,
+              height: 32,
+              child: Row(
+                children: [
+                  Icon(a.icon, size: 15,
+                      color: a.onTap != null ? Colors.white54 : Colors.white12),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      a.label,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: a.onTap != null ? Colors.white70 : Colors.white24,
+                      ),
+                    ),
+                  ),
+                  if (a.shortcut != null)
+                    Text(
+                      a.shortcut!,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.white.withOpacity(0.25),
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                ],
+              ),
+            ));
+          }
+        }
+        return items;
+      },
+      onSelected: (index) {
+        if (index >= 0 && index < actions.length && actions[index].onTap != null) {
+          actions[index].onTap!();
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.white.withOpacity(0.6),
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showKeyboardShortcutsDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('Keyboard Shortcuts'),
+        content: SizedBox(
+          width: 300,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _shortcutRow('Space', 'Play / Pause'),
+              _shortcutRow('V', 'Select Tool'),
+              _shortcutRow('C', 'Razor Tool'),
+              _shortcutRow('H', 'Hand Tool'),
+              _shortcutRow('S', 'Split at Playhead'),
+              _shortcutRow('Del', 'Delete Selected'),
+              _shortcutRow('Ctrl+D', 'Duplicate'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _shortcutRow(String key, String desc) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.white.withOpacity(0.1)),
+            ),
+            child: Text(key, style: const TextStyle(fontSize: 11, fontFamily: 'monospace', color: Colors.white70)),
+          ),
+          const SizedBox(width: 12),
+          Text(desc, style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.5))),
+        ],
+      ),
+    );
+  }
+
+  // ─── Action Toolbar (converted from chips) ───
+  Widget _buildActionToolbar(ProjectState project) {
+    return Container(
+      height: 38,
+      color: const Color(0xFF1A1A2E),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        children: [
+          // File operations
+          _toolbarIconButton(Icons.folder_open, 'Import File',
+              _isBusy ? null : _importVideo),
+          _toolbarIconButton(Icons.download, 'Download URL',
+              _isBusy ? null : () => _downloadVideo()),
+          _toolbarDivider(),
+          // Processing
+          if (_importedVideoPath != null) ...[
+            _toolbarButton(
+              icon: Icons.high_quality,
+              label: _proxyPath != null ? 'Proxy' : 'Proxy',
+              active: _proxyPath != null,
+              busy: _isGeneratingProxy,
+              onTap: _isBusy || _proxyPath != null ? null : _generateProxy,
+            ),
+            _toolbarButton(
+              icon: Icons.subtitles,
+              label: _transcriptSegments.isNotEmpty
+                  ? '${_transcriptSegments.length} Captions'
+                  : 'Transcribe',
+              active: _transcriptSegments.isNotEmpty,
+              busy: _isTranscribing,
+              onTap: _isBusy || _transcriptSegments.isNotEmpty
+                  ? null
+                  : _transcribeVideo,
+            ),
+            _toolbarDivider(),
+          ],
+          // Panel toggles
+          _toolbarButton(
+            icon: Icons.movie_filter,
+            label: 'Stock Footage',
+            active: _rightPanel == _RightPanel.stockFootage,
+            onTap: () => setState(() {
+              _rightPanel = _rightPanel == _RightPanel.stockFootage
+                  ? _RightPanel.none
+                  : _RightPanel.stockFootage;
+            }),
+          ),
+          _toolbarButton(
+            icon: Icons.layers,
+            label: 'Layers',
+            active: _rightPanel == _RightPanel.layers,
+            onTap: () => setState(() {
+              _rightPanel = _rightPanel == _RightPanel.layers
+                  ? _RightPanel.none
+                  : _RightPanel.layers;
+            }),
+          ),
+          if (project.scriptText != null) ...[
+            _toolbarButton(
+              icon: Icons.text_fields,
+              label: 'Text / Font',
+              active: _rightPanel == _RightPanel.textEditor,
+              onTap: () => setState(() {
+                _rightPanel = _rightPanel == _RightPanel.textEditor
+                    ? _RightPanel.none
+                    : _RightPanel.textEditor;
+              }),
+            ),
+            _toolbarButton(
+              icon: Icons.record_voice_over,
+              label: project.selectedVoice.label,
+              active: _rightPanel == _RightPanel.voicePicker,
+              onTap: () => setState(() {
+                _rightPanel = _rightPanel == _RightPanel.voicePicker
+                    ? _RightPanel.none
+                    : _RightPanel.voicePicker;
+              }),
+            ),
+          ],
+          _toolbarButton(
+            icon: Icons.auto_awesome,
+            label: 'AI Create',
+            active: _rightPanel == _RightPanel.aiCreate,
+            onTap: () => setState(() {
+              _rightPanel = _rightPanel == _RightPanel.aiCreate
+                  ? _RightPanel.none
+                  : _RightPanel.aiCreate;
+            }),
+          ),
+          const Spacer(),
+          // Render button (in toolbar)
+          if (project.scriptText != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: FilledButton.icon(
+                onPressed: _isBusy ? null : _renderVideo,
+                icon: _isRendering
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.movie_creation, size: 16),
+                label: Text(
+                  _isRendering ? 'Rendering...' : 'Render Short',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  backgroundColor: const Color(0xFF6C5CE7),
+                  minimumSize: const Size(0, 28),
                 ),
               ),
-              // Transport controls bar (play/pause/etc) — now above the timeline tracks
-              _buildTransportBar(project),
-              const Divider(height: 1),
-              // Editor toolbar (tools, split, delete, etc.)
-              _buildEditorToolbar(project),
-              const Divider(height: 1),
-              // Timeline tracks — resizable
-              SizedBox(
-                height: _timelinePanelHeight,
-                child: _buildTimelineTracks(project),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _toolbarIconButton(IconData icon, String tooltip, VoidCallback? onTap) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          width: 30,
+          height: 30,
+          margin: const EdgeInsets.symmetric(horizontal: 1),
+          child: Icon(icon, size: 16,
+              color: onTap != null ? Colors.white54 : Colors.white20),
+        ),
+      ),
+    );
+  }
+
+  Widget _toolbarButton({
+    required IconData icon,
+    required String label,
+    bool active = false,
+    bool busy = false,
+    VoidCallback? onTap,
+  }) {
+    final color = active ? const Color(0xFF6C5CE7) : Colors.white54;
+    return Tooltip(
+      message: label,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          height: 28,
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: active
+                ? const Color(0xFF6C5CE7).withOpacity(0.15)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(4),
+            border: active
+                ? Border.all(color: const Color(0xFF6C5CE7).withOpacity(0.4))
+                : null,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (busy)
+                SizedBox(
+                  width: 13, height: 13,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: color),
+                )
+              else
+                Icon(icon, size: 14, color: color),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: active ? const Color(0xFF6C5CE7) : Colors.white54,
+                  fontWeight: active ? FontWeight.w600 : FontWeight.normal,
+                ),
               ),
             ],
           ),
         ),
-        // Right side panel (stock footage / text editor / asset properties)
-        if (_rightPanel != _RightPanel.none) ...[
-          Container(width: 1, color: Colors.white.withOpacity(0.06)),
-          SizedBox(
-            width: _rightPanel == _RightPanel.aiCreate ? 480 : 320,
-            child: _rightPanel == _RightPanel.stockFootage
-                ? _buildStockFootagePanel()
-                : _rightPanel == _RightPanel.textEditor
-                    ? _buildTextEditorPanel(project)
-                    : _rightPanel == _RightPanel.voicePicker
-                        ? _buildVoicePanel(project)
-                        : _rightPanel == _RightPanel.assetProperties
-                            ? _buildAssetPropertiesPanel(project)
-                            : _rightPanel == _RightPanel.aiCreate
-                                ? _buildAiCreatePanel(project)
-                                : _buildLayersPanel(project),
+      ),
+    );
+  }
+
+  Widget _toolbarDivider() {
+    return Container(
+      width: 1,
+      height: 20,
+      color: Colors.white10,
+      margin: const EdgeInsets.symmetric(horizontal: 6),
+    );
+  }
+
+  // ─── Panel Header with close button ───
+  Widget _buildPanelHeader({
+    required String title,
+    required VoidCallback onClose,
+  }) {
+    return Container(
+      height: 32,
+      color: const Color(0xFF1A1A2E),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.white60,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const Spacer(),
+          InkWell(
+            onTap: onClose,
+            borderRadius: BorderRadius.circular(4),
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Icon(Icons.close, size: 14,
+                  color: Colors.white.withOpacity(0.4)),
+            ),
           ),
         ],
-      ],
-    ),
+      ),
     );
   }
 
@@ -963,151 +1498,36 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     }
 
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // CENTER: 9:16 Phone Frame Preview — main focus
+          // Constrained to min/max size so resolution doesn't get distorted
           Expanded(
             flex: 3,
-            child: Column(
-              children: [
-                // Action chips bar at top
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    alignment: WrapAlignment.center,
-                    children: [
-                      if (_importedVideoPath != null) ...[
-                        _buildActionChip(
-                          icon: Icons.high_quality,
-                          label: _proxyPath != null
-                              ? 'Proxy Ready'
-                              : 'Generate Proxy',
-                          color: _proxyPath != null
-                              ? const Color(0xFF00C853)
-                              : const Color(0xFF6C5CE7),
-                          busy: _isGeneratingProxy,
-                          onTap: _isBusy || _proxyPath != null
-                              ? null
-                              : _generateProxy,
-                        ),
-                        _buildActionChip(
-                          icon: Icons.subtitles,
-                          label: _transcriptSegments.isNotEmpty
-                              ? '${_transcriptSegments.length} Captions'
-                              : 'Transcribe',
-                          color: _transcriptSegments.isNotEmpty
-                              ? const Color(0xFF00C853)
-                              : const Color(0xFF6C5CE7),
-                          busy: _isTranscribing,
-                          onTap: _isBusy || _transcriptSegments.isNotEmpty
-                              ? null
-                              : _transcribeVideo,
-                        ),
-                      ],
-                      _buildActionChip(
-                        icon: Icons.movie_filter,
-                        label: 'Stock Footage',
-                        color: _rightPanel == _RightPanel.stockFootage
-                            ? const Color(0xFF00C853)
-                            : const Color(0xFF5A2D82),
-                        busy: false,
-                        onTap: () => setState(() {
-                          _rightPanel = _rightPanel == _RightPanel.stockFootage
-                              ? _RightPanel.none
-                              : _RightPanel.stockFootage;
-                        }),
-                      ),
-                      _buildActionChip(
-                        icon: Icons.layers,
-                        label: 'Layers',
-                        color: _rightPanel == _RightPanel.layers
-                            ? const Color(0xFF00C853)
-                            : const Color(0xFF2D6482),
-                        busy: false,
-                        onTap: () => setState(() {
-                          _rightPanel = _rightPanel == _RightPanel.layers
-                              ? _RightPanel.none
-                              : _RightPanel.layers;
-                        }),
-                      ),
-                      if (project.scriptText != null) ...[
-                        _buildActionChip(
-                          icon: Icons.text_fields,
-                          label: 'Text / Font',
-                          color: _rightPanel == _RightPanel.textEditor
-                              ? const Color(0xFF00C853)
-                              : const Color(0xFF82782D),
-                          busy: false,
-                          onTap: () => setState(() {
-                            _rightPanel = _rightPanel == _RightPanel.textEditor
-                                ? _RightPanel.none
-                                : _RightPanel.textEditor;
-                          }),
-                        ),
-                        _buildActionChip(
-                          icon: Icons.record_voice_over,
-                          label: project.selectedVoice.label,
-                          color: _rightPanel == _RightPanel.voicePicker
-                              ? const Color(0xFF00C853)
-                              : const Color(0xFF2D824A),
-                          busy: false,
-                          onTap: () => setState(() {
-                            _rightPanel = _rightPanel == _RightPanel.voicePicker
-                                ? _RightPanel.none
-                                : _RightPanel.voicePicker;
-                          }),
-                        ),
-                      ],
-                      _buildActionChip(
-                        icon: Icons.auto_awesome,
-                        label: 'AI Create',
-                        color: _rightPanel == _RightPanel.aiCreate
-                            ? const Color(0xFF00C853)
-                            : const Color(0xFF6C5CE7),
-                        busy: false,
-                        onTap: () => setState(() {
-                          _rightPanel = _rightPanel == _RightPanel.aiCreate
-                              ? _RightPanel.none
-                              : _RightPanel.aiCreate;
-                        }),
-                      ),
-                    ],
-                  ),
-                ),
-                // Render button
-                if (project.scriptText != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: FilledButton.icon(
-                      onPressed: _isBusy ? null : _renderVideo,
-                      icon: _isRendering
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white),
-                            )
-                          : const Icon(Icons.movie_creation, size: 18),
-                      label: Text(_isRendering ? 'Rendering...' : 'Render Short'),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // Enforce min/max for the preview area
+                const double minPreviewHeight = 200.0;
+                const double maxPreviewWidth = 500.0;
+                return Center(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: minPreviewHeight,
+                      maxWidth: maxPreviewWidth.clamp(0, constraints.maxWidth),
+                      maxHeight: constraints.maxHeight,
                     ),
-                  ),
-                // Phone preview — expanded to fill remaining space
-                Expanded(
-                  child: Center(
                     child: AspectRatio(
                       aspectRatio: 9 / 16,
                       child: _buildPhonePreview(project),
                     ),
                   ),
-                ),
-              ],
+                );
+              },
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 12),
           // RIGHT: Script / transcript sidebar
           SizedBox(
             width: 300,
@@ -1962,24 +2382,6 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                const Icon(Icons.layers, size: 18, color: Color(0xFF2D6482)),
-                const SizedBox(width: 8),
-                const Text('Layers / Assets',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  onPressed: () =>
-                      setState(() => _rightPanel = _RightPanel.none),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
           // Asset list
           Expanded(
             child: allAssets.isEmpty
@@ -2151,27 +2553,26 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             child: Row(
               children: [
-                Icon(_trackIcon(asset.track), size: 18, color: trackColor),
-                const SizedBox(width: 8),
+                Icon(_trackIcon(asset.track), size: 16, color: trackColor),
+                const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     asset.label,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.arrow_back, size: 18),
-                  onPressed: () => setState(() => _rightPanel = _RightPanel.layers),
-                  tooltip: 'Back to Layers',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  onPressed: () => setState(() => _rightPanel = _RightPanel.none),
+                InkWell(
+                  onTap: () => setState(() => _rightPanel = _RightPanel.layers),
+                  borderRadius: BorderRadius.circular(4),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Icon(Icons.arrow_back, size: 14, color: Colors.white38),
+                  ),
                 ),
               ],
             ),
@@ -2474,23 +2875,6 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.movie_filter,
-                        size: 18, color: Color(0xFF5A2D82)),
-                    const SizedBox(width: 8),
-                    const Text('Stock Footage',
-                        style: TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w600)),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 18),
-                      onPressed: () =>
-                          setState(() => _rightPanel = _RightPanel.none),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
                     Expanded(
                       child: TextField(
                         controller: _stockSearchController,
@@ -2670,28 +3054,6 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                const Icon(Icons.text_fields,
-                    size: 18, color: Color(0xFF82782D)),
-                const SizedBox(width: 8),
-                const Text('Text & Font',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  onPressed: () =>
-                      setState(() {
-                        _rightPanel = _RightPanel.none;
-                        _selectedTextElement = _SelectedTextElement.none;
-                      }),
-                ),
-              ],
-            ),
-          ),
           // Title / Body toggle tabs
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 12),
@@ -2938,26 +3300,6 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                const Icon(Icons.record_voice_over,
-                    size: 18, color: Color(0xFF2D824A)),
-                const SizedBox(width: 8),
-                const Text('Voice',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  onPressed: () =>
-                      setState(() => _rightPanel = _RightPanel.none),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
           Expanded(
             child: ListView(
               physics: const ClampingScrollPhysics(),
@@ -3482,6 +3824,25 @@ enum _RightPanel { none, stockFootage, textEditor, voicePicker, layers, assetPro
 enum _SelectedTextElement { none, title, body }
 
 enum _EditorTool { select, razor, hand }
+
+/// Menu action item for the desktop-style menu bar.
+class _MenuAction {
+  final String label;
+  final IconData? icon;
+  final VoidCallback? onTap;
+  final String? shortcut;
+  final bool isSeparator;
+
+  _MenuAction(this.label, this.icon, this.onTap, {this.shortcut})
+      : isSeparator = false;
+
+  _MenuAction.separator()
+      : label = '',
+        icon = null,
+        onTap = null,
+        shortcut = null,
+        isSeparator = true;
+}
 
 /// Paints time ruler ticks and labels
 class _TimeRulerPainter extends CustomPainter {

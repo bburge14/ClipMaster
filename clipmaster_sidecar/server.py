@@ -571,11 +571,17 @@ async def _handle_create_short(
         output_dir = os.path.join(tempfile.gettempdir(), "clipmaster_shorts")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Step 1: Generate TTS voiceover
-    await _send(ws, IpcMessage.progress(msg.id, "Generating voiceover", 10))
-    tts_result = await generate_tts(text, api_key, voice=voice)
-    audio_path = tts_result["audio_path"]
-    duration_est = tts_result["duration_estimate"]
+    # Step 1: Generate TTS voiceover (or reuse pre-generated audio)
+    pre_tts = msg.payload.get("tts_audio_path", "")
+    if pre_tts and os.path.isfile(pre_tts):
+        await _send(ws, IpcMessage.progress(msg.id, "Using pre-generated voiceover", 10))
+        audio_path = pre_tts
+        duration_est = 0.0
+    else:
+        await _send(ws, IpcMessage.progress(msg.id, "Generating voiceover", 10))
+        tts_result = await generate_tts(text, api_key, voice=voice)
+        audio_path = tts_result["audio_path"]
+        duration_est = tts_result["duration_estimate"]
 
     # Get actual audio duration via ffprobe
     duration = await _get_audio_duration(ffmpeg, audio_path)

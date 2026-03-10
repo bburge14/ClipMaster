@@ -1743,36 +1743,16 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
 
     return Column(
         children: [
-          // Phone frame header
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: const BoxDecoration(
-              color: Color(0xFF1A1A2A),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Phone frame body — 9:16 aspect ratio
+          // WYSIWYG preview canvas — this is exactly what will render
           Expanded(
             child: Container(
               decoration: BoxDecoration(
                 color: const Color(0xFF0A0A14),
                 border: Border.all(
-                  color: Colors.white.withOpacity(0.1),
-                  width: 2,
+                  color: Colors.white.withOpacity(0.08),
+                  width: 1,
                 ),
+                borderRadius: BorderRadius.circular(4),
               ),
               child: ClipRect(
                 child: LayoutBuilder(
@@ -1808,7 +1788,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         // Dark overlay for readability
                         if (_previewController != null)
                           Container(color: Colors.black.withOpacity(0.3)),
-                        // Title text (top area)
+                        // Title text (top area) — click to select, double-click to edit, drag to move
                         if (hasTitle)
                           Positioned(
                             top: project.titleStyle.positionY * frameH,
@@ -1821,36 +1801,66 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                                   _rightPanel = _RightPanel.textEditor;
                                 });
                               },
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                decoration: BoxDecoration(
-                                  border: _selectedTextElement == _SelectedTextElement.title
-                                      ? Border.all(color: const Color(0xFF6C5CE7), width: 1.5)
-                                      : null,
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  titleText,
-                                  textAlign: TextAlign.center,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontFamily: project.titleStyle.fontFamily,
-                                    fontSize: (project.titleStyle.fontSize * 0.45 * textScale).clamp(10.0, 36.0),
-                                    fontWeight: FontWeight.w800,
-                                    color: Color(project.titleStyle.colorHex),
-                                    shadows: project.titleStyle.hasBorder
-                                        ? const [
-                                            Shadow(color: Colors.black, blurRadius: 6),
-                                            Shadow(color: Colors.black, blurRadius: 12),
-                                          ]
+                              onDoubleTap: () => _showInlineTextEditor(
+                                isTitle: true,
+                                currentText: titleText,
+                                project: project,
+                              ),
+                              onPanUpdate: (details) {
+                                final newY =
+                                    (project.titleStyle.positionY + details.delta.dy / frameH)
+                                        .clamp(0.03, 0.85);
+                                ref.read(projectProvider.notifier).setTitleStyle(
+                                  project.titleStyle.copyWith(positionY: newY),
+                                );
+                              },
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.move,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    border: _selectedTextElement == _SelectedTextElement.title
+                                        ? Border.all(color: const Color(0xFF6C5CE7), width: 1.5)
                                         : null,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        titleText,
+                                        textAlign: TextAlign.center,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontFamily: project.titleStyle.fontFamily,
+                                          fontSize: (project.titleStyle.fontSize * 0.45 * textScale).clamp(10.0, 36.0),
+                                          fontWeight: FontWeight.w800,
+                                          color: Color(project.titleStyle.colorHex),
+                                          shadows: project.titleStyle.hasBorder
+                                              ? const [
+                                                  Shadow(color: Colors.black, blurRadius: 6),
+                                                  Shadow(color: Colors.black, blurRadius: 12),
+                                                ]
+                                              : null,
+                                        ),
+                                      ),
+                                      // Edit hint when selected
+                                      if (_selectedTextElement == _SelectedTextElement.title)
+                                        Text(
+                                          'double-click to edit',
+                                          style: TextStyle(
+                                            fontSize: 8 * textScale,
+                                            color: const Color(0xFF6C5CE7).withOpacity(0.6),
+                                          ),
+                                        ),
+                                    ],
                                   ),
                                 ),
                               ),
                             ),
                           ),
-                        // Script body text (draggable position)
+                        // Script body text (draggable position) — click to select, double-click to edit
                         if (hasScript)
                           Positioned(
                             top: style.positionY * frameH - (30 * textScale),
@@ -1863,6 +1873,11 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                                   _rightPanel = _RightPanel.textEditor;
                                 });
                               },
+                              onDoubleTap: () => _showInlineTextEditor(
+                                isTitle: false,
+                                currentText: scriptText,
+                                project: project,
+                              ),
                               onPanUpdate: (details) {
                                 final newY =
                                     (style.positionY + details.delta.dy / frameH)
@@ -1873,37 +1888,54 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                                       positionY: newY,
                                     ));
                               },
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 3),
-                                decoration: BoxDecoration(
-                                  border: Border.all(
-                                    color: _selectedTextElement == _SelectedTextElement.body
-                                        ? const Color(0xFF6C5CE7)
-                                        : const Color(0xFF6C5CE7).withOpacity(0.3),
-                                    width: _selectedTextElement == _SelectedTextElement.body ? 1.5 : 1,
+                              child: MouseRegion(
+                                cursor: SystemMouseCursors.move,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                      color: _selectedTextElement == _SelectedTextElement.body
+                                          ? const Color(0xFF6C5CE7)
+                                          : const Color(0xFF6C5CE7).withOpacity(0.3),
+                                      width: _selectedTextElement == _SelectedTextElement.body ? 1.5 : 1,
+                                    ),
+                                    borderRadius: BorderRadius.circular(4),
                                   ),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  scriptText,
-                                  textAlign: TextAlign.center,
-                                  maxLines: 6,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontFamily: style.fontFamily,
-                                    fontSize:
-                                        (style.fontSize * 0.3 * textScale).clamp(7.0, 28.0),
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(style.colorHex),
-                                    height: 1.4,
-                                    shadows: style.hasBorder
-                                        ? const [
-                                            Shadow(
-                                                color: Colors.black,
-                                                blurRadius: 4),
-                                          ]
-                                        : null,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        scriptText,
+                                        textAlign: TextAlign.center,
+                                        maxLines: 6,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontFamily: style.fontFamily,
+                                          fontSize:
+                                              (style.fontSize * 0.3 * textScale).clamp(7.0, 28.0),
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(style.colorHex),
+                                          height: 1.4,
+                                          shadows: style.hasBorder
+                                              ? const [
+                                                  Shadow(
+                                                      color: Colors.black,
+                                                      blurRadius: 4),
+                                                ]
+                                              : null,
+                                        ),
+                                      ),
+                                      // Edit hint when selected
+                                      if (_selectedTextElement == _SelectedTextElement.body)
+                                        Text(
+                                          'double-click to edit',
+                                          style: TextStyle(
+                                            fontSize: 8 * textScale,
+                                            color: const Color(0xFF6C5CE7).withOpacity(0.6),
+                                          ),
+                                        ),
+                                    ],
                                   ),
                                 ),
                               ),
@@ -1959,29 +1991,86 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
               ),
             ),
           ),
-          // Phone frame footer
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            decoration: const BoxDecoration(
-              color: Color(0xFF1A1A2A),
-              borderRadius:
-                  BorderRadius.vertical(bottom: Radius.circular(16)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  '9:16 Preview',
-                  style: TextStyle(
-                    fontSize: 9,
-                    color: Colors.white.withOpacity(0.2),
-                  ),
-                ),
-              ],
+          // Preview label — WYSIWYG indicator
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              '9:16 WYSIWYG Preview — what you see is what renders',
+              style: TextStyle(
+                fontSize: 9,
+                color: Colors.white.withOpacity(0.2),
+              ),
             ),
           ),
         ],
     );
+  }
+
+  /// Shows a dialog for inline text editing (double-click on text in preview).
+  void _showInlineTextEditor({
+    required bool isTitle,
+    required String currentText,
+    required ProjectState project,
+  }) {
+    final controller = TextEditingController(text: currentText);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text(isTitle ? 'Edit Title' : 'Edit Body Text'),
+        content: SizedBox(
+          width: 400,
+          child: TextField(
+            controller: controller,
+            maxLines: isTitle ? 3 : 10,
+            autofocus: true,
+            style: const TextStyle(fontSize: 14, color: Colors.white),
+            decoration: InputDecoration(
+              hintText: isTitle ? 'Enter title...' : 'Enter body text...',
+              hintStyle: TextStyle(color: Colors.white.withOpacity(0.2)),
+              filled: true,
+              fillColor: Colors.white.withOpacity(0.05),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFF6C5CE7)),
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final newText = controller.text;
+              if (isTitle) {
+                ref.read(projectProvider.notifier).setScript(
+                  title: newText,
+                  text: project.scriptText,
+                );
+              } else {
+                ref.read(projectProvider.notifier).setScript(
+                  title: project.scriptTitle,
+                  text: newText,
+                );
+              }
+              Navigator.of(ctx).pop();
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF6C5CE7),
+            ),
+            child: const Text('Apply'),
+          ),
+        ],
+      ),
+    ).then((_) => controller.dispose());
   }
 
   Widget _posPresetButton(
@@ -2376,26 +2465,93 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
 
   Widget _buildLayersPanel(ProjectState project) {
     final allAssets = project.assets;
+    final hasTitle = project.scriptTitle != null && project.scriptTitle!.isNotEmpty;
+    final hasBody = project.scriptText != null && project.scriptText!.isNotEmpty;
+    final hasAnyContent = allAssets.isNotEmpty || hasTitle || hasBody;
 
     return Container(
       color: const Color(0xFF1A1A2A),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Text overlay virtual layers
+          if (hasTitle || hasBody) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              child: Text('Text Layers',
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                      color: Colors.white.withOpacity(0.3), letterSpacing: 1)),
+            ),
+            if (hasTitle)
+              _buildTextLayerItem(
+                label: project.scriptTitle!,
+                icon: Icons.title,
+                color: const Color(0xFF82782D),
+                isSelected: _selectedTextElement == _SelectedTextElement.title,
+                onTap: () => setState(() {
+                  _selectedTextElement = _SelectedTextElement.title;
+                  _rightPanel = _RightPanel.textEditor;
+                }),
+                onVisibilityTap: () {
+                  // Clear title to hide it
+                  ref.read(projectProvider.notifier).setScript(
+                    title: '',
+                    text: project.scriptText,
+                  );
+                },
+                visible: true,
+              ),
+            if (hasBody)
+              _buildTextLayerItem(
+                label: project.scriptText!,
+                icon: Icons.notes,
+                color: const Color(0xFF2D824A),
+                isSelected: _selectedTextElement == _SelectedTextElement.body,
+                onTap: () => setState(() {
+                  _selectedTextElement = _SelectedTextElement.body;
+                  _rightPanel = _RightPanel.textEditor;
+                }),
+                onVisibilityTap: () {
+                  ref.read(projectProvider.notifier).setScript(
+                    title: project.scriptTitle,
+                    text: '',
+                  );
+                },
+                visible: true,
+              ),
+            const Divider(height: 1),
+            if (allAssets.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                child: Text('Media Layers',
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                        color: Colors.white.withOpacity(0.3), letterSpacing: 1)),
+              ),
+          ],
           // Asset list
           Expanded(
-            child: allAssets.isEmpty
+            child: !hasAnyContent
                 ? Center(
-                    child: Text(
-                      'No assets on the timeline.\nImport media or use Fact Shorts.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white.withOpacity(0.3),
-                      ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.layers, size: 32,
+                            color: Colors.white.withOpacity(0.1)),
+                        const SizedBox(height: 8),
+                        Text(
+                          'No layers yet.\nImport media or generate a script.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.white.withOpacity(0.3),
+                          ),
+                        ),
+                      ],
                     ),
                   )
-                : ReorderableListView.builder(
+                : allAssets.isEmpty
+                    ? const SizedBox.shrink()
+                    : ReorderableListView.builder(
                     padding: const EdgeInsets.all(8),
                     itemCount: allAssets.length,
                     onReorder: (oldIndex, newIndex) {
@@ -2526,6 +2682,63 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildTextLayerItem({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required bool isSelected,
+    required VoidCallback onTap,
+    required VoidCallback onVisibilityTap,
+    required bool visible,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: Card(
+        color: isSelected
+            ? const Color(0xFF6C5CE7).withOpacity(0.15)
+            : const Color(0xFF1E1E2E),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: isSelected
+              ? const BorderSide(color: Color(0xFF6C5CE7), width: 1)
+              : BorderSide.none,
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                Container(
+                  width: 4,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(icon, size: 16, color: color),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Icon(Icons.edit, size: 14,
+                    color: Colors.white.withOpacity(0.3)),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -3133,6 +3346,57 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // ─── TEXT CONTENT EDITING ───
+                  Text(
+                    isTitle ? 'Title Text' : 'Body Text',
+                    style: const TextStyle(fontSize: 11, color: Colors.white54),
+                  ),
+                  const SizedBox(height: 6),
+                  TextFormField(
+                    key: ValueKey('text_content_${isTitle ? "title" : "body"}'),
+                    initialValue: isTitle
+                        ? (project.scriptTitle ?? '')
+                        : (project.scriptText ?? ''),
+                    maxLines: isTitle ? 2 : 8,
+                    minLines: isTitle ? 1 : 3,
+                    style: const TextStyle(fontSize: 13, color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: isTitle ? 'Enter title...' : 'Enter body text...',
+                      hintStyle: TextStyle(color: Colors.white.withOpacity(0.2)),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.05),
+                      contentPadding: const EdgeInsets.all(10),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: Color(0xFF6C5CE7)),
+                      ),
+                    ),
+                    onChanged: (value) {
+                      if (isTitle) {
+                        ref.read(projectProvider.notifier).setScript(
+                          title: value,
+                          text: project.scriptText,
+                        );
+                      } else {
+                        ref.read(projectProvider.notifier).setScript(
+                          title: project.scriptTitle,
+                          text: value,
+                        );
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  const Divider(height: 1),
+                  const SizedBox(height: 12),
+                  // ─── STYLING CONTROLS ───
                   const Text('Font Family',
                       style: TextStyle(fontSize: 11, color: Colors.white54)),
                   const SizedBox(height: 6),

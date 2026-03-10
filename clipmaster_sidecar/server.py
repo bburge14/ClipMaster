@@ -2076,7 +2076,7 @@ async def _handle_resolve_stream_url(ws: WebSocket, msg: IpcMessage) -> None:
         cmd = [
             ytdlp,
             *ytdlp_cookie_args(),
-            "--get-url",
+            "-j",
             "--no-warnings",
             "-f", "best[height<=720]/best",
             url,
@@ -2093,13 +2093,21 @@ async def _handle_resolve_stream_url(ws: WebSocket, msg: IpcMessage) -> None:
             await _send(ws, IpcMessage.error(msg.id, f"Failed to resolve URL: {err}"))
             return
 
-        stream_url = stdout.decode(errors="replace").strip().split("\n")[0]
+        import json as _json
+        info = _json.loads(stdout.decode(errors="replace"))
+        stream_url = info.get("url", "")
         if not stream_url:
             await _send(ws, IpcMessage.error(msg.id, "No stream URL found."))
             return
 
+        # Extract HTTP headers that YouTube requires for playback
+        http_headers = info.get("http_headers", {})
+
         await _send(ws, IpcMessage.progress(msg.id, "Complete", 100))
-        await _send(ws, IpcMessage.result(msg.id, {"stream_url": stream_url}))
+        await _send(ws, IpcMessage.result(msg.id, {
+            "stream_url": stream_url,
+            "http_headers": http_headers,
+        }))
 
     except asyncio.TimeoutError:
         await _send(ws, IpcMessage.error(msg.id, "Timed out resolving stream URL."))

@@ -46,6 +46,7 @@ class _VideoPlayerOverlayState extends ConsumerState<VideoPlayerOverlay> {
   VideoController? _controller;
   bool _isResolving = false;
   String? _error;
+  int _autoRetries = 0;
 
   @override
   void initState() {
@@ -62,6 +63,7 @@ class _VideoPlayerOverlayState extends ConsumerState<VideoPlayerOverlay> {
         url.contains('twitch.tv/');
 
     String playUrl = url;
+    Map<String, String> httpHeaders = {};
 
     if (needsResolve) {
       setState(() => _isResolving = true);
@@ -97,6 +99,14 @@ class _VideoPlayerOverlayState extends ConsumerState<VideoPlayerOverlay> {
           }
 
           playUrl = response.payload['stream_url'] as String? ?? url;
+
+          // Extract HTTP headers required by YouTube/Twitch for playback
+          final rawHeaders = response.payload['http_headers'];
+          if (rawHeaders is Map) {
+            httpHeaders = rawHeaders.map(
+              (k, v) => MapEntry(k.toString(), v.toString()),
+            );
+          }
         }
       } catch (e) {
         if (!mounted) return;
@@ -114,10 +124,18 @@ class _VideoPlayerOverlayState extends ConsumerState<VideoPlayerOverlay> {
     final player = Player();
     final controller = VideoController(player);
 
-    // Listen for errors
+    // Listen for errors – auto-retry once on first playback failure
     player.stream.error.listen((error) {
       if (mounted && error.isNotEmpty) {
-        setState(() => _error = 'Playback error: $error');
+        if (_autoRetries < 1) {
+          _autoRetries++;
+          _player?.dispose();
+          _player = null;
+          _controller = null;
+          _initPlayer();
+        } else {
+          setState(() => _error = 'Playback error: $error');
+        }
       }
     });
 
@@ -131,7 +149,7 @@ class _VideoPlayerOverlayState extends ConsumerState<VideoPlayerOverlay> {
       _controller = controller;
     });
 
-    player.open(Media(playUrl));
+    player.open(Media(playUrl, httpHeaders: httpHeaders));
   }
 
   @override

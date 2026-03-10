@@ -237,23 +237,8 @@ class _ScriptGeneratorPanelState extends ConsumerState<ScriptGeneratorPanel> {
           // Header
           Container(
             padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                const Icon(Icons.auto_awesome,
-                    size: 18, color: Color(0xFF6C5CE7)),
-                const SizedBox(width: 8),
-                const Text('Script Generator',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  onPressed: widget.onClose,
-                ),
-              ],
-            ),
+            child: const SizedBox.shrink(),
           ),
-          const Divider(height: 1),
           // Controls
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),

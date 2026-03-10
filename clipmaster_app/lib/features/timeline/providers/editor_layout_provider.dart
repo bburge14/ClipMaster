@@ -6,6 +6,7 @@ enum EditorPanel {
   leftSidebar,
   rightSidebar,
   timeline,
+  toolbar, // The action toolbar (Stock Footage, Layers, etc.)
 }
 
 /// Which sub-tab is active in the left sidebar.
@@ -42,6 +43,7 @@ class EditorLayoutState {
         EditorPanel.leftSidebar: false,
         EditorPanel.rightSidebar: true,
         EditorPanel.timeline: true,
+        EditorPanel.toolbar: true,
       },
       panelSizes: {
         EditorPanel.leftSidebar: 300.0,
@@ -77,18 +79,21 @@ class PanelConstraints {
   static const double rightSidebarMax = 600.0;
   static const double timelineMin = 150.0;
   static const double timelineMax = 500.0;
-  static const double previewMinHeight = 300.0;
+  static const double previewMinHeight = 200.0;
+  static const double previewMaxHeight = 800.0;
 
   static double minFor(EditorPanel panel) => switch (panel) {
         EditorPanel.leftSidebar => leftSidebarMin,
         EditorPanel.rightSidebar => rightSidebarMin,
         EditorPanel.timeline => timelineMin,
+        EditorPanel.toolbar => 0,
       };
 
   static double maxFor(EditorPanel panel) => switch (panel) {
         EditorPanel.leftSidebar => leftSidebarMax,
         EditorPanel.rightSidebar => rightSidebarMax,
         EditorPanel.timeline => timelineMax,
+        EditorPanel.toolbar => 0,
       };
 }
 

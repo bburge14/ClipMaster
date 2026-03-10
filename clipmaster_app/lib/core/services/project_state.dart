@@ -87,6 +87,8 @@ class CaptionStyle {
   final int colorHex;
   final int bgColorHex;
   final bool hasBorder;
+  final bool isBold;
+  final bool isItalic;
 
   /// Text position within the 9:16 frame (0.0 – 1.0 normalised).
   final double positionX;
@@ -98,6 +100,8 @@ class CaptionStyle {
     this.colorHex = 0xFFFFFFFF,
     this.bgColorHex = 0x00000000,
     this.hasBorder = true,
+    this.isBold = true,
+    this.isItalic = false,
     this.positionX = 0.5,
     this.positionY = 0.75,
   });
@@ -108,6 +112,8 @@ class CaptionStyle {
     int? colorHex,
     int? bgColorHex,
     bool? hasBorder,
+    bool? isBold,
+    bool? isItalic,
     double? positionX,
     double? positionY,
   }) {
@@ -117,6 +123,8 @@ class CaptionStyle {
       colorHex: colorHex ?? this.colorHex,
       bgColorHex: bgColorHex ?? this.bgColorHex,
       hasBorder: hasBorder ?? this.hasBorder,
+      isBold: isBold ?? this.isBold,
+      isItalic: isItalic ?? this.isItalic,
       positionX: positionX ?? this.positionX,
       positionY: positionY ?? this.positionY,
     );

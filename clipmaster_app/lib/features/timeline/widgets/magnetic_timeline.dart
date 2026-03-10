@@ -14,7 +14,6 @@ import '../../../core/ipc/ipc_message.dart';
 import '../../../core/services/api_key_service.dart';
 import '../../../core/services/project_state.dart';
 import '../../../core/ui/video_player_overlay.dart';
-import '../../../core/utils/time_format.dart';
 import '../providers/editor_layout_provider.dart';
 import 'script_generator_panel.dart';
 
@@ -1497,221 +1496,27 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       });
     }
 
+    // ─── Adobe-style Program Monitor ───
+    // The preview fills the entire main area — this IS your editing canvas.
+    // All controls (text, layers, etc.) are in the right panel.
     return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // CENTER: 9:16 Phone Frame Preview — main focus
-          // Constrained to min/max size so resolution doesn't get distorted
-          Expanded(
-            flex: 3,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // Enforce min/max for the preview area
-                const double minPreviewHeight = 200.0;
-                const double maxPreviewWidth = 500.0;
-                return Center(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: minPreviewHeight,
-                      maxWidth: maxPreviewWidth.clamp(0, constraints.maxWidth),
-                      maxHeight: constraints.maxHeight,
-                    ),
-                    child: AspectRatio(
-                      aspectRatio: 9 / 16,
-                      child: _buildPhonePreview(project),
-                    ),
-                  ),
-                );
-              },
+      padding: const EdgeInsets.all(8),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: 200.0,
+                maxWidth: (constraints.maxWidth).clamp(200, 600),
+                maxHeight: constraints.maxHeight,
+              ),
+              child: AspectRatio(
+                aspectRatio: 9 / 16,
+                child: _buildPhonePreview(project),
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          // RIGHT: Script / transcript sidebar
-          SizedBox(
-            width: 300,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (_importedVideoPath != null) ...[
-                  Row(
-                    children: [
-                      const Icon(Icons.videocam,
-                          color: Color(0xFF6C5CE7), size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _importedVideoName ?? 'Video',
-                          style: const TextStyle(
-                              fontSize: 14, fontWeight: FontWeight.w600),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      _ActionButton(
-                        icon: Icons.folder_open,
-                        label: 'Replace',
-                        onPressed: _isBusy ? null : _importVideo,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                // Script preview
-                if (project.scriptText != null) ...[
-                  Row(
-                    children: [
-                      Text(
-                        project.scriptTitle ?? 'Script',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF6C5CE7),
-                        ),
-                      ),
-                      const Spacer(),
-                      if (_ttsAudioPath != null)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF00C853).withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            'TTS Ready',
-                            style: TextStyle(
-                                fontSize: 10, color: Color(0xFF00C853)),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.03),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: Colors.white.withOpacity(0.06)),
-                      ),
-                      child: SingleChildScrollView(
-                        physics: const ClampingScrollPhysics(),
-                        child: Text(
-                          project.scriptText!,
-                          style: TextStyle(
-                            fontSize: 13,
-                            height: 1.6,
-                            color: Colors.white.withOpacity(0.7),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ] else if (_transcriptSegments.isNotEmpty) ...[
-                  Text(
-                    'Transcript Preview',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white.withOpacity(0.5),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: ListView.builder(
-                      physics: const ClampingScrollPhysics(),
-                      itemCount: _transcriptSegments.length,
-                      itemBuilder: (context, index) {
-                        final seg = _transcriptSegments[index];
-                        final start =
-                            (seg['start'] as num?)?.toDouble() ?? 0;
-                        final text = seg['text'] as String? ?? '';
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
-                                width: 60,
-                                child: Text(
-                                  formatTimeMMSS(start),
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontFamily: 'monospace',
-                                    color: Colors.white.withOpacity(0.3),
-                                  ),
-                                ),
-                              ),
-                              Expanded(
-                                child: Text(
-                                  text,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.white.withOpacity(0.6),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ] else ...[
-                  Expanded(
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.movie_creation,
-                              size: 32,
-                              color: Colors.white.withOpacity(0.1)),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Use Fact Shorts to generate a script,\nor import a video and transcribe it.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.white.withOpacity(0.2),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-                // B-roll thumbnails
-                if (project.assets
-                    .where((a) => a.track == TimelineTrack.broll)
-                    .isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    'B-Roll (${project.assets.where((a) => a.track == TimelineTrack.broll).length})',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white.withOpacity(0.5),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    height: 120,
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      physics: const ClampingScrollPhysics(),
-                      children: project.assets
-                          .where((a) => a.track == TimelineTrack.broll)
-                          .map((a) => _buildBrollThumb(a))
-                          .toList(),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -1827,22 +1632,30 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Text(
-                                        titleText,
-                                        textAlign: TextAlign.center,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontFamily: project.titleStyle.fontFamily,
-                                          fontSize: (project.titleStyle.fontSize * 0.45 * textScale).clamp(10.0, 36.0),
-                                          fontWeight: FontWeight.w800,
-                                          color: Color(project.titleStyle.colorHex),
-                                          shadows: project.titleStyle.hasBorder
-                                              ? const [
-                                                  Shadow(color: Colors.black, blurRadius: 6),
-                                                  Shadow(color: Colors.black, blurRadius: 12),
-                                                ]
-                                              : null,
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Color(project.titleStyle.bgColorHex),
+                                          borderRadius: BorderRadius.circular(3),
+                                        ),
+                                        child: Text(
+                                          titleText,
+                                          textAlign: TextAlign.center,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontFamily: project.titleStyle.fontFamily,
+                                            fontSize: (project.titleStyle.fontSize * 0.45 * textScale).clamp(10.0, 36.0),
+                                            fontWeight: project.titleStyle.isBold ? FontWeight.w800 : FontWeight.w400,
+                                            fontStyle: project.titleStyle.isItalic ? FontStyle.italic : FontStyle.normal,
+                                            color: Color(project.titleStyle.colorHex),
+                                            shadows: project.titleStyle.hasBorder
+                                                ? const [
+                                                    Shadow(color: Colors.black, blurRadius: 6),
+                                                    Shadow(color: Colors.black, blurRadius: 12),
+                                                  ]
+                                                : null,
+                                          ),
                                         ),
                                       ),
                                       // Edit hint when selected
@@ -1905,25 +1718,33 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Text(
-                                        scriptText,
-                                        textAlign: TextAlign.center,
-                                        maxLines: 6,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontFamily: style.fontFamily,
-                                          fontSize:
-                                              (style.fontSize * 0.3 * textScale).clamp(7.0, 28.0),
-                                          fontWeight: FontWeight.w600,
-                                          color: Color(style.colorHex),
-                                          height: 1.4,
-                                          shadows: style.hasBorder
-                                              ? const [
-                                                  Shadow(
-                                                      color: Colors.black,
-                                                      blurRadius: 4),
-                                                ]
-                                              : null,
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Color(style.bgColorHex),
+                                          borderRadius: BorderRadius.circular(3),
+                                        ),
+                                        child: Text(
+                                          scriptText,
+                                          textAlign: TextAlign.center,
+                                          maxLines: 6,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontFamily: style.fontFamily,
+                                            fontSize:
+                                                (style.fontSize * 0.3 * textScale).clamp(7.0, 28.0),
+                                            fontWeight: style.isBold ? FontWeight.w700 : FontWeight.w400,
+                                            fontStyle: style.isItalic ? FontStyle.italic : FontStyle.normal,
+                                            color: Color(style.colorHex),
+                                            height: 1.4,
+                                            shadows: style.hasBorder
+                                                ? const [
+                                                    Shadow(
+                                                        color: Colors.black,
+                                                        blurRadius: 4),
+                                                  ]
+                                                : null,
+                                          ),
                                         ),
                                       ),
                                       // Edit hint when selected
@@ -3396,38 +3217,99 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                   const SizedBox(height: 16),
                   const Divider(height: 1),
                   const SizedBox(height: 12),
-                  // ─── STYLING CONTROLS ───
+                  // ─── FONT FAMILY ───
                   const Text('Font Family',
                       style: TextStyle(fontSize: 11, color: Colors.white54)),
                   const SizedBox(height: 6),
-                  DropdownButton<String>(
-                    value: style.fontFamily,
-                    isExpanded: true,
-                    items: ['Inter', 'Roboto', 'Montserrat', 'Oswald', 'Lato', 'Poppins']
-                        .map((f) => DropdownMenuItem(
-                            value: f,
-                            child: Text(f, style: const TextStyle(fontSize: 13))))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) {
-                        updateStyle(style.copyWith(fontFamily: v));
-                      }
-                    },
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.white.withOpacity(0.1)),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: style.fontFamily,
+                        isExpanded: true,
+                        dropdownColor: const Color(0xFF22223A),
+                        style: const TextStyle(fontSize: 13, color: Colors.white),
+                        items: ['Inter', 'Roboto', 'Montserrat', 'Oswald', 'Lato', 'Poppins']
+                            .map((f) => DropdownMenuItem(
+                                value: f,
+                                child: Text(f, style: TextStyle(
+                                  fontSize: 13,
+                                  fontFamily: f,
+                                ))))
+                            .toList(),
+                        onChanged: (v) {
+                          if (v != null) {
+                            updateStyle(style.copyWith(fontFamily: v));
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // ─── FONT SIZE ───
+                  Row(
+                    children: [
+                      const Text('Size',
+                          style: TextStyle(fontSize: 11, color: Colors.white54)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Slider(
+                          value: style.fontSize.clamp(12, 72),
+                          min: 12,
+                          max: 72,
+                          divisions: 30,
+                          label: '${style.fontSize.toInt()}px',
+                          onChanged: (v) {
+                            updateStyle(style.copyWith(fontSize: v));
+                          },
+                        ),
+                      ),
+                      SizedBox(
+                        width: 48,
+                        child: Text(
+                          '${style.fontSize.toInt()}px',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.white.withOpacity(0.5),
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  // ─── BOLD / ITALIC / BORDER TOGGLES ───
+                  Row(
+                    children: [
+                      _styleToggleButton(
+                        icon: Icons.format_bold,
+                        label: 'B',
+                        active: style.isBold,
+                        onTap: () => updateStyle(style.copyWith(isBold: !style.isBold)),
+                      ),
+                      const SizedBox(width: 6),
+                      _styleToggleButton(
+                        icon: Icons.format_italic,
+                        label: 'I',
+                        active: style.isItalic,
+                        onTap: () => updateStyle(style.copyWith(isItalic: !style.isItalic)),
+                      ),
+                      const SizedBox(width: 6),
+                      _styleToggleButton(
+                        icon: Icons.border_color,
+                        label: 'Shadow',
+                        active: style.hasBorder,
+                        onTap: () => updateStyle(style.copyWith(hasBorder: !style.hasBorder)),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 16),
-                  const Text('Font Size',
-                      style: TextStyle(fontSize: 11, color: Colors.white54)),
-                  Slider(
-                    value: style.fontSize,
-                    min: 20,
-                    max: 72,
-                    divisions: 26,
-                    label: '${style.fontSize.toInt()}px',
-                    onChanged: (v) {
-                      updateStyle(style.copyWith(fontSize: v));
-                    },
-                  ),
-                  const SizedBox(height: 16),
+                  // ─── TEXT COLOR ───
                   const Text('Text Color',
                       style: TextStyle(fontSize: 11, color: Colors.white54)),
                   const SizedBox(height: 6),
@@ -3456,18 +3338,61 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     ],
                   ),
                   const SizedBox(height: 16),
-                  SwitchListTile(
-                    title: const Text('Text Border',
-                        style: TextStyle(fontSize: 13)),
-                    value: style.hasBorder,
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    onChanged: (v) {
-                      updateStyle(style.copyWith(hasBorder: v));
-                    },
+                  // ─── BACKGROUND COLOR & TRANSPARENCY ───
+                  const Text('Background Color',
+                      style: TextStyle(fontSize: 11, color: Colors.white54)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _colorCircle(0x00000000, style.bgColorHex, (c) {
+                        updateStyle(style.copyWith(bgColorHex: c));
+                      }, label: 'None'),
+                      _colorCircle(0x80000000, style.bgColorHex, (c) {
+                        updateStyle(style.copyWith(bgColorHex: c));
+                      }),
+                      _colorCircle(0xCC000000, style.bgColorHex, (c) {
+                        updateStyle(style.copyWith(bgColorHex: c));
+                      }),
+                      _colorCircle(0x806C5CE7, style.bgColorHex, (c) {
+                        updateStyle(style.copyWith(bgColorHex: c));
+                      }),
+                      _colorCircle(0x80FF5252, style.bgColorHex, (c) {
+                        updateStyle(style.copyWith(bgColorHex: c));
+                      }),
+                      _colorCircle(0x8000C853, style.bgColorHex, (c) {
+                        updateStyle(style.copyWith(bgColorHex: c));
+                      }),
+                    ],
                   ),
+                  const SizedBox(height: 6),
+                  // Background opacity slider
+                  if (style.bgColorHex != 0x00000000) ...[
+                    Row(
+                      children: [
+                        const Text('Opacity',
+                            style: TextStyle(fontSize: 10, color: Colors.white38)),
+                        Expanded(
+                          child: Slider(
+                            value: ((style.bgColorHex >> 24) & 0xFF) / 255.0,
+                            min: 0.0,
+                            max: 1.0,
+                            divisions: 20,
+                            label: '${(((style.bgColorHex >> 24) & 0xFF) / 255.0 * 100).toInt()}%',
+                            onChanged: (v) {
+                              final alpha = (v * 255).round();
+                              final rgb = style.bgColorHex & 0x00FFFFFF;
+                              updateStyle(style.copyWith(bgColorHex: (alpha << 24) | rgb));
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  // ─── TEXT POSITION ───
                   if (!isTitle) ...[
-                    const SizedBox(height: 16),
                     const Text('Text Position',
                         style: TextStyle(fontSize: 11, color: Colors.white54)),
                     const SizedBox(height: 8),
@@ -3539,19 +3464,71 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   }
 
   Widget _colorCircle(
-      int colorHex, int selectedHex, ValueChanged<int> onTap) {
+      int colorHex, int selectedHex, ValueChanged<int> onTap,
+      {String? label}) {
     final isSelected = colorHex == selectedHex;
+    final isTransparent = (colorHex >> 24) & 0xFF == 0;
     return GestureDetector(
       onTap: () => onTap(colorHex),
       child: Container(
         width: 32,
         height: 32,
         decoration: BoxDecoration(
-          color: Color(colorHex),
+          color: isTransparent ? Colors.transparent : Color(colorHex),
           shape: BoxShape.circle,
           border: Border.all(
             color: isSelected ? Colors.white : Colors.white24,
             width: isSelected ? 3 : 1,
+          ),
+        ),
+        child: isTransparent
+            ? Center(
+                child: Icon(Icons.block, size: 16,
+                    color: isSelected ? Colors.white : Colors.white38),
+              )
+            : null,
+      ),
+    );
+  }
+
+  Widget _styleToggleButton({
+    required IconData icon,
+    required String label,
+    required bool active,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: active
+                ? const Color(0xFF6C5CE7).withOpacity(0.2)
+                : Colors.white.withOpacity(0.04),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: active
+                  ? const Color(0xFF6C5CE7)
+                  : Colors.white.withOpacity(0.08),
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 16,
+                  color: active ? const Color(0xFF6C5CE7) : Colors.white38),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: active ? FontWeight.w600 : FontWeight.normal,
+                  color: active ? const Color(0xFF6C5CE7) : Colors.white54,
+                ),
+              ),
+            ],
           ),
         ),
       ),

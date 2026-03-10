@@ -668,8 +668,10 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         if (pixabayKey != null) 'pixabay_key': pixabayKey,
 
         // ─── Title styling ───
+        // Scale font size from abstract CaptionStyle units to 1080p render pixels.
+        // Preview uses fontSize * 0.45 on a ~360px frame; render is 1080px (3× wider).
         'title_font_family': titleStyle.fontFamily,
-        'title_font_size_px': titleStyle.fontSize.toInt(),
+        'title_font_size_px': (titleStyle.fontSize * 1.35).round(),
         'title_bold': titleStyle.isBold,
         'title_italic': titleStyle.isItalic,
         'title_color': _hexToFfmpegColor(titleStyle.colorHex),
@@ -680,8 +682,9 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         'title_bg_color': _hexToFfmpegBgColor(titleStyle.bgColorHex),
 
         // ─── Body styling ───
+        // Body preview uses fontSize * 0.3 on ~360px → 0.9× for 1080p
         'body_font_family': bodyStyle.fontFamily,
-        'body_font_size_px': bodyStyle.fontSize.toInt(),
+        'body_font_size_px': (bodyStyle.fontSize * 0.9).round(),
         'body_bold': bodyStyle.isBold,
         'body_italic': bodyStyle.isItalic,
         'body_color': _hexToFfmpegColor(bodyStyle.colorHex),

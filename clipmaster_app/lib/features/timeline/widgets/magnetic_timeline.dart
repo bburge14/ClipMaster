@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
@@ -30,6 +31,31 @@ class MagneticTimeline extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<MagneticTimeline> createState() => _MagneticTimelineState();
+}
+
+/// Returns a [TextStyle] that uses the Google Fonts package to load
+/// the given [fontFamily] dynamically.  Falls back to the raw family name.
+TextStyle _googleFontStyle(String fontFamily, {
+  double? fontSize,
+  FontWeight? fontWeight,
+  FontStyle? fontStyle,
+  Color? color,
+  double? height,
+  List<Shadow>? shadows,
+}) {
+  final base = TextStyle(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    fontStyle: fontStyle,
+    color: color,
+    height: height,
+    shadows: shadows,
+  );
+  try {
+    return GoogleFonts.getFont(fontFamily, textStyle: base);
+  } catch (_) {
+    return base.copyWith(fontFamily: fontFamily);
+  }
 }
 
 class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
@@ -63,6 +89,11 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   final _stockSearchController = TextEditingController();
   List<Map<String, dynamic>> _stockResults = [];
   bool _isSearchingStock = false;
+
+  // Music search
+  final _musicSearchController = TextEditingController();
+  List<Map<String, dynamic>> _musicResults = [];
+  bool _isSearchingMusic = false;
 
   // Rendering
   bool _isRendering = false;
@@ -200,6 +231,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   void dispose() {
     _horizontalScroll.dispose();
     _stockSearchController.dispose();
+    _musicSearchController.dispose();
     _previewPlayingNotifier.dispose();
     _previewPositionNotifier.dispose();
     _previewDurationNotifier.dispose();
@@ -936,17 +968,15 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                           }),
                         ),
                         Expanded(
-                          child: _rightPanel == _RightPanel.stockFootage
-                              ? _buildStockFootagePanel()
-                              : _rightPanel == _RightPanel.textEditor
-                                  ? _buildTextEditorPanel(project)
-                                  : _rightPanel == _RightPanel.voicePicker
-                                      ? _buildVoicePanel(project)
-                                      : _rightPanel == _RightPanel.assetProperties
-                                          ? _buildAssetPropertiesPanel(project)
-                                          : _rightPanel == _RightPanel.aiCreate
-                                              ? _buildAiCreatePanel(project)
-                                              : _buildLayersPanel(project),
+                          child: switch (_rightPanel) {
+                            _RightPanel.stockFootage => _buildStockFootagePanel(),
+                            _RightPanel.textEditor => _buildTextEditorPanel(project),
+                            _RightPanel.voicePicker => _buildVoicePanel(project),
+                            _RightPanel.assetProperties => _buildAssetPropertiesPanel(project),
+                            _RightPanel.aiCreate => _buildAiCreatePanel(project),
+                            _RightPanel.music => _buildMusicPanel(project),
+                            _ => _buildLayersPanel(project),
+                          },
                         ),
                       ],
                     ),
@@ -968,6 +998,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         _RightPanel.layers => 'Layers',
         _RightPanel.assetProperties => 'Properties',
         _RightPanel.aiCreate => 'AI Create',
+        _RightPanel.music => 'Music & Sounds',
         _RightPanel.none => '',
       };
 
@@ -1280,6 +1311,16 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
             ),
           ],
           _toolbarButton(
+            icon: Icons.music_note,
+            label: 'Music',
+            active: _rightPanel == _RightPanel.music,
+            onTap: () => setState(() {
+              _rightPanel = _rightPanel == _RightPanel.music
+                  ? _RightPanel.none
+                  : _RightPanel.music;
+            }),
+          ),
+          _toolbarButton(
             icon: Icons.auto_awesome,
             label: 'AI Create',
             active: _rightPanel == _RightPanel.aiCreate,
@@ -1529,12 +1570,23 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     final hasTitle = titleText.isNotEmpty;
     final hasScript = scriptText.isNotEmpty;
 
-    // Check if there's a video-track asset with a URL
+    // Check for any video source: video track first, then b-roll
     final videoAssets =
         project.assets.where((a) => a.track == TimelineTrack.video).toList();
-    final bgUrl = videoAssets.isNotEmpty
-        ? (videoAssets.first.url ?? videoAssets.first.thumbnailUrl ?? '')
-        : '';
+    final brollAssets =
+        project.assets.where((a) => a.track == TimelineTrack.broll).toList();
+    // Try video track URL, then b-roll URL, then b-roll download URL
+    String bgUrl = '';
+    String? bgThumbnail;
+    if (videoAssets.isNotEmpty) {
+      bgUrl = videoAssets.first.url ?? videoAssets.first.thumbnailUrl ?? '';
+      bgThumbnail = videoAssets.first.thumbnailUrl;
+    } else if (brollAssets.isNotEmpty) {
+      // Use first b-roll clip as preview background
+      final first = brollAssets.first;
+      bgUrl = first.url ?? '';
+      bgThumbnail = first.thumbnailUrl ?? first.url;
+    }
 
     // Auto-load background from URL if no local video is loaded
     // Schedule for after build — never call _initPreviewPlayer during build.
@@ -1570,12 +1622,28 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     return Stack(
                       fit: StackFit.expand,
                       children: [
-                        // Background layer: video or gradient
+                        // Background layer: video > thumbnail > gradient
                         if (_previewController != null)
                           Video(
                             controller: _previewController!,
                             controls: NoVideoControls,
                             fit: BoxFit.cover,
+                          )
+                        else if (bgThumbnail != null && bgThumbnail.isNotEmpty)
+                          Image.network(
+                            bgThumbnail,
+                            fit: BoxFit.cover,
+                            width: frameW,
+                            height: frameH,
+                            errorBuilder: (_, __, ___) => Container(
+                              decoration: const BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [Color(0xFF1A1A2E), Color(0xFF0A0A14)],
+                                ),
+                              ),
+                            ),
                           )
                         else
                           Container(
@@ -1593,174 +1661,33 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         // Dark overlay for readability
                         if (_previewController != null)
                           Container(color: Colors.black.withOpacity(0.3)),
-                        // Title text (top area) — click to select, double-click to edit, drag to move
+                        // Title text — resizable, draggable
                         if (hasTitle)
-                          Positioned(
-                            top: project.titleStyle.positionY * frameH,
-                            left: 12 * textScale,
-                            right: 12 * textScale,
-                            child: GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  _selectedTextElement = _SelectedTextElement.title;
-                                  _rightPanel = _RightPanel.textEditor;
-                                });
-                              },
-                              onDoubleTap: () => _showInlineTextEditor(
-                                isTitle: true,
-                                currentText: titleText,
-                                project: project,
-                              ),
-                              onPanUpdate: (details) {
-                                final newY =
-                                    (project.titleStyle.positionY + details.delta.dy / frameH)
-                                        .clamp(0.03, 0.85);
-                                ref.read(projectProvider.notifier).setTitleStyle(
-                                  project.titleStyle.copyWith(positionY: newY),
-                                );
-                              },
-                              child: MouseRegion(
-                                cursor: SystemMouseCursors.move,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    border: _selectedTextElement == _SelectedTextElement.title
-                                        ? Border.all(color: const Color(0xFF6C5CE7), width: 1.5)
-                                        : null,
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: Color(project.titleStyle.bgColorHex),
-                                          borderRadius: BorderRadius.circular(3),
-                                        ),
-                                        child: Text(
-                                          titleText,
-                                          textAlign: TextAlign.center,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontFamily: project.titleStyle.fontFamily,
-                                            fontSize: (project.titleStyle.fontSize * 0.45 * textScale).clamp(10.0, 36.0),
-                                            fontWeight: project.titleStyle.isBold ? FontWeight.w800 : FontWeight.w400,
-                                            fontStyle: project.titleStyle.isItalic ? FontStyle.italic : FontStyle.normal,
-                                            color: Color(project.titleStyle.colorHex),
-                                            shadows: project.titleStyle.hasBorder
-                                                ? const [
-                                                    Shadow(color: Colors.black, blurRadius: 6),
-                                                    Shadow(color: Colors.black, blurRadius: 12),
-                                                  ]
-                                                : null,
-                                          ),
-                                        ),
-                                      ),
-                                      // Edit hint when selected
-                                      if (_selectedTextElement == _SelectedTextElement.title)
-                                        Text(
-                                          'double-click to edit',
-                                          style: TextStyle(
-                                            fontSize: 8 * textScale,
-                                            color: const Color(0xFF6C5CE7).withOpacity(0.6),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
+                          _buildResizableTextBox(
+                            frameW: frameW,
+                            frameH: frameH,
+                            textScale: textScale,
+                            captionStyle: project.titleStyle,
+                            text: titleText,
+                            element: _SelectedTextElement.title,
+                            isTitle: true,
+                            project: project,
+                            maxLines: 4,
+                            fontScaleFactor: 0.45,
                           ),
-                        // Script body text (draggable position) — click to select, double-click to edit
+                        // Body text — resizable, draggable
                         if (hasScript)
-                          Positioned(
-                            top: style.positionY * frameH - (30 * textScale),
-                            left: 12 * textScale,
-                            right: 12 * textScale,
-                            child: GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  _selectedTextElement = _SelectedTextElement.body;
-                                  _rightPanel = _RightPanel.textEditor;
-                                });
-                              },
-                              onDoubleTap: () => _showInlineTextEditor(
-                                isTitle: false,
-                                currentText: scriptText,
-                                project: project,
-                              ),
-                              onPanUpdate: (details) {
-                                final newY =
-                                    (style.positionY + details.delta.dy / frameH)
-                                        .clamp(0.15, 0.92);
-                                ref
-                                    .read(projectProvider.notifier)
-                                    .setCaptionStyle(style.copyWith(
-                                      positionY: newY,
-                                    ));
-                              },
-                              child: MouseRegion(
-                                cursor: SystemMouseCursors.move,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 6, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    border: Border.all(
-                                      color: _selectedTextElement == _SelectedTextElement.body
-                                          ? const Color(0xFF6C5CE7)
-                                          : const Color(0xFF6C5CE7).withOpacity(0.3),
-                                      width: _selectedTextElement == _SelectedTextElement.body ? 1.5 : 1,
-                                    ),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: Color(style.bgColorHex),
-                                          borderRadius: BorderRadius.circular(3),
-                                        ),
-                                        child: Text(
-                                          scriptText,
-                                          textAlign: TextAlign.center,
-                                          maxLines: 6,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontFamily: style.fontFamily,
-                                            fontSize:
-                                                (style.fontSize * 0.3 * textScale).clamp(7.0, 28.0),
-                                            fontWeight: style.isBold ? FontWeight.w700 : FontWeight.w400,
-                                            fontStyle: style.isItalic ? FontStyle.italic : FontStyle.normal,
-                                            color: Color(style.colorHex),
-                                            height: 1.4,
-                                            shadows: style.hasBorder
-                                                ? const [
-                                                    Shadow(
-                                                        color: Colors.black,
-                                                        blurRadius: 4),
-                                                  ]
-                                                : null,
-                                          ),
-                                        ),
-                                      ),
-                                      // Edit hint when selected
-                                      if (_selectedTextElement == _SelectedTextElement.body)
-                                        Text(
-                                          'double-click to edit',
-                                          style: TextStyle(
-                                            fontSize: 8 * textScale,
-                                            color: const Color(0xFF6C5CE7).withOpacity(0.6),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
+                          _buildResizableTextBox(
+                            frameW: frameW,
+                            frameH: frameH,
+                            textScale: textScale,
+                            captionStyle: style,
+                            text: scriptText,
+                            element: _SelectedTextElement.body,
+                            isTitle: false,
+                            project: project,
+                            maxLines: 12,
+                            fontScaleFactor: 0.3,
                           ),
                         // Position presets
                         if (hasScript)
@@ -1892,6 +1819,251 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         ],
       ),
     ).then((_) => controller.dispose());
+  }
+
+  /// Builds a resizable, draggable text box overlay in the preview canvas.
+  Widget _buildResizableTextBox({
+    required double frameW,
+    required double frameH,
+    required double textScale,
+    required CaptionStyle captionStyle,
+    required String text,
+    required _SelectedTextElement element,
+    required bool isTitle,
+    required ProjectState project,
+    required int maxLines,
+    required double fontScaleFactor,
+  }) {
+    final isSelected = _selectedTextElement == element;
+    final boxW = captionStyle.boxWidth != null
+        ? captionStyle.boxWidth! * frameW
+        : frameW - 24 * textScale;
+    final boxH = captionStyle.boxHeight != null
+        ? captionStyle.boxHeight! * frameH
+        : null; // null = auto height
+
+    final topPos = captionStyle.positionY * frameH - (isTitle ? 0 : 30 * textScale);
+    final leftPos = (frameW - boxW) / 2; // center horizontally
+
+    void updateStyle(CaptionStyle newStyle) {
+      if (isTitle) {
+        ref.read(projectProvider.notifier).setTitleStyle(newStyle);
+      } else {
+        ref.read(projectProvider.notifier).setCaptionStyle(newStyle);
+      }
+    }
+
+    return Positioned(
+      top: topPos.clamp(0, frameH - 20),
+      left: leftPos.clamp(0, frameW - 40),
+      child: SizedBox(
+        width: boxW.clamp(40, frameW),
+        height: boxH?.clamp(20, frameH * 0.8),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // Main text box — draggable
+            GestureDetector(
+              onTap: () {
+                setState(() {
+                  _selectedTextElement = element;
+                  _rightPanel = _RightPanel.textEditor;
+                });
+              },
+              onDoubleTap: () => _showInlineTextEditor(
+                isTitle: isTitle,
+                currentText: text,
+                project: project,
+              ),
+              onPanUpdate: (details) {
+                final newY = (captionStyle.positionY + details.delta.dy / frameH)
+                    .clamp(0.03, 0.92);
+                updateStyle(captionStyle.copyWith(positionY: newY));
+              },
+              child: MouseRegion(
+                cursor: SystemMouseCursors.move,
+                child: Container(
+                  width: boxW,
+                  height: boxH,
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: isSelected
+                          ? const Color(0xFF6C5CE7)
+                          : const Color(0xFF6C5CE7).withOpacity(0.3),
+                      width: isSelected ? 1.5 : 0.5,
+                    ),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Color(captionStyle.bgColorHex),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: Text(
+                      text,
+                      textAlign: TextAlign.center,
+                      maxLines: maxLines,
+                      overflow: TextOverflow.ellipsis,
+                      style: _googleFontStyle(
+                        captionStyle.fontFamily,
+                        fontSize: (captionStyle.fontSize * fontScaleFactor * textScale)
+                            .clamp(7.0, 36.0),
+                        fontWeight: captionStyle.isBold ? FontWeight.w800 : FontWeight.w400,
+                        fontStyle: captionStyle.isItalic ? FontStyle.italic : FontStyle.normal,
+                        color: Color(captionStyle.colorHex),
+                        height: 1.4,
+                        shadows: captionStyle.hasBorder
+                            ? const [
+                                Shadow(color: Colors.black, blurRadius: 6),
+                                Shadow(color: Colors.black, blurRadius: 12),
+                              ]
+                            : null,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            // Resize handles (only when selected)
+            if (isSelected) ...[
+              // Bottom-right corner handle
+              Positioned(
+                right: -5,
+                bottom: boxH != null ? -5 : null,
+                top: boxH == null ? null : null,
+                child: GestureDetector(
+                  onPanUpdate: (details) {
+                    final newW = ((captionStyle.boxWidth ?? (boxW / frameW)) +
+                            details.delta.dx / frameW)
+                        .clamp(0.15, 0.95);
+                    if (boxH != null || details.delta.dy.abs() > 2) {
+                      final newH = ((captionStyle.boxHeight ?? (60 / frameH)) +
+                              details.delta.dy / frameH)
+                          .clamp(0.05, 0.7);
+                      updateStyle(captionStyle.copyWith(boxWidth: newW, boxHeight: newH));
+                    } else {
+                      updateStyle(captionStyle.copyWith(boxWidth: newW));
+                    }
+                  },
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeDownRight,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6C5CE7),
+                        borderRadius: BorderRadius.circular(2),
+                        border: Border.all(color: Colors.white, width: 1),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // Bottom-left corner handle
+              Positioned(
+                left: -5,
+                bottom: boxH != null ? -5 : null,
+                child: GestureDetector(
+                  onPanUpdate: (details) {
+                    final newW = ((captionStyle.boxWidth ?? (boxW / frameW)) -
+                            details.delta.dx / frameW)
+                        .clamp(0.15, 0.95);
+                    if (boxH != null || details.delta.dy.abs() > 2) {
+                      final newH = ((captionStyle.boxHeight ?? (60 / frameH)) +
+                              details.delta.dy / frameH)
+                          .clamp(0.05, 0.7);
+                      updateStyle(captionStyle.copyWith(boxWidth: newW, boxHeight: newH));
+                    } else {
+                      updateStyle(captionStyle.copyWith(boxWidth: newW));
+                    }
+                  },
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeDownLeft,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6C5CE7),
+                        borderRadius: BorderRadius.circular(2),
+                        border: Border.all(color: Colors.white, width: 1),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // Right-center handle (width only)
+              Positioned(
+                right: -5,
+                top: (boxH ?? 30) / 2 - 6,
+                child: GestureDetector(
+                  onPanUpdate: (details) {
+                    final newW = ((captionStyle.boxWidth ?? (boxW / frameW)) +
+                            details.delta.dx / frameW)
+                        .clamp(0.15, 0.95);
+                    updateStyle(captionStyle.copyWith(boxWidth: newW));
+                  },
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeLeftRight,
+                    child: Container(
+                      width: 10,
+                      height: 14,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6C5CE7),
+                        borderRadius: BorderRadius.circular(2),
+                        border: Border.all(color: Colors.white, width: 1),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // Left-center handle (width only)
+              Positioned(
+                left: -5,
+                top: (boxH ?? 30) / 2 - 6,
+                child: GestureDetector(
+                  onPanUpdate: (details) {
+                    final newW = ((captionStyle.boxWidth ?? (boxW / frameW)) -
+                            details.delta.dx / frameW)
+                        .clamp(0.15, 0.95);
+                    updateStyle(captionStyle.copyWith(boxWidth: newW));
+                  },
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeLeftRight,
+                    child: Container(
+                      width: 10,
+                      height: 14,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6C5CE7),
+                        borderRadius: BorderRadius.circular(2),
+                        border: Border.all(color: Colors.white, width: 1),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // Size indicator
+              Positioned(
+                right: 0,
+                top: -16,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6C5CE7),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                  child: Text(
+                    '${(boxW).toInt()}×${boxH?.toInt() ?? "auto"}',
+                    style: const TextStyle(fontSize: 8, color: Colors.white),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _posPresetButton(
@@ -3237,10 +3409,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         items: ['Inter', 'Roboto', 'Montserrat', 'Oswald', 'Lato', 'Poppins']
                             .map((f) => DropdownMenuItem(
                                 value: f,
-                                child: Text(f, style: TextStyle(
-                                  fontSize: 13,
-                                  fontFamily: f,
-                                ))))
+                                child: Text(f, style: _googleFontStyle(f, fontSize: 13))))
                             .toList(),
                         onChanged: (v) {
                           if (v != null) {
@@ -3536,15 +3705,82 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   }
 
   Widget _buildVoicePanel(ProjectState project) {
+    final hasScript = project.scriptText != null && project.scriptText!.isNotEmpty;
+    final hasVoiceover = project.assets.any((a) =>
+        a.track == TimelineTrack.audio && a.label.startsWith('Voiceover'));
+
     return Container(
       color: const Color(0xFF1A1A2A),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Generate button
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                FilledButton.icon(
+                  onPressed: hasScript && !_isGeneratingTts
+                      ? () => _generateTts(project)
+                      : null,
+                  icon: _isGeneratingTts
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(Icons.record_voice_over, size: 16),
+                  label: Text(_isGeneratingTts
+                      ? 'Generating...'
+                      : hasVoiceover
+                          ? 'Regenerate Voiceover'
+                          : 'Generate Voiceover'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF6C5CE7),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+                if (!hasScript)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      'Add script text first (use AI Create or Text panel)',
+                      style: TextStyle(
+                          fontSize: 10, color: Colors.white.withOpacity(0.3)),
+                    ),
+                  ),
+                if (hasVoiceover)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.check_circle,
+                            size: 14, color: Color(0xFF00C853)),
+                        const SizedBox(width: 4),
+                        const Text(
+                          'Voiceover on timeline',
+                          style: TextStyle(
+                              fontSize: 11, color: Color(0xFF00C853)),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Text('Select Voice',
+                style: TextStyle(
+                    fontSize: 11, color: Colors.white.withOpacity(0.5))),
+          ),
           Expanded(
             child: ListView(
               physics: const ClampingScrollPhysics(),
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               children: TtsVoice.values.map((voice) {
                 final isSelected = project.selectedVoice == voice;
                 return Card(
@@ -3583,7 +3819,230 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     );
   }
 
+  Future<void> _generateTts(ProjectState project) async {
+    if (project.scriptText == null || project.scriptText!.isEmpty) return;
+    setState(() => _isGeneratingTts = true);
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final outputPath = '${tempDir.path}/tts_voiceover_${DateTime.now().millisecondsSinceEpoch}.mp3';
+
+      // Send TTS request via IPC to Python backend
+      final result = await IpcClient.instance.sendRequest(IpcMessage(
+        type: 'generate_tts',
+        payload: {
+          'text': project.scriptText!,
+          'voice': project.selectedVoice.name,
+          'output_path': outputPath,
+        },
+      ));
+
+      if (result.payload['success'] == true) {
+        final audioPath = result.payload['audio_path'] as String? ?? outputPath;
+        setState(() {
+          _ttsAudioPath = audioPath;
+        });
+        // Add as a real timeline asset
+        ref.read(projectProvider.notifier).addAsset(TimelineAsset(
+          id: 'tts_${DateTime.now().millisecondsSinceEpoch}',
+          track: TimelineTrack.audio,
+          label: 'Voiceover (${project.selectedVoice.label})',
+          filePath: audioPath,
+        ));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Voiceover generated and added to timeline'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        final error = result.payload['error'] ?? 'TTS generation failed';
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: $error'), duration: const Duration(seconds: 3)),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('TTS error: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isGeneratingTts = false);
+    }
+  }
+
   // ─── AI Create Panel — inline Fact Shorts add-in ───
+
+  Widget _buildMusicPanel(ProjectState project) {
+    return Container(
+      color: const Color(0xFF1A1A2A),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Search Royalty-Free Music',
+                    style: TextStyle(fontSize: 11, color: Colors.white54)),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _musicSearchController,
+                        decoration: const InputDecoration(
+                          hintText: 'e.g. upbeat, cinematic, lo-fi...',
+                          prefixIcon: Icon(Icons.search, size: 18),
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        ),
+                        onSubmitted: (_) => _searchMusic(),
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: _isSearchingMusic ? null : _searchMusic,
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      child: _isSearchingMusic
+                          ? const SizedBox(
+                              width: 16, height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Search', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // Quick genre chips
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: ['Upbeat', 'Cinematic', 'Lo-Fi', 'Ambient', 'Hip-Hop', 'Acoustic']
+                      .map((genre) => ActionChip(
+                            label: Text(genre, style: const TextStyle(fontSize: 10)),
+                            onPressed: () {
+                              _musicSearchController.text = genre.toLowerCase();
+                              _searchMusic();
+                            },
+                            visualDensity: VisualDensity.compact,
+                          ))
+                      .toList(),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: _musicResults.isEmpty
+                ? Center(
+                    child: Text(
+                      _isSearchingMusic
+                          ? 'Searching...'
+                          : 'Search for royalty-free music\nto add as background audio.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withOpacity(0.3),
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.all(8),
+                    physics: const ClampingScrollPhysics(),
+                    itemCount: _musicResults.length,
+                    itemBuilder: (context, index) {
+                      final track = _musicResults[index];
+                      final title = track['title'] as String? ?? 'Untitled';
+                      final artist = track['artist'] as String? ?? 'Unknown';
+                      final duration = (track['duration'] as num?)?.toDouble() ?? 0;
+
+                      return Card(
+                        color: Colors.white.withOpacity(0.03),
+                        child: ListTile(
+                          leading: const Icon(Icons.music_note,
+                              color: Color(0xFF6C5CE7), size: 20),
+                          title: Text(title,
+                              style: const TextStyle(fontSize: 12),
+                              overflow: TextOverflow.ellipsis),
+                          subtitle: Text(
+                            '$artist  ${duration > 0 ? "${duration.toStringAsFixed(0)}s" : ""}',
+                            style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.white.withOpacity(0.4)),
+                          ),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.add_circle_outline,
+                                color: Color(0xFF6C5CE7), size: 20),
+                            onPressed: () {
+                              ref.read(projectProvider.notifier).addAsset(TimelineAsset(
+                                id: 'music_${DateTime.now().millisecondsSinceEpoch}_$index',
+                                track: TimelineTrack.audio,
+                                label: title,
+                                url: track['download_url'] as String?,
+                                metadata: track,
+                                durationSec: duration,
+                              ));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Added "$title" to Audio track'),
+                                  duration: const Duration(seconds: 1),
+                                ),
+                              );
+                            },
+                          ),
+                          dense: true,
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _searchMusic() async {
+    final query = _musicSearchController.text.trim();
+    if (query.isEmpty) return;
+    setState(() {
+      _isSearchingMusic = true;
+      _musicResults = [];
+    });
+    try {
+      final result = await IpcClient.instance.sendRequest(IpcMessage(
+        type: 'search_music',
+        payload: {'query': query, 'limit': 20},
+      ));
+      if (mounted) {
+        setState(() {
+          _musicResults = List<Map<String, dynamic>>.from(
+              result.payload['results'] ?? []);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Music search error: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSearchingMusic = false);
+    }
+  }
 
   Widget _buildAiCreatePanel(ProjectState project) {
     return ScriptGeneratorPanel(
@@ -4060,7 +4519,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   }
 }
 
-enum _RightPanel { none, stockFootage, textEditor, voicePicker, layers, assetProperties, aiCreate }
+enum _RightPanel { none, stockFootage, textEditor, voicePicker, layers, assetProperties, aiCreate, music }
 
 enum _SelectedTextElement { none, title, body }
 

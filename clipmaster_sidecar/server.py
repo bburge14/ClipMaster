@@ -762,7 +762,8 @@ async def _handle_create_short(
     title_x_expr = _align_x_expr(title_pos_x, title_align)
 
     text_box_h = float(msg.payload.get("text_box_h", 0.35))
-    body_box_top = int(text_pos_y * 1920 - (text_box_h * 1920) / 2)
+    # positionY is the TOP edge of the text box (WYSIWYG — matches preview exactly)
+    body_box_top = int(text_pos_y * 1920)
     body_y = max(0, body_box_top + 24)
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
     body_x_expr = _align_x_expr(text_pos_x, body_align)
@@ -1066,7 +1067,7 @@ async def _handle_preview_snapshot(
     title_y = int(title_pos_y * 1920)
     title_x_expr = _align_x_expr(title_pos_x, title_align)
 
-    body_box_top = int(text_pos_y * 1920 - (text_box_h * 1920) / 2)
+    body_box_top = int(text_pos_y * 1920)
     body_y = max(0, body_box_top + 24)
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
     body_x_expr = _align_x_expr(text_pos_x, body_align)
@@ -1285,7 +1286,7 @@ async def _handle_preview_video_clip(
     title_y = int(title_pos_y * 1920)
     title_x_expr = _align_x_expr(title_pos_x, title_align)
 
-    body_box_top = int(text_pos_y * 1920 - (text_box_h * 1920) / 2)
+    body_box_top = int(text_pos_y * 1920)
     body_y = max(0, body_box_top + 24)
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
     body_x_expr = _align_x_expr(text_pos_x, body_align)

@@ -98,7 +98,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   // Rendering
   bool _isRendering = false;
 
-  // Preview player
+  // Preview player (video)
   Player? _previewPlayer;
   VideoController? _previewController;
   // Use ValueNotifiers instead of setState for high-frequency stream updates
@@ -109,6 +109,10 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   StreamSubscription? _positionSub;
   StreamSubscription? _durationSub;
   StreamSubscription? _playingSub;
+
+  // Voiceover audio player (synced with video preview)
+  Player? _voiceoverPlayer;
+  String? _loadedVoiceoverPath;
 
   // Resizable timeline panel height
   double _timelinePanelHeight = 280.0;
@@ -239,7 +243,37 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     _durationSub?.cancel();
     _playingSub?.cancel();
     _previewPlayer?.dispose();
+    _voiceoverPlayer?.dispose();
     super.dispose();
+  }
+
+  /// Load voiceover audio for synced playback in the editor.
+  void _loadVoiceoverAudio(String path) {
+    if (path == _loadedVoiceoverPath) return;
+    _voiceoverPlayer?.dispose();
+    _voiceoverPlayer = Player();
+    _voiceoverPlayer!.open(Media(path));
+    _voiceoverPlayer!.setVolume(100);
+    _voiceoverPlayer!.pause();
+    _loadedVoiceoverPath = path;
+  }
+
+  /// Play/pause both video and voiceover in sync.
+  void _togglePlayback() {
+    _previewPlayer?.playOrPause();
+    if (_voiceoverPlayer != null) {
+      if (_previewPlayingNotifier.value) {
+        _voiceoverPlayer!.pause();
+      } else {
+        _voiceoverPlayer!.play();
+      }
+    }
+  }
+
+  /// Seek both video and voiceover to position.
+  void _seekAll(Duration position) {
+    _previewPlayer?.seek(position);
+    _voiceoverPlayer?.seek(position);
   }
 
   void _initPreviewPlayer(String path) {
@@ -830,12 +864,18 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       }
     }
 
-    // Pick up TTS audio from project state.
+    // Pick up TTS audio from project state and load for playback.
     final audioAsset = project.assets
         .where((a) => a.track == TimelineTrack.audio)
         .firstOrNull;
-    if (audioAsset?.filePath != null && _ttsAudioPath == null) {
+    if (audioAsset?.filePath != null) {
       _ttsAudioPath = audioAsset!.filePath;
+      // Load for synced playback (only loads once per path)
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _ttsAudioPath != null) {
+          _loadVoiceoverAudio(_ttsAudioPath!);
+        }
+      });
     }
 
     final layout = ref.watch(editorLayoutProvider);
@@ -877,7 +917,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         }
         // Space = play/pause
         if (key == LogicalKeyboardKey.space) {
-          _previewPlayer?.playOrPause();
+          _togglePlayback();
           return KeyEventResult.handled;
         }
         return KeyEventResult.ignored;
@@ -1791,6 +1831,12 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                               ),
                             ),
                           ),
+                        // "+" Add element button
+                        Positioned(
+                          left: 4,
+                          bottom: 4,
+                          child: _buildAddElementButton(),
+                        ),
                       ],
                     );
                   },
@@ -1811,6 +1857,373 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
           ),
         ],
     );
+  }
+
+  /// "+" button with dropdown to add elements to the canvas.
+  Widget _buildAddElementButton() {
+    return PopupMenuButton<String>(
+      tooltip: 'Add element',
+      offset: const Offset(0, -200),
+      color: const Color(0xFF22223A),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      onSelected: (value) {
+        switch (value) {
+          case 'title':
+            _addTitleText();
+          case 'body':
+            _addBodyText();
+          case 'auto_setup':
+            _showAutoSetupDialog();
+        }
+      },
+      itemBuilder: (context) => [
+        _popupItem('auto_setup', Icons.auto_fix_high, 'Auto Setup',
+            'Quick template with pre-styled text'),
+        const PopupMenuDivider(),
+        _popupItem('title', Icons.title, 'Title Text',
+            'Add a title text box'),
+        _popupItem('body', Icons.notes, 'Body Text',
+            'Add a body text box'),
+      ],
+      child: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          color: const Color(0xFF6C5CE7),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF6C5CE7).withOpacity(0.4),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: const Icon(Icons.add, size: 18, color: Colors.white),
+      ),
+    );
+  }
+
+  PopupMenuItem<String> _popupItem(
+      String value, IconData icon, String title, String subtitle) {
+    return PopupMenuItem(
+      value: value,
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: const Color(0xFF6C5CE7)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontSize: 13, color: Colors.white, fontWeight: FontWeight.w500)),
+                Text(subtitle,
+                    style: TextStyle(
+                        fontSize: 10, color: Colors.white.withOpacity(0.4))),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _addTitleText() {
+    final project = ref.read(projectProvider);
+    if ((project.scriptTitle ?? '').isEmpty) {
+      ref.read(projectProvider.notifier).setScript(
+        title: 'Title',
+        text: project.scriptText,
+      );
+    }
+    setState(() {
+      _selectedTextElement = _SelectedTextElement.title;
+      _rightPanel = _RightPanel.textEditor;
+    });
+  }
+
+  void _addBodyText() {
+    final project = ref.read(projectProvider);
+    if ((project.scriptText ?? '').isEmpty) {
+      ref.read(projectProvider.notifier).setScript(
+        title: project.scriptTitle,
+        text: 'Body text here',
+      );
+    }
+    setState(() {
+      _selectedTextElement = _SelectedTextElement.body;
+      _rightPanel = _RightPanel.textEditor;
+    });
+  }
+
+  /// Auto-setup dialog with template presets.
+  void _showAutoSetupDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Row(
+          children: [
+            Icon(Icons.auto_fix_high, color: Color(0xFF6C5CE7), size: 20),
+            SizedBox(width: 8),
+            Text('Auto Setup', style: TextStyle(fontSize: 16)),
+          ],
+        ),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Choose a template to auto-configure text styling, '
+                'position, and layout. You can customize everything after.',
+                style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.5)),
+              ),
+              const SizedBox(height: 16),
+              _templateCard(
+                ctx: ctx,
+                icon: Icons.short_text,
+                title: 'Classic Short',
+                description: 'Bold white text on dark bg, title top, body bottom-third. '
+                    'Auto-splits body into 2-3 caption segments.',
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _applyTemplate(_TemplatePreset.classicShort);
+                },
+              ),
+              const SizedBox(height: 8),
+              _templateCard(
+                ctx: ctx,
+                icon: Icons.movie,
+                title: 'Cinematic',
+                description: 'Large centered title, no body bg, text shadow emphasis. '
+                    'Great for dramatic intros.',
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _applyTemplate(_TemplatePreset.cinematic);
+                },
+              ),
+              const SizedBox(height: 8),
+              _templateCard(
+                ctx: ctx,
+                icon: Icons.newspaper,
+                title: 'News / Facts',
+                description: 'Yellow title, white body on black bg bar. '
+                    'Auto-splits body into 2-3 captions for readability.',
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _applyTemplate(_TemplatePreset.newsFacts);
+                },
+              ),
+              const SizedBox(height: 8),
+              _templateCard(
+                ctx: ctx,
+                icon: Icons.format_paint,
+                title: 'Minimal',
+                description: 'Clean white text, no background, small font. '
+                    'Subtle and modern.',
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _applyTemplate(_TemplatePreset.minimal);
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _templateCard({
+    required BuildContext ctx,
+    required IconData icon,
+    required String title,
+    required String description,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.04),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withOpacity(0.08)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 24, color: const Color(0xFF6C5CE7)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
+                  const SizedBox(height: 2),
+                  Text(description,
+                      style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4))),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, size: 18, color: Colors.white24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Apply a template preset to the project.
+  void _applyTemplate(_TemplatePreset preset) {
+    final notifier = ref.read(projectProvider.notifier);
+    final project = ref.read(projectProvider);
+
+    // Auto-split body text into caption segments if text is long
+    String bodyText = project.scriptText ?? '';
+    if (bodyText.length > 80 &&
+        (preset == _TemplatePreset.classicShort || preset == _TemplatePreset.newsFacts)) {
+      bodyText = _autoSplitBodyText(bodyText);
+    }
+
+    switch (preset) {
+      case _TemplatePreset.classicShort:
+        notifier.setTitleStyle(const CaptionStyle(
+          fontFamily: 'Inter',
+          fontSize: 42,
+          colorHex: 0xFFFFFFFF,
+          bgColorHex: 0x00000000,
+          hasBorder: true,
+          isBold: true,
+          positionX: 0.5,
+          positionY: 0.08,
+        ));
+        notifier.setCaptionStyle(CaptionStyle(
+          fontFamily: 'Inter',
+          fontSize: 32,
+          colorHex: 0xFFFFFFFF,
+          bgColorHex: 0xCC000000,
+          hasBorder: false,
+          isBold: true,
+          positionX: 0.5,
+          positionY: 0.72,
+          boxWidth: 0.85,
+        ));
+        if (bodyText != project.scriptText) {
+          notifier.setScript(title: project.scriptTitle, text: bodyText);
+        }
+
+      case _TemplatePreset.cinematic:
+        notifier.setTitleStyle(const CaptionStyle(
+          fontFamily: 'Oswald',
+          fontSize: 52,
+          colorHex: 0xFFFFFFFF,
+          bgColorHex: 0x00000000,
+          hasBorder: true,
+          isBold: true,
+          positionX: 0.5,
+          positionY: 0.40,
+        ));
+        notifier.setCaptionStyle(const CaptionStyle(
+          fontFamily: 'Oswald',
+          fontSize: 28,
+          colorHex: 0xCCFFFFFF,
+          bgColorHex: 0x00000000,
+          hasBorder: true,
+          isBold: false,
+          positionX: 0.5,
+          positionY: 0.55,
+          boxWidth: 0.75,
+        ));
+
+      case _TemplatePreset.newsFacts:
+        notifier.setTitleStyle(const CaptionStyle(
+          fontFamily: 'Roboto',
+          fontSize: 38,
+          colorHex: 0xFFFFD700,
+          bgColorHex: 0xCC000000,
+          hasBorder: false,
+          isBold: true,
+          positionX: 0.5,
+          positionY: 0.06,
+          boxWidth: 0.90,
+        ));
+        notifier.setCaptionStyle(CaptionStyle(
+          fontFamily: 'Roboto',
+          fontSize: 30,
+          colorHex: 0xFFFFFFFF,
+          bgColorHex: 0xCC000000,
+          hasBorder: false,
+          isBold: true,
+          positionX: 0.5,
+          positionY: 0.70,
+          boxWidth: 0.90,
+        ));
+        if (bodyText != project.scriptText) {
+          notifier.setScript(title: project.scriptTitle, text: bodyText);
+        }
+
+      case _TemplatePreset.minimal:
+        notifier.setTitleStyle(const CaptionStyle(
+          fontFamily: 'Poppins',
+          fontSize: 34,
+          colorHex: 0xFFFFFFFF,
+          bgColorHex: 0x00000000,
+          hasBorder: false,
+          isBold: false,
+          positionX: 0.5,
+          positionY: 0.10,
+        ));
+        notifier.setCaptionStyle(const CaptionStyle(
+          fontFamily: 'Poppins',
+          fontSize: 24,
+          colorHex: 0xCCFFFFFF,
+          bgColorHex: 0x00000000,
+          hasBorder: false,
+          isBold: false,
+          positionX: 0.5,
+          positionY: 0.78,
+          boxWidth: 0.80,
+        ));
+    }
+
+    setState(() {
+      _rightPanel = _RightPanel.textEditor;
+    });
+  }
+
+  /// Auto-split long body text into 2-3 segments separated by newlines.
+  /// Splits at sentence boundaries for natural reading flow.
+  String _autoSplitBodyText(String text) {
+    // Split on sentence endings
+    final sentences = text
+        .split(RegExp(r'(?<=[.!?])\s+'))
+        .where((s) => s.trim().isNotEmpty)
+        .toList();
+
+    if (sentences.length <= 1) return text;
+
+    // Target 2-3 roughly equal segments
+    final targetSegments = sentences.length >= 4 ? 3 : 2;
+    final sentencesPerSegment = (sentences.length / targetSegments).ceil();
+
+    final segments = <String>[];
+    for (int i = 0; i < sentences.length; i += sentencesPerSegment) {
+      final end = (i + sentencesPerSegment).clamp(0, sentences.length);
+      segments.add(sentences.sublist(i, end).join(' '));
+    }
+
+    return segments.join('\n\n');
   }
 
   /// Shows a dialog for inline text editing (double-click on text in preview).
@@ -1894,14 +2307,15 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     required double fontScaleFactor,
   }) {
     final isSelected = _selectedTextElement == element;
+    // Default box width: 85% of frame (matches FFmpeg render default of 0.85)
     final boxW = captionStyle.boxWidth != null
         ? captionStyle.boxWidth! * frameW
-        : frameW - 24 * textScale;
+        : frameW * 0.85;
     final boxH = captionStyle.boxHeight != null
         ? captionStyle.boxHeight! * frameH
         : null; // null = auto height
 
-    final topPos = captionStyle.positionY * frameH - (isTitle ? 0 : 30 * textScale);
+    final topPos = captionStyle.positionY * frameH;
     final leftPos = (frameW - boxW) / 2; // center horizontally
 
     void updateStyle(CaptionStyle newStyle) {
@@ -2234,7 +2648,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                       IconButton(
                         icon: const Icon(Icons.skip_previous, size: 20),
                         onPressed: () {
-                          _previewPlayer?.seek(Duration.zero);
+                          _seekAll(Duration.zero);
                           setState(() => _playheadPosition = 0);
                         },
                         tooltip: 'Go to start',
@@ -2245,7 +2659,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         onPressed: () {
                           if (_previewPlayer != null) {
                             final newPos = previewPosition - const Duration(seconds: 5);
-                            _previewPlayer!.seek(newPos < Duration.zero ? Duration.zero : newPos);
+                            _seekAll(newPos < Duration.zero ? Duration.zero : newPos);
                           }
                         },
                         tooltip: 'Back 5s',
@@ -2257,7 +2671,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                           size: 32,
                           color: const Color(0xFF6C5CE7),
                         ),
-                        onPressed: () => _previewPlayer?.playOrPause(),
+                        onPressed: _togglePlayback,
                         tooltip: previewPlaying ? 'Pause' : 'Play',
                       ),
                       // Forward 5s
@@ -2266,7 +2680,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         onPressed: () {
                           if (_previewPlayer != null) {
                             final newPos = previewPosition + const Duration(seconds: 5);
-                            _previewPlayer!.seek(newPos > previewDuration ? previewDuration : newPos);
+                            _seekAll(newPos > previewDuration ? previewDuration : newPos);
                           }
                         },
                         tooltip: 'Forward 5s',
@@ -2276,7 +2690,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         icon: const Icon(Icons.skip_next, size: 20),
                         onPressed: () {
                           if (_previewPlayer != null && previewDuration > Duration.zero) {
-                            _previewPlayer!.seek(previewDuration);
+                            _seekAll(previewDuration);
                           }
                         },
                         tooltip: 'Go to end',
@@ -2307,7 +2721,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                             value: durMs > 0 ? (posMs / durMs).clamp(0.0, 1.0) : 0.0,
                             onChanged: (v) {
                               if (_previewPlayer != null && durMs > 0) {
-                                _previewPlayer!.seek(Duration(milliseconds: (v * durMs).toInt()));
+                                _seekAll(Duration(milliseconds: (v * durMs).toInt()));
                               }
                             },
                           ),
@@ -2414,9 +2828,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                         setState(() {
                           _playheadPosition = details.localPosition.dx / _zoomLevel;
                         });
-                        if (_previewPlayer != null) {
-                          _previewPlayer!.seek(Duration(milliseconds: (secPos * 1000).toInt()));
-                        }
+                        _seekAll(Duration(milliseconds: (secPos * 1000).toInt()));
                       },
                       child: SizedBox(
                         width: totalWidth,
@@ -4618,6 +5030,8 @@ enum _RightPanel { none, stockFootage, textEditor, voicePicker, layers, assetPro
 enum _SelectedTextElement { none, title, body }
 
 enum _EditorTool { select, razor, hand }
+
+enum _TemplatePreset { classicShort, cinematic, newsFacts, minimal }
 
 /// Menu action item for the desktop-style menu bar.
 class _MenuAction {

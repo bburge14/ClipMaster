@@ -81,9 +81,13 @@ class TimelineAsset {
 enum TimelineTrack { video, broll, audio, captions, crops }
 
 /// Caption styling options.
+///
+/// [fontSize] is in **1080p render pixels** — the exact pixel size used by
+/// FFmpeg drawtext on the 1080×1920 canvas.  The Flutter preview scales
+/// this by `frameW / 1080` so what-you-see-is-what-you-get.
 class CaptionStyle {
   final String fontFamily;
-  final double fontSize;
+  final double fontSize; // 1080p render pixels
   final int colorHex;
   final int bgColorHex;
   final bool hasBorder;
@@ -100,7 +104,7 @@ class CaptionStyle {
 
   const CaptionStyle({
     this.fontFamily = 'Inter',
-    this.fontSize = 36,
+    this.fontSize = 48, // 48px at 1080p ≈ readable body text
     this.colorHex = 0xFFFFFFFF,
     this.bgColorHex = 0x00000000,
     this.hasBorder = true,
@@ -156,7 +160,7 @@ class ProjectState {
     this.selectedVoice = TtsVoice.onyx,
     this.captionStyle = const CaptionStyle(),
     this.titleStyle = const CaptionStyle(
-      fontSize: 42,
+      fontSize: 64, // 64px at 1080p ≈ bold title
       positionX: 0.5,
       positionY: 0.08,
     ),

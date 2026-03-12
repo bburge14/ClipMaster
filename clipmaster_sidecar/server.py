@@ -684,9 +684,9 @@ async def _handle_create_short(
     # completely avoiding Windows C: colon issues in filter strings.
     tmpdir = tempfile.gettempdir()
 
-    # Word-wrap title: preview shows left:16, right:16 on 270px → (270-32)/270 ≈ 88%
-    # On 1080px canvas that's ~952px usable. Wrap to max 2 lines.
-    title_usable_px = int(0.88 * 1080)
+    # Word-wrap title using the title box width (sent from Flutter, default 0.88)
+    title_box_w_for_wrap = float(msg.payload.get("title_box_w", 0.88))
+    title_usable_px = int(title_box_w_for_wrap * 1080) - 48  # minus padding
     # Match Dart _wrapText() factor (0.52); bold text is ~15% wider
     title_char_w = max(title_font_size * (0.60 if title_bold else 0.52), 1)
     title_chars = max(10, int(title_usable_px / title_char_w))
@@ -761,14 +761,26 @@ async def _handle_create_short(
     effective_title_color = title_color
     effective_body_color = body_color
 
-    title_y = int(title_pos_y * 1920)
+    # ─── WYSIWYG positioning ───
+    # All positions use normalised coordinates (0.0-1.0) × canvas size.
+    # Padding of 24px on each side matches the Flutter preview exactly.
+    pad = 24  # pixels at 1080p
+
+    # Title: positionY is top edge of the title text area (including padding)
+    title_box_w_norm = float(msg.payload.get("title_box_w", 0.88))
+    title_box_w_px = int(title_box_w_norm * 1080)
+    title_box_left = max(0, int(title_pos_x * 1080 - title_box_w_px / 2))
+    title_box_top = int(title_pos_y * 1920)
+    # Title text starts at box top + padding
+    title_y = title_box_top + pad
     title_x_expr = _align_x_expr(title_pos_x, title_align)
 
-    text_box_h = float(msg.payload.get("text_box_h", 0.35))
-    # positionY is the TOP edge of the text box (WYSIWYG — matches preview exactly)
+    # Body: positionY is top edge of the body text area (including padding)
+    text_box_h = float(msg.payload.get("text_box_h", 0.0))  # 0 = auto
     body_box_top = int(text_pos_y * 1920)
-    body_y = max(0, body_box_top + 24)
-    body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
+    # Body text starts at box top + padding (same as title)
+    body_y = body_box_top + pad
+    body_box_left = max(0, int(text_pos_x * 1080 - body_box_w_px / 2))
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 
     title_drawtext_parts = _build_drawtext_lines(
@@ -791,21 +803,26 @@ async def _handle_create_short(
             body_lines_clean, body_font_opt, body_font_size, effective_body_color,
             body_x_expr, body_y, body_border))
 
-    # Title text box background
+    # ─── Background boxes (drawbox) ───
+    # Title background: auto-sized to fit text + padding
     drawbox_title_bg = ""
     if title_bg_enabled:
-        title_box_w = 952
-        title_box_x = max(0, int(title_pos_x * 1080 - title_box_w / 2))
+        # Height = padding_top + (lines × line_height) + padding_bottom
+        title_text_h = int(title_font_size * 1.4) * len(title_lines_clean) + 2 * pad
         drawbox_title_bg = (
-            f"drawbox=x={title_box_x}:y={max(0, title_y - 16)}"
-            f":w={title_box_w}:h={title_font_size * len(title_lines) + 32}"
+            f"drawbox=x={title_box_left}:y={max(0, title_box_top)}"
+            f":w={title_box_w_px}:h={title_text_h}"
             f":color={title_bg_color}:t=fill"
         )
 
-    # Body text box background
+    # Body background: auto-sized to fit text + padding (unless explicit height)
     drawbox_body_bg = ""
     if body_bg_enabled:
-        body_box_h_px = int(text_box_h * 1920)
+        if text_box_h > 0:
+            body_box_h_px = int(text_box_h * 1920)
+        else:
+            # Auto: padding + lines × line_height + padding
+            body_box_h_px = int(body_font_size * 1.4) * len(body_lines_clean) + 2 * pad
         drawbox_body_bg = (
             f"drawbox=x={max(0, body_box_left)}"
             f":y={max(0, body_box_top)}"
@@ -837,11 +854,18 @@ async def _handle_create_short(
         bg_music_path = os.path.abspath(bg_music_path)
 
     # Build the video filter chain
+    has_bg_video = bg_video_path and os.path.isfile(bg_video_path)
+
     def _build_vf(include_scale: bool) -> str:
         parts = []
         if include_scale:
             parts.append(
                 "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+            )
+        # Dark overlay for readability (matches Flutter preview's 30% black overlay)
+        if has_bg_video:
+            parts.append(
+                "drawbox=x=0:y=0:w=1080:h=1920:color=black@0.30:t=fill"
             )
         if drawbox_title_bg:
             parts.append(drawbox_title_bg)
@@ -1067,11 +1091,12 @@ async def _handle_preview_snapshot(
     border_opts = ":borderw=3:bordercolor=black" if title_shadow else ""
     body_border = ":borderw=2:bordercolor=black" if body_shadow else ""
 
-    title_y = int(title_pos_y * 1920)
+    pad = 24  # WYSIWYG padding matching preview
+    title_y = int(title_pos_y * 1920) + pad
     title_x_expr = _align_x_expr(title_pos_x, title_align)
 
     body_box_top = int(text_pos_y * 1920)
-    body_y = max(0, body_box_top + 24)
+    body_y = body_box_top + pad
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 
@@ -1286,11 +1311,12 @@ async def _handle_preview_video_clip(
     border_opts = ":borderw=3:bordercolor=black" if title_shadow else ""
     body_border = ":borderw=2:bordercolor=black" if body_shadow else ""
 
-    title_y = int(title_pos_y * 1920)
+    pad = 24  # WYSIWYG padding matching preview
+    title_y = int(title_pos_y * 1920) + pad
     title_x_expr = _align_x_expr(title_pos_x, title_align)
 
     body_box_top = int(text_pos_y * 1920)
-    body_y = max(0, body_box_top + 24)
+    body_y = body_box_top + pad
     body_box_left = int(text_pos_x * 1080 - body_box_w_px / 2)
     body_x_expr = _align_x_expr(text_pos_x, body_align)
 

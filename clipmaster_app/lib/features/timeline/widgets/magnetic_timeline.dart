@@ -702,10 +702,10 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         if (pixabayKey != null) 'pixabay_key': pixabayKey,
 
         // ─── Title styling ───
-        // Scale font size from abstract CaptionStyle units to 1080p render pixels.
-        // Preview uses fontSize * 0.45 on a ~360px frame; render is 1080px (3× wider).
+        // fontSize is stored as the 1080p render size directly.
+        // Preview scales down by frameW/1080.
         'title_font_family': titleStyle.fontFamily,
-        'title_font_size_px': (titleStyle.fontSize * 1.35).round(),
+        'title_font_size_px': titleStyle.fontSize.round(),
         'title_bold': titleStyle.isBold,
         'title_italic': titleStyle.isItalic,
         'title_color': _hexToFfmpegColor(titleStyle.colorHex),
@@ -714,11 +714,11 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         'title_pos_y': titleStyle.positionY,
         'title_bg_enabled': ((titleStyle.bgColorHex >> 24) & 0xFF) > 0,
         'title_bg_color': _hexToFfmpegBgColor(titleStyle.bgColorHex),
+        if (titleStyle.boxWidth != null) 'title_box_w': titleStyle.boxWidth,
 
         // ─── Body styling ───
-        // Body preview uses fontSize * 0.3 on ~360px → 0.9× for 1080p
         'body_font_family': bodyStyle.fontFamily,
-        'body_font_size_px': (bodyStyle.fontSize * 0.9).round(),
+        'body_font_size_px': bodyStyle.fontSize.round(),
         'body_bold': bodyStyle.isBold,
         'body_italic': bodyStyle.isItalic,
         'body_color': _hexToFfmpegColor(bodyStyle.colorHex),
@@ -728,7 +728,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         'body_bg_enabled': ((bodyStyle.bgColorHex >> 24) & 0xFF) > 0,
         'body_bg_color': _hexToFfmpegBgColor(bodyStyle.bgColorHex),
 
-        // ─── Box dimensions ───
+        // ─── Box dimensions (0.0-1.0 normalised) ───
         if (bodyStyle.boxWidth != null) 'text_box_w': bodyStyle.boxWidth,
         if (bodyStyle.boxHeight != null) 'text_box_h': bodyStyle.boxHeight,
 
@@ -1972,10 +1972,10 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     }
 
     // Title: bold white, black bg box, centered near top
-    // Matches the screenshot style: tight black box around title
+    // Font sizes are in 1080p render pixels (preview auto-scales)
     notifier.setTitleStyle(const CaptionStyle(
       fontFamily: 'Inter',
-      fontSize: 40,
+      fontSize: 64,            // 64px at 1080p
       colorHex: 0xFFFFFFFF,   // white text
       bgColorHex: 0xE6000000, // ~90% opaque black bg
       hasBorder: false,        // no shadow — bg box provides contrast
@@ -1986,18 +1986,17 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       boxWidth: 0.80,
     ));
 
-    // Body: bold white, dark bg box, positioned in lower-center
-    // Large enough to hold a paragraph of fact text
+    // Body: bold white, dark bg box, positioned in center area
     notifier.setCaptionStyle(const CaptionStyle(
       fontFamily: 'Inter',
-      fontSize: 34,
+      fontSize: 48,            // 48px at 1080p
       colorHex: 0xFFFFFFFF,   // white text
       bgColorHex: 0xD9333333, // ~85% opaque dark gray bg
       hasBorder: false,
       isBold: true,
       isItalic: false,
       positionX: 0.5,
-      positionY: 0.30,         // starts in upper-middle, fills down
+      positionY: 0.25,         // starts in upper-middle area
       boxWidth: 0.88,
     ));
 
@@ -2084,17 +2083,23 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   Widget _buildResizableTextBox({
     required double frameW,
     required double frameH,
-    required double textScale,
+    required double textScale, // unused now, kept for API compat
     required CaptionStyle captionStyle,
     required String text,
     required _SelectedTextElement element,
     required bool isTitle,
     required ProjectState project,
     required int maxLines,
-    required double fontScaleFactor,
+    required double fontScaleFactor, // unused now, kept for API compat
   }) {
     final isSelected = _selectedTextElement == element;
-    // Default box width: 85% of frame (matches FFmpeg render default of 0.85)
+
+    // ─── WYSIWYG scaling ───
+    // fontSize in CaptionStyle IS the 1080p render pixel size.
+    // Preview scales everything by this factor so it matches the render exactly.
+    final scale = frameW / 1080.0;
+
+    // Box width: normalised (0.0-1.0) × frame width
     final boxW = captionStyle.boxWidth != null
         ? captionStyle.boxWidth! * frameW
         : frameW * 0.85;
@@ -2104,6 +2109,13 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
 
     final topPos = captionStyle.positionY * frameH;
     final leftPos = (frameW - boxW) / 2; // center horizontally
+
+    // Padding matches FFmpeg: 24px on each side at 1080p → scale for preview
+    final hPad = (24.0 * scale).clamp(3.0, 40.0);
+    final vPad = (16.0 * scale).clamp(2.0, 30.0);
+
+    // Font size: stored as 1080p pixels, scale for preview
+    final previewFontSize = (captionStyle.fontSize * scale).clamp(6.0, 200.0);
 
     void updateStyle(CaptionStyle newStyle) {
       if (isTitle) {
@@ -2145,7 +2157,6 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                 child: Container(
                   width: boxW,
                   height: boxH,
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                   decoration: BoxDecoration(
                     border: Border.all(
                       color: isSelected
@@ -2156,7 +2167,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    padding: EdgeInsets.symmetric(horizontal: hPad, vertical: vPad),
                     decoration: BoxDecoration(
                       color: Color(captionStyle.bgColorHex),
                       borderRadius: BorderRadius.circular(3),
@@ -2168,16 +2179,15 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                       overflow: TextOverflow.ellipsis,
                       style: _googleFontStyle(
                         captionStyle.fontFamily,
-                        fontSize: (captionStyle.fontSize * fontScaleFactor * textScale)
-                            .clamp(7.0, 36.0),
+                        fontSize: previewFontSize,
                         fontWeight: captionStyle.isBold ? FontWeight.w800 : FontWeight.w400,
                         fontStyle: captionStyle.isItalic ? FontStyle.italic : FontStyle.normal,
                         color: Color(captionStyle.colorHex),
                         height: 1.4,
                         shadows: captionStyle.hasBorder
-                            ? const [
-                                Shadow(color: Colors.black, blurRadius: 6),
-                                Shadow(color: Colors.black, blurRadius: 12),
+                            ? [
+                                Shadow(color: Colors.black, blurRadius: 3 * scale),
+                                Shadow(color: Colors.black, blurRadius: 6 * scale),
                               ]
                             : null,
                       ),
@@ -3678,7 +3688,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  // ─── FONT SIZE ───
+                  // ─── FONT SIZE (1080p render pixels) ───
                   Row(
                     children: [
                       const Text('Size',
@@ -3686,10 +3696,10 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Slider(
-                          value: style.fontSize.clamp(12, 72),
-                          min: 12,
-                          max: 72,
-                          divisions: 30,
+                          value: style.fontSize.clamp(20, 120),
+                          min: 20,
+                          max: 120,
+                          divisions: 50,
                           label: '${style.fontSize.toInt()}px',
                           onChanged: (v) {
                             updateStyle(style.copyWith(fontSize: v));

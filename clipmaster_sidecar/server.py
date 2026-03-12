@@ -164,6 +164,9 @@ async def _dispatch(
             case MessageType.preview_video_clip:
                 await _handle_preview_video_clip(ws, msg)
 
+            case MessageType.search_music:
+                await _handle_search_music(ws, msg)
+
             case _:
                 await _send(
                     ws,
@@ -1559,6 +1562,104 @@ def _build_drawtext_lines(
     return filters
 
 
+async def _handle_search_music(ws: WebSocket, msg: IpcMessage) -> None:
+    """Search for royalty-free music using the Pixabay Music API (free, no auth required)."""
+    import os
+    import urllib.request
+    import urllib.parse
+    import json as _json
+
+    query = msg.payload.get("query", "")
+    limit = int(msg.payload.get("limit", 20))
+
+    if not query:
+        await _send(ws, IpcMessage.result(msg.id, {"results": []}))
+        return
+
+    try:
+        # Use Pixabay API for royalty-free music (free tier, key required)
+        # Fallback: use a curated list based on genre keywords
+        results: list[dict] = []
+
+        # Try Pixabay API first (free API key)
+        pixabay_key = os.environ.get("PIXABAY_API_KEY", "")
+        if pixabay_key:
+            encoded_q = urllib.parse.quote(query)
+            api_url = (
+                f"https://pixabay.com/api/?key={pixabay_key}"
+                f"&q={encoded_q}&audio_type=music&per_page={limit}"
+            )
+            req = urllib.request.Request(api_url, headers={"User-Agent": "ClipMaster/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = _json.loads(resp.read().decode())
+            for hit in data.get("hits", []):
+                results.append({
+                    "title": hit.get("title", "Untitled"),
+                    "artist": hit.get("user", "Unknown"),
+                    "duration": hit.get("duration", 0),
+                    "preview_url": hit.get("previewURL", ""),
+                    "download_url": hit.get("audio", hit.get("previewURL", "")),
+                    "tags": hit.get("tags", ""),
+                    "source": "pixabay",
+                })
+        else:
+            # Fallback: use Freesound-style search or return curated suggestions
+            # For now, return genre-based curated tracks as placeholder
+            genre_map = {
+                "upbeat": [
+                    {"title": "Upbeat Energy", "artist": "Royalty Free", "duration": 120, "tags": "upbeat, energetic, positive"},
+                    {"title": "Happy Days", "artist": "Royalty Free", "duration": 90, "tags": "happy, cheerful, upbeat"},
+                    {"title": "Feel Good Vibes", "artist": "Royalty Free", "duration": 150, "tags": "upbeat, feel good, pop"},
+                ],
+                "cinematic": [
+                    {"title": "Epic Cinematic", "artist": "Royalty Free", "duration": 180, "tags": "cinematic, epic, dramatic"},
+                    {"title": "Dramatic Rise", "artist": "Royalty Free", "duration": 120, "tags": "cinematic, tension, dramatic"},
+                    {"title": "Movie Trailer", "artist": "Royalty Free", "duration": 60, "tags": "cinematic, trailer, impact"},
+                ],
+                "lo-fi": [
+                    {"title": "Lo-Fi Chill", "artist": "Royalty Free", "duration": 180, "tags": "lo-fi, chill, beats"},
+                    {"title": "Study Beats", "artist": "Royalty Free", "duration": 240, "tags": "lo-fi, study, relaxing"},
+                    {"title": "Rainy Day Lofi", "artist": "Royalty Free", "duration": 200, "tags": "lo-fi, rain, ambient"},
+                ],
+                "ambient": [
+                    {"title": "Ambient Dreams", "artist": "Royalty Free", "duration": 300, "tags": "ambient, dreamy, atmospheric"},
+                    {"title": "Space Atmosphere", "artist": "Royalty Free", "duration": 240, "tags": "ambient, space, ethereal"},
+                ],
+                "hip-hop": [
+                    {"title": "Hip-Hop Beat", "artist": "Royalty Free", "duration": 120, "tags": "hip-hop, beat, urban"},
+                    {"title": "Trap Vibes", "artist": "Royalty Free", "duration": 90, "tags": "hip-hop, trap, bass"},
+                ],
+                "acoustic": [
+                    {"title": "Acoustic Morning", "artist": "Royalty Free", "duration": 150, "tags": "acoustic, guitar, warm"},
+                    {"title": "Gentle Guitar", "artist": "Royalty Free", "duration": 120, "tags": "acoustic, gentle, peaceful"},
+                ],
+            }
+            q_lower = query.lower().strip()
+            matched = genre_map.get(q_lower, [])
+            if not matched:
+                # Try partial matching
+                for genre, tracks in genre_map.items():
+                    if genre in q_lower or q_lower in genre:
+                        matched = tracks
+                        break
+            if not matched:
+                # Return all as suggestions
+                for tracks in genre_map.values():
+                    matched.extend(tracks)
+
+            results = matched[:limit]
+            # Add a note that these are placeholders
+            for r in results:
+                r["source"] = "curated"
+                r["note"] = "Set PIXABAY_API_KEY env var for real music search"
+
+        await _send(ws, IpcMessage.result(msg.id, {"results": results}))
+
+    except Exception as exc:
+        logger.warning("Music search error: %s", exc)
+        await _send(ws, IpcMessage.error(msg.id, f"Music search failed: {exc}"))
+
+
 def _is_valid_font_file(path: str) -> bool:
     """Check if a file is a valid TTF/OTF font (not woff2 or corrupt)."""
     try:
@@ -1796,8 +1897,14 @@ _GOOGLE_FONT_URLS = {
     "Poppins": "https://fonts.gstatic.com/s/poppins/v22/pxiEyp8kv8JHgFVrJJfecg.ttf",
 }
 _GOOGLE_FONT_BOLD_URLS: dict[str, str] = {
-    # Populated at runtime via _download_google_font CSS API fallback.
-    # Bold TTF URLs change with font versions, so we rely on the CSS API.
+    # Static Bold TTF URLs for fonts we offer.  These are from the Google Fonts
+    # static font archives (not variable fonts) and should work with FFmpeg drawtext.
+    "Inter": "https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuI6fAZ9hiA.ttf",
+    "Roboto": "https://fonts.gstatic.com/s/roboto/v47/KFOMCnqEu92Fr1ME7kSn66aGLdTylUAMQXC89YmC2DPNWuaEbVmT.ttf",
+    "Montserrat": "https://fonts.gstatic.com/s/montserrat/v29/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCu173w5aXo.ttf",
+    "Oswald": "https://fonts.gstatic.com/s/oswald/v53/TK3_WkUHHAIjg75cFRf3bXL8LICs1xFosUZiYA.ttf",
+    "Lato": "https://fonts.gstatic.com/s/lato/v24/S6u9w4BMUTPHh6UVSwiPGQ.ttf",
+    "Poppins": "https://fonts.gstatic.com/s/poppins/v22/pxiByp8kv8JHgFVrLCz7Z1xlFQ.ttf",
 }
 
 
@@ -1853,10 +1960,23 @@ def _download_google_font(name: str, cache_dir: str,
                 except Exception:
                     continue
             if not url:
-                logger.warning("Google Fonts returned no TTF URL for %s (%s)", name, style_suffix)
+                logger.warning("Google Fonts CSS returned no TTF URL for %s (%s)", name, style_suffix)
         except Exception as exc:
             logger.warning("Could not fetch Google Fonts CSS for %s (%s): %s",
                           name, style_suffix, exc)
+
+    # Fallback: try GitHub google/fonts repo for static TTF files
+    if not url and bold:
+        try:
+            # google/fonts repo hosts static font files in ofl/ or apache/ dirs
+            name_lower = name.lower().replace(" ", "")
+            gh_url = f"https://raw.githubusercontent.com/google/fonts/main/ofl/{name_lower}/static/{name}-Bold.ttf"
+            req = urllib.request.Request(gh_url, headers={"User-Agent": "ClipMaster/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    url = gh_url
+        except Exception:
+            pass
 
     # Reject woff2 URLs — FFmpeg cannot read them
     if url and url.endswith(".woff2"):

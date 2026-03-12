@@ -860,16 +860,17 @@ async def _handle_create_short(
         ]
         if has_bg_music:
             cmd.extend(["-i", bg_music_path])
-            # Mix TTS voice (input 1) with background music (input 2)
             cmd.extend([
                 "-filter_complex",
                 f"[1:a]volume=1.0[voice];[2:a]volume={bg_music_volume}[music];"
                 f"[voice][music]amix=inputs=2:duration=first[aout]",
                 "-map", "0:v", "-map", "[aout]",
             ])
-            cmd.extend(["-vf", vf])
         else:
-            cmd.extend(["-vf", vf])
+            # Explicit -map: video from bg clip (0:v), audio from TTS (1:a)
+            # Without -map, FFmpeg might pick the bg clip's own audio instead of TTS
+            cmd.extend(["-map", "0:v", "-map", "1:a"])
+        cmd.extend(["-vf", vf])
         cmd.extend([
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "192k",
@@ -895,9 +896,9 @@ async def _handle_create_short(
                 f"[voice][music]amix=inputs=2:duration=first[aout]",
                 "-map", "0:v", "-map", "[aout]",
             ])
-            cmd.extend(["-vf", vf])
         else:
-            cmd.extend(["-vf", vf])
+            cmd.extend(["-map", "0:v", "-map", "1:a"])
+        cmd.extend(["-vf", vf])
         cmd.extend([
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "192k",
@@ -906,6 +907,19 @@ async def _handle_create_short(
             "-pix_fmt", "yuv420p",
             output_path,
         ])
+
+    # Validate audio exists before encoding
+    if not os.path.isfile(audio_path):
+        logger.error("TTS audio file not found: %s", audio_path)
+        await _send(ws, IpcMessage.error(msg.id, f"TTS audio file not found: {audio_path}"))
+        return
+    logger.info("Audio file confirmed: %s (%d bytes)", audio_path, os.path.getsize(audio_path))
+
+    # Log font details for debugging
+    logger.info("Title font: bold=%s, italic=%s, font_opt='%s', family='%s'",
+                title_bold, title_italic, title_font_opt, title_font_name)
+    logger.info("Body font: bold=%s, italic=%s, font_opt='%s', family='%s'",
+                body_bold, body_italic, body_font_opt, body_font_name)
 
     # Log filter string separately for debugging
     vf_idx = cmd.index("-vf") if "-vf" in cmd else -1
@@ -1705,11 +1719,12 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
                 if styled:
                     logger.info("Using font (%s): %s", style_suffix, styled[0])
                     return styled[0]
-                # Fall back to any valid match for the same font family
-                valid = [m for m in matches if _is_valid_font_file(m)]
-                if valid:
-                    logger.info("Using font (style %s not found, fallback): %s", style_suffix, valid[0])
-                    return valid[0]
+                # If NOT looking for a styled variant, any match is fine
+                if not want_bold and not want_italic:
+                    valid = [m for m in matches if _is_valid_font_file(m)]
+                    if valid:
+                        logger.info("Using font (fallback): %s", valid[0])
+                        return valid[0]
 
     # Not found on system — download from Google Fonts
     if preferred_name:
@@ -1723,6 +1738,21 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
         if downloaded:
             logger.info("Bold/Italic variant not available, using Regular: %s", downloaded)
             return downloaded
+
+    # Last resort for styled variants: use any local match for the preferred font
+    if preferred_name and (want_bold or want_italic):
+        for font_dir in font_dirs:
+            if not os.path.isdir(font_dir):
+                continue
+            for pattern in [
+                os.path.join(font_dir, "**", f"{preferred_name}*.ttf"),
+                os.path.join(font_dir, "**", f"{preferred_name}*.otf"),
+            ]:
+                matches = glob.glob(pattern, recursive=True)
+                valid = [m for m in matches if _is_valid_font_file(m)]
+                if valid:
+                    logger.info("Using font (styled fallback, no %s variant): %s", style_suffix, valid[0])
+                    return valid[0]
 
     # Last resort: try system fonts (any style) for ANY known font
     if not preferred_name or (not want_bold and not want_italic):
@@ -1753,14 +1783,20 @@ def _find_font(preferred_name: str | None = None, bold: bool = False, italic: bo
     return None
 
 
-# Google Fonts direct download URLs (regular weight, TTF only — FFmpeg cannot read woff2)
+# Google Fonts direct download URLs — FFmpeg cannot read woff2, only TTF/OTF.
+# Regular and Bold variants for all supported fonts.
 _GOOGLE_FONT_URLS = {
+    # Regular
     "Inter": "https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50SjIw2boKoduKmMEVuLyfAZ9hiA.ttf",
     "Roboto": "https://fonts.gstatic.com/s/roboto/v47/KFOMCnqEu92Fr1ME7kSn66aGLdTylUAMQXC89YmC2DPNWubEbGmT.ttf",
     "Montserrat": "https://fonts.gstatic.com/s/montserrat/v29/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw5aXo.ttf",
     "Oswald": "https://fonts.gstatic.com/s/oswald/v53/TK3_WkUHHAIjg75cFRf3bXL8LICs1_FvsUZiYA.ttf",
     "Lato": "https://fonts.gstatic.com/s/lato/v24/S6uyw4BMUTPHjx4wXg.ttf",
     "Poppins": "https://fonts.gstatic.com/s/poppins/v22/pxiEyp8kv8JHgFVrJJfecg.ttf",
+}
+_GOOGLE_FONT_BOLD_URLS: dict[str, str] = {
+    # Populated at runtime via _download_google_font CSS API fallback.
+    # Bold TTF URLs change with font versions, so we rely on the CSS API.
 }
 
 
@@ -1779,10 +1815,12 @@ def _download_google_font(name: str, cache_dir: str,
     elif italic:
         style_suffix = "Italic"
 
-    # Only use hardcoded URLs for Regular weight
+    # Use hardcoded URLs first (most reliable, avoids CSS API)
     url = None
     if style_suffix == "Regular":
         url = _GOOGLE_FONT_URLS.get(name)
+    elif style_suffix == "Bold":
+        url = _GOOGLE_FONT_BOLD_URLS.get(name)
 
     if not url:
         # Use Google Fonts CSS API with weight/style params
@@ -1794,19 +1832,27 @@ def _download_google_font(name: str, cache_dir: str,
                 f"https://fonts.googleapis.com/css2?"
                 f"family={family_param}:ital,wght@{ital},{wght}"
             )
-            # Use an old IE11 UA — Google Fonts returns TTF (not woff2) for old browsers
-            req = urllib.request.Request(css_url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko",
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                css = resp.read().decode("utf-8")
-            # Prefer .ttf URLs — FFmpeg CANNOT use woff2
-            match = re.search(r"url\((https://fonts\.gstatic\.com/[^)]+\.ttf)\)", css)
-            if match:
-                url = match.group(1)
-            else:
-                logger.warning("Google Fonts returned no TTF URL for %s (%s), CSS: %s",
-                              name, style_suffix, css[:200])
+            # Try multiple User-Agents to get TTF (not woff2) from Google Fonts
+            user_agents = [
+                # IE11 — classic trick, Google returns TTF for legacy browsers
+                "Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko",
+                # Old Android WebView — also gets TTF
+                "Mozilla/5.0 (Linux; U; Android 4.4.2) AppleWebKit/534.30 (KHTML, like Gecko) Version/4.0 Mobile Safari/534.30",
+            ]
+            for ua in user_agents:
+                try:
+                    req = urllib.request.Request(css_url, headers={"User-Agent": ua})
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        css = resp.read().decode("utf-8")
+                    # Prefer .ttf URLs — FFmpeg CANNOT use woff2
+                    match = re.search(r"url\((https://fonts\.gstatic\.com/[^)]+\.ttf)\)", css)
+                    if match:
+                        url = match.group(1)
+                        break
+                except Exception:
+                    continue
+            if not url:
+                logger.warning("Google Fonts returned no TTF URL for %s (%s)", name, style_suffix)
         except Exception as exc:
             logger.warning("Could not fetch Google Fonts CSS for %s (%s): %s",
                           name, style_suffix, exc)

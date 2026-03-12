@@ -30,6 +30,7 @@ class MessageType(str, Enum):
     create_short = "createShort"
     preview_snapshot = "previewSnapshot"
     preview_video_clip = "previewVideoClip"
+    search_music = "searchMusic"
     set_cookie_browser = "setCookieBrowser"
     get_cookie_browser = "getCookieBrowser"
 

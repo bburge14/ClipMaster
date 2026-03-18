@@ -634,7 +634,12 @@ async def _handle_create_short(
     # Step 3: If multiple backgrounds, concat them into a single looping bg
     await _send(ws, IpcMessage.progress(msg.id, "Rendering video", 50))
     bg_video_path = None
-    if len(bg_video_paths) > 1:
+    # Prefer local video path from editor (same file the preview is showing)
+    bg_local = msg.payload.get("bg_video_local_path", "")
+    if bg_local and os.path.isfile(bg_local):
+        bg_video_path = bg_local
+        logger.info("Using editor's local bg video: %s", bg_local)
+    elif len(bg_video_paths) > 1:
         # Create concat file and merge clips into one background
         concat_file = os.path.join(tempfile.gettempdir(), "clipmaster_concat.txt")
         concat_out = os.path.join(tempfile.gettempdir(), "clipmaster_bg_concat.mp4")
@@ -785,7 +790,9 @@ async def _handle_create_short(
 
     title_drawtext_parts = _build_drawtext_lines(
         title_lines_clean, title_font_opt, title_font_size, effective_title_color,
-        title_x_expr, title_y, border_opts)
+        title_x_expr, title_y, border_opts,
+        box_color=title_bg_color if title_bg_enabled else "",
+        box_pad=pad if title_bg_enabled else 0)
 
     # Body text: single block or slideshow with enable expressions
     drawtext_body_parts: list[str] = []
@@ -797,38 +804,15 @@ async def _handle_create_short(
             enable = f"between(t,{t_start:.2f},{t_end:.2f})"
             drawtext_body_parts.extend(_build_drawtext_lines(
                 slide_lines, body_font_opt, body_font_size, effective_body_color,
-                body_x_expr, body_y, body_border, enable_expr=enable))
+                body_x_expr, body_y, body_border, enable_expr=enable,
+                box_color=body_bg_color if body_bg_enabled else "",
+                box_pad=pad if body_bg_enabled else 0))
     else:
         drawtext_body_parts.extend(_build_drawtext_lines(
             body_lines_clean, body_font_opt, body_font_size, effective_body_color,
-            body_x_expr, body_y, body_border))
-
-    # ─── Background boxes (drawbox) ───
-    # Title background: auto-sized to fit text + padding
-    drawbox_title_bg = ""
-    if title_bg_enabled:
-        # Height = padding_top + (lines × line_height) + padding_bottom
-        title_text_h = int(title_font_size * 1.4) * len(title_lines_clean) + 2 * pad
-        drawbox_title_bg = (
-            f"drawbox=x={title_box_left}:y={max(0, title_box_top)}"
-            f":w={title_box_w_px}:h={title_text_h}"
-            f":color={title_bg_color}:t=fill"
-        )
-
-    # Body background: auto-sized to fit text + padding (unless explicit height)
-    drawbox_body_bg = ""
-    if body_bg_enabled:
-        if text_box_h > 0:
-            body_box_h_px = int(text_box_h * 1920)
-        else:
-            # Auto: padding + lines × line_height + padding
-            body_box_h_px = int(body_font_size * 1.4) * len(body_lines_clean) + 2 * pad
-        drawbox_body_bg = (
-            f"drawbox=x={max(0, body_box_left)}"
-            f":y={max(0, body_box_top)}"
-            f":w={body_box_w_px}:h={body_box_h_px}"
-            f":color={body_bg_color}:t=fill"
-        )
+            body_x_expr, body_y, body_border,
+            box_color=body_bg_color if body_bg_enabled else "",
+            box_pad=pad if body_bg_enabled else 0))
 
     # Category badge
     drawtext_category_parts: list[str] = []
@@ -867,10 +851,6 @@ async def _handle_create_short(
             parts.append(
                 "drawbox=x=0:y=0:w=1080:h=1920:color=black@0.30:t=fill"
             )
-        if drawbox_title_bg:
-            parts.append(drawbox_title_bg)
-        if drawbox_body_bg:
-            parts.append(drawbox_body_bg)
         parts.extend(title_drawtext_parts)
         parts.extend(drawtext_body_parts)
         parts.extend(drawtext_category_parts)
@@ -1102,31 +1082,15 @@ async def _handle_preview_snapshot(
 
     title_drawtext_parts = _build_drawtext_lines(
         title_lines_clean, title_font_opt, title_font_size, title_color,
-        title_x_expr, title_y, border_opts)
+        title_x_expr, title_y, border_opts,
+        box_color=title_bg_color if title_bg_enabled else "",
+        box_pad=pad if title_bg_enabled else 0)
 
     body_drawtext_parts = _build_drawtext_lines(
         body_lines_clean, body_font_opt, body_font_size, body_color,
-        body_x_expr, body_y, body_border)
-
-    drawbox_title_bg = ""
-    if title_bg_enabled:
-        title_box_w = 952
-        title_box_x = max(0, int(title_pos_x * 1080 - title_box_w / 2))
-        drawbox_title_bg = (
-            f"drawbox=x={title_box_x}:y={max(0, title_y - 16)}"
-            f":w={title_box_w}:h={title_font_size * len(title_lines) + 32}"
-            f":color={title_bg_color}:t=fill"
-        )
-
-    drawbox_body_bg = ""
-    if body_bg_enabled:
-        body_box_h_px = int(text_box_h * 1920)
-        drawbox_body_bg = (
-            f"drawbox=x={max(0, body_box_left)}"
-            f":y={max(0, body_box_top)}"
-            f":w={body_box_w_px}:h={body_box_h_px}"
-            f":color={body_bg_color}:t=fill"
-        )
+        body_x_expr, body_y, body_border,
+        box_color=body_bg_color if body_bg_enabled else "",
+        box_pad=pad if body_bg_enabled else 0)
 
     drawtext_category_parts: list[str] = []
     if category_label:
@@ -1146,10 +1110,6 @@ async def _handle_preview_snapshot(
     vf_parts = []
     if bg_video_path and os.path.isfile(bg_video_path):
         vf_parts.append("scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920")
-    if drawbox_title_bg:
-        vf_parts.append(drawbox_title_bg)
-    if drawbox_body_bg:
-        vf_parts.append(drawbox_body_bg)
     vf_parts.extend(title_drawtext_parts)
     vf_parts.extend(body_drawtext_parts)
     vf_parts.extend(drawtext_category_parts)
@@ -1322,31 +1282,15 @@ async def _handle_preview_video_clip(
 
     title_drawtext_parts = _build_drawtext_lines(
         title_lines_clean, title_font_opt, title_font_size, title_color,
-        title_x_expr, title_y, border_opts)
+        title_x_expr, title_y, border_opts,
+        box_color=title_bg_color if title_bg_enabled else "",
+        box_pad=pad if title_bg_enabled else 0)
 
     body_drawtext_parts = _build_drawtext_lines(
         body_lines_clean, body_font_opt, body_font_size, body_color,
-        body_x_expr, body_y, body_border)
-
-    drawbox_title_bg = ""
-    if title_bg_enabled:
-        title_box_w = 952
-        title_box_x = max(0, int(title_pos_x * 1080 - title_box_w / 2))
-        drawbox_title_bg = (
-            f"drawbox=x={title_box_x}:y={max(0, title_y - 16)}"
-            f":w={title_box_w}:h={title_font_size * len(title_lines) + 32}"
-            f":color={title_bg_color}:t=fill"
-        )
-
-    drawbox_body_bg = ""
-    if body_bg_enabled:
-        body_box_h_px = int(text_box_h * 1920)
-        drawbox_body_bg = (
-            f"drawbox=x={max(0, body_box_left)}"
-            f":y={max(0, body_box_top)}"
-            f":w={body_box_w_px}:h={body_box_h_px}"
-            f":color={body_bg_color}:t=fill"
-        )
+        body_x_expr, body_y, body_border,
+        box_color=body_bg_color if body_bg_enabled else "",
+        box_pad=pad if body_bg_enabled else 0)
 
     drawtext_category_parts: list[str] = []
     if category_label:
@@ -1366,10 +1310,6 @@ async def _handle_preview_video_clip(
     vf_parts = []
     if bg_video_path and os.path.isfile(bg_video_path):
         vf_parts.append("scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920")
-    if drawbox_title_bg:
-        vf_parts.append(drawbox_title_bg)
-    if drawbox_body_bg:
-        vf_parts.append(drawbox_body_bg)
     vf_parts.extend(title_drawtext_parts)
     vf_parts.extend(body_drawtext_parts)
     vf_parts.extend(drawtext_category_parts)
@@ -1562,25 +1502,33 @@ def _build_drawtext_lines(
     border_opts: str = "",
     line_spacing: int = 8,
     enable_expr: str = "",
+    box_color: str = "",
+    box_pad: int = 0,
 ) -> list[str]:
     """Build a list of drawtext filter strings, one per line of text.
 
     This avoids textfile= entirely — each line is passed inline via text=.
-    No file encoding, no newline issues, no phantom box glyphs.
+    When box_color is set, uses FFmpeg's built-in box=1 to auto-size the
+    background box around each line — matching Flutter's auto-sized Container.
     """
     filters = []
+    # Build box opts string once
+    box_opts = ""
+    if box_color:
+        box_opts = f":box=1:boxcolor={box_color}:boxborderw={box_pad}"
+
     for i, line in enumerate(lines):
         clean = _sanitize_for_ffmpeg(line)
         if not clean:
             continue
         escaped = _escape_ffmpeg_text(clean)
-        # Match Flutter's line height: 1.4 for body, ~1.3 for title
+        # Match Flutter's line height: 1.4
         y = base_y + i * int(font_size * 1.4)
         f = (
             f"drawtext=text='{escaped}'"
             f":fontsize={font_size}:fontcolor={font_color}"
             f":x={x_expr}:y={y}"
-            f"{font_opt}{border_opts}"
+            f"{font_opt}{border_opts}{box_opts}"
         )
         if enable_expr:
             f += f":enable='{enable_expr}'"

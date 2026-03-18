@@ -109,6 +109,8 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
   StreamSubscription? _positionSub;
   StreamSubscription? _durationSub;
   StreamSubscription? _playingSub;
+  StreamSubscription? _errorSub;
+  bool _previewVideoReady = false; // true once first frame is received
 
   // Voiceover audio player (synced with video preview)
   Player? _voiceoverPlayer;
@@ -242,6 +244,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     _positionSub?.cancel();
     _durationSub?.cancel();
     _playingSub?.cancel();
+    _errorSub?.cancel();
     _previewPlayer?.dispose();
     _voiceoverPlayer?.dispose();
     super.dispose();
@@ -280,19 +283,19 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     _positionSub?.cancel();
     _durationSub?.cancel();
     _playingSub?.cancel();
+    _errorSub?.cancel();
     if (_previewPlayer != null) {
       _previewPlayer!.dispose();
     }
+    _previewVideoReady = false;
     _previewPlayer = Player();
     _previewController = VideoController(_previewPlayer!);
     final media = Media(path);
     _previewPlayer!.open(media);
     _previewPlayer!.setPlaylistMode(PlaylistMode.loop);
-    // Enable audio volume
     _previewPlayer!.setVolume(100);
     _previewPlayingNotifier.value = true;
-    // Use ValueNotifiers — these update ONLY the widgets listening to them,
-    // NOT the entire widget tree.  This prevents scroll-fighting.
+
     _playingSub = _previewPlayer!.stream.playing.listen((playing) {
       if (mounted) _previewPlayingNotifier.value = playing;
     });
@@ -300,9 +303,38 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
       if (mounted) _previewPositionNotifier.value = pos;
     });
     _durationSub = _previewPlayer!.stream.duration.listen((dur) {
-      if (mounted) _previewDurationNotifier.value = dur;
+      if (mounted) {
+        _previewDurationNotifier.value = dur;
+        // Once we get a valid duration, the video is loaded
+        if (dur.inMilliseconds > 0 && !_previewVideoReady) {
+          _previewVideoReady = true;
+          setState(() {});
+        }
+      }
     });
-    // Trigger one rebuild so the VideoController widget appears.
+    // Error listener — if media fails to load, fall back to thumbnail
+    _errorSub = _previewPlayer!.stream.error.listen((error) {
+      debugPrint('Preview player error: $error');
+      if (mounted) {
+        _previewPlayer?.dispose();
+        _previewPlayer = null;
+        _previewController = null;
+        _previewVideoReady = false;
+        setState(() {});
+      }
+    });
+
+    // Timeout: if no video after 8 seconds, fall back to thumbnail
+    Future.delayed(const Duration(seconds: 8), () {
+      if (mounted && !_previewVideoReady && _previewController != null) {
+        debugPrint('Preview player timeout — falling back to thumbnail');
+        _previewPlayer?.dispose();
+        _previewPlayer = null;
+        _previewController = null;
+        setState(() {});
+      }
+    });
+
     if (mounted) setState(() {});
   }
 
@@ -698,6 +730,10 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
         'output_dir': shortsDir.path,
         'visual_keywords': visualKeywords,
         if (bgUrls.isNotEmpty) 'background_video_urls': bgUrls,
+        // Send local video path so renderer uses the same file as the editor
+        if (_proxyPath != null) 'bg_video_local_path': _proxyPath!,
+        if (_proxyPath == null && _importedVideoPath != null)
+          'bg_video_local_path': _importedVideoPath!,
         if (pexelsKey != null) 'pexels_key': pexelsKey,
         if (pixabayKey != null) 'pixabay_key': pixabayKey,
 
@@ -1724,7 +1760,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                       fit: StackFit.expand,
                       children: [
                         // Background layer: video > thumbnail > gradient
-                        if (_previewController != null)
+                        if (_previewController != null && _previewVideoReady)
                           Video(
                             controller: _previewController!,
                             controls: NoVideoControls,
@@ -1760,7 +1796,7 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
                             ),
                           ),
                         // Dark overlay for readability
-                        if (_previewController != null)
+                        if (_previewController != null && _previewVideoReady)
                           Container(color: Colors.black.withOpacity(0.3)),
                         // Title text — resizable, draggable
                         if (hasTitle)
@@ -2110,9 +2146,9 @@ class _MagneticTimelineState extends ConsumerState<MagneticTimeline> {
     final topPos = captionStyle.positionY * frameH;
     final leftPos = (frameW - boxW) / 2; // center horizontally
 
-    // Padding matches FFmpeg: 24px on each side at 1080p → scale for preview
+    // Padding matches FFmpeg boxborderw: 24px uniform at 1080p → scale for preview
     final hPad = (24.0 * scale).clamp(3.0, 40.0);
-    final vPad = (16.0 * scale).clamp(2.0, 30.0);
+    final vPad = (24.0 * scale).clamp(3.0, 40.0);
 
     // Font size: stored as 1080p pixels, scale for preview
     final previewFontSize = (captionStyle.fontSize * scale).clamp(6.0, 200.0);
